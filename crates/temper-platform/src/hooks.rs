@@ -196,8 +196,13 @@ fn handle_generate_cedar_policy(
     temper_authz::validate_policy_scope_matrix(&matrix).map_err(|e| {
         format!("GenerateCedarPolicy: invalid scope_matrix for entity '{entity_id}': {e}")
     })?;
+    let principal_kind = params
+        .get("principal_kind")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Agent");
     let generated_policy = temper_authz::generate_cedar_from_matrix(
         agent_id,
+        principal_kind,
         action_name,
         resource_type,
         resource_id,

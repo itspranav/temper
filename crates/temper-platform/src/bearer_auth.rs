@@ -47,12 +47,11 @@ pub async fn bearer_auth_check(
 
     // Constant-time comparison to prevent timing attacks.
     if constant_time_eq(token.as_bytes(), expected.as_bytes()) {
-        // Valid API key → elevate to Admin so Cedar checks pass.
-        let mut req = req;
-        req.headers_mut().insert(
-            axum::http::HeaderName::from_static("x-temper-principal-kind"),
-            axum::http::HeaderValue::from_static("admin"),
-        );
+        // Valid API key → authenticated. Do NOT override principal kind —
+        // the caller's identity headers (X-Temper-Principal-Kind etc.) are
+        // authoritative. Overriding to "admin" caused Cedar policy mismatches
+        // where generated approval policies targeted Agent::"id" but the
+        // retried request arrived as Admin::"id".
         Ok(next.run(req).await)
     } else {
         Err(StatusCode::UNAUTHORIZED)

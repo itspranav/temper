@@ -158,6 +158,7 @@ impl PolicySuggestionEngine {
                 };
                 let preview = temper_authz::generate_cedar_from_matrix(
                     grouped.agent_type.as_deref().unwrap_or("*"),
+                    "Agent",
                     "*",
                     &grouped.resource_type,
                     "*",
@@ -203,6 +204,7 @@ impl PolicySuggestionEngine {
             };
             let preview = temper_authz::generate_cedar_from_matrix(
                 pattern.agent_type.as_deref().unwrap_or("*"),
+                "Agent",
                 &pattern.action,
                 &pattern.resource_type,
                 "*",

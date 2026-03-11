@@ -78,6 +78,10 @@ pub struct PendingDecision {
     /// Agent type that was denied (for pattern analysis and Cedar context matching).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_type: Option<String>,
+    /// Cedar principal type at time of denial (e.g. "Agent", "Admin", "Customer").
+    /// Used by policy generation to emit the correct `principal == Type::"id"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal_kind: Option<String>,
     /// Session ID at time of denial (for session-scoped approvals).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
@@ -114,6 +118,7 @@ impl PendingDecision {
             approved_scope: None,
             evolution_record_id: None,
             agent_type: None,
+            principal_kind: None,
             session_id: None,
         }
     }
@@ -128,8 +133,10 @@ impl PendingDecision {
 
     /// Generate Cedar policy text from a scope matrix.
     pub fn generate_policy_from_matrix(&self, matrix: &PolicyScopeMatrix) -> String {
+        let kind = self.principal_kind.as_deref().unwrap_or("Agent");
         temper_authz::generate_cedar_from_matrix(
             &self.agent_id,
+            kind,
             &self.action,
             &self.resource_type,
             &self.resource_id,
