@@ -2,19 +2,21 @@
 # trace-capture.sh — PostToolUse hook for hash-chained trace capture
 # Appends one JSON line per tool call to a session trace file.
 # BLOCKING: No (advisory, exit 0 always)
+#
+# Markers are session-scoped: /tmp/temper-harness/{project_hash}/{session_id}/
 set -u
 
 PAYLOAD="$(cat)"
 
 WORKSPACE_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 PROJECT_HASH="$(echo "$WORKSPACE_ROOT" | shasum -a 256 | cut -c1-12)"
-MARKER_DIR="/tmp/temper-harness/${PROJECT_HASH}"
+SESSION_ID="${CLAUDE_SESSION_ID:-default}"
+MARKER_DIR="/tmp/temper-harness/${PROJECT_HASH}/${SESSION_ID}"
 mkdir -p "$MARKER_DIR"
 
-SESSION_ID="${CLAUDE_SESSION_ID:-default}"
-TRACE_FILE="$MARKER_DIR/trace-${SESSION_ID}.jsonl"
-SEQ_FILE="$MARKER_DIR/trace-${SESSION_ID}.seq"
-PREV_HASH_FILE="$MARKER_DIR/trace-${SESSION_ID}.prevhash"
+TRACE_FILE="$MARKER_DIR/trace.jsonl"
+SEQ_FILE="$MARKER_DIR/trace.seq"
+PREV_HASH_FILE="$MARKER_DIR/trace.prevhash"
 
 # Reset hash chain if trace file is new or empty (prevents stale prevhash from prior session)
 if [ ! -f "$TRACE_FILE" ] || [ ! -s "$TRACE_FILE" ]; then
@@ -22,7 +24,7 @@ if [ ! -f "$TRACE_FILE" ] || [ ! -s "$TRACE_FILE" ]; then
 fi
 
 # Acquire mkdir-based lock (atomic on all POSIX systems, unlike flock which is unavailable on macOS)
-LOCK_DIR="$MARKER_DIR/trace-${SESSION_ID}.lock"
+LOCK_DIR="$MARKER_DIR/trace.lock"
 LOCK_ATTEMPTS=0
 while ! mkdir "$LOCK_DIR" 2>/dev/null; do
     LOCK_ATTEMPTS=$((LOCK_ATTEMPTS + 1))

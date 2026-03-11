@@ -58,7 +58,7 @@ You are operating inside a governed sandbox. You cannot import libraries, access
 
 ```python
 # See all loaded specs and their verification status
-specs = await temper.specs("default")
+specs = await temper.specs("rita-agents")
 return specs
 ```
 
@@ -66,7 +66,7 @@ return specs
 
 ```python
 # Full spec details: actions, guards, invariants, state vars
-detail = await temper.spec_detail("default", "WeatherQuery")
+detail = await temper.spec_detail("rita-agents", "WeatherQuery")
 return detail
 ```
 
@@ -133,7 +133,7 @@ csdl = """<?xml version="1.0" encoding="utf-8"?>
   </edmx:DataServices>
 </edmx:Edmx>"""
 
-result = await temper.submit_specs("default", {
+result = await temper.submit_specs("rita-agents", {
     "WeatherQuery.ioa.toml": ioa,
     "model.csdl.xml": csdl
 })
@@ -143,8 +143,8 @@ return result
 ### 4. Create an entity and invoke an action
 
 ```python
-created = await temper.create("default", "WeatherQueries", {"id": "q1", "city": "London"})
-result = await temper.action("default", "WeatherQueries", "q1", "FetchWeather", {"city": "London"})
+created = await temper.create("rita-agents", "WeatherQueries", {"id": "q1", "city": "London"})
+result = await temper.action("rita-agents", "WeatherQueries", "q1", "FetchWeather", {"city": "London"})
 return result
 ```
 
@@ -153,7 +153,7 @@ return result
 When Cedar denies an action, you get a structured response with `status == "authorization_denied"` and a `decision_id`. You MUST surface this to the user, then poll for approval and retry.
 
 ```python
-result = await temper.action("default", "WeatherQueries", "q1", "FetchWeather", {"city": "London"})
+result = await temper.action("rita-agents", "WeatherQueries", "q1", "FetchWeather", {"city": "London"})
 
 if isinstance(result, dict) and result.get("status") == "authorization_denied":
     decision_id = result["decision_id"]
@@ -163,11 +163,11 @@ if isinstance(result, dict) and result.get("status") == "authorization_denied":
     print(f"Approve at: the Observe UI (served by your Temper instance)")
 
     # Step 2: Poll until the human resolves the decision
-    decision = await temper.poll_decision("default", decision_id)
+    decision = await temper.poll_decision("rita-agents", decision_id)
 
     if decision["status"] == "Approved":
         # Step 3: Retry the original action — now permitted
-        result = await temper.action("default", "WeatherQueries", "q1", "FetchWeather", {"city": "London"})
+        result = await temper.action("rita-agents", "WeatherQueries", "q1", "FetchWeather", {"city": "London"})
         return result
     else:
         return f"Decision {decision_id} was denied by the human."
@@ -185,16 +185,16 @@ When you need a capability that doesn't exist yet (no matching entity type), you
 
 ```python
 # Step 1: Try to create the entity — expect 404 if type doesn't exist
-result = await temper.create("default", "EmailDrafts", {"id": "email-1"})
+result = await temper.create("rita-agents", "EmailDrafts", {"id": "email-1"})
 # If 404: entity type doesn't exist. This is an UNMET INTENT.
 # The system has recorded it as a trajectory.
 
 # Step 2: Check insights — has the evolution engine seen this pattern?
-insights = await temper.get_insights("default")
+insights = await temper.get_insights("rita-agents")
 # Look for insights recommending EmailDraft creation
 
 # Step 3: Propose specs — Cedar will gate this
-result = await temper.submit_specs("default", {
+result = await temper.submit_specs("rita-agents", {
     "EmailDraft.ioa.toml": ioa_spec,
     "model.csdl.xml": csdl
 })
@@ -204,13 +204,13 @@ if result.get("status") == "authorization_denied":
     # Tell the human, then poll
     print(f"Spec submission denied. Decision {decision_id} pending.")
     print(f"Approve at: the Observe UI (served by your Temper instance)")
-    decision = await temper.poll_decision("default", decision_id)
+    decision = await temper.poll_decision("rita-agents", decision_id)
     if decision["status"] == "Approved":
         # Retry submit_specs — now permitted
-        result = await temper.submit_specs("default", specs)
+        result = await temper.submit_specs("rita-agents", specs)
 
 # Step 4: Now create and act on the entity
-created = await temper.create("default", "EmailDrafts", {"id": "email-1"})
+created = await temper.create("rita-agents", "EmailDrafts", {"id": "email-1"})
 ```
 
 **This is how the governed creation flow works:**
@@ -268,8 +268,8 @@ All take `(tenant, entity_set, ...)`. The `entity_set` is the **plural collectio
 
 | Method | Signature | Returns |
 |--------|-----------|---------|
-| `list_apps` | `await temper.list_apps()` | Available pre-built apps with name, description, entity types |
-| `install_app` | `await temper.install_app(app_name)` | Installs an OS app into the current tenant |
+| `list_apps` | `await temper.list_apps(tenant)` | Available pre-built apps with name, description, entity types |
+| `install_app` | `await temper.install_app(tenant, app_name)` | Installs an OS app into the current tenant (idempotent, persisted across redeploys) |
 
 ### Governance
 
@@ -429,16 +429,16 @@ Agent tries action → FAILS (404 entity not found / 409 invalid transition)
 
 ```python
 # Submit specs
-await temper.submit_specs("default", {
+await temper.submit_specs("rita-agents", {
     "WeatherQuery.ioa.toml": ioa_spec,
     "model.csdl.xml": csdl
 })
 
 # Create entity
-await temper.create("default", "WeatherQueries", {"id": "q1", "city": "London"})
+await temper.create("rita-agents", "WeatherQueries", {"id": "q1", "city": "London"})
 
 # Trigger weather fetch (may be denied by Cedar — handle it!)
-result = await temper.action("default", "WeatherQueries", "q1", "FetchWeather", {"city": "London"})
+result = await temper.action("rita-agents", "WeatherQueries", "q1", "FetchWeather", {"city": "London"})
 
 if isinstance(result, dict) and result.get("status") == "authorization_denied":
     decision_id = result["decision_id"]
@@ -446,10 +446,10 @@ if isinstance(result, dict) and result.get("status") == "authorization_denied":
     print(f"Denied by Cedar policy. Decision {decision_id} pending.")
     print(f"Approve at: the Observe UI (served by your Temper instance)")
     # Poll until human resolves the decision
-    decision = await temper.poll_decision("default", decision_id)
+    decision = await temper.poll_decision("rita-agents", decision_id)
     if decision["status"] == "Approved":
         # Retry the action — now permitted
-        result = await temper.action("default", "WeatherQueries", "q1", "FetchWeather", {"city": "London"})
+        result = await temper.action("rita-agents", "WeatherQueries", "q1", "FetchWeather", {"city": "London"})
 
 return result
 ```
@@ -457,14 +457,14 @@ return result
 ### List and inspect entities
 
 ```python
-entities = await temper.list("default", "WeatherQueries")
+entities = await temper.list("rita-agents", "WeatherQueries")
 return entities
 ```
 
 ### Filter entities with OData
 
 ```python
-entities = await temper.list("default", "WeatherQueries", "state eq 'Ready'")
+entities = await temper.list("rita-agents", "WeatherQueries", "state eq 'Ready'")
 return entities
 ```
 
@@ -472,17 +472,17 @@ return entities
 
 ```python
 # All specs for a tenant
-specs = await temper.specs("default")
+specs = await temper.specs("rita-agents")
 
 # Full detail on one entity type
-detail = await temper.spec_detail("default", "WeatherQuery")
+detail = await temper.spec_detail("rita-agents", "WeatherQuery")
 return detail
 ```
 
 ### Check a single decision status
 
 ```python
-status = await temper.get_decision_status("default", "PD-abc123")
+status = await temper.get_decision_status("rita-agents", "PD-abc123")
 return status
 ```
 

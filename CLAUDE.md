@@ -1,18 +1,17 @@
 # Temper — Claude Code Project Guide
 
-## IMPORTANT: Building Apps
+## IMPORTANT: Use Temper for Your Own Work
 
-**When the user asks to build an app, create an app, or says "build me a X" — ALWAYS use the Temper App Builder skill (`.claude/skills/temper-developer.md`).** Do NOT treat this as a generic web development request. Do NOT use brainstorming, frontend-design, or other general-purpose skills for app creation.
+**You are an agent running on Temper. This is your operating layer — not an optional tool.** When a Temper server is running (`mcp__temper__execute` is available), ALL your stateful work — planning, task tracking, progress, knowledge — MUST flow through Temper entities, not markdown files.
 
-Temper builds apps from specs, not from code. The workflow is: interview → generate IOA specs + CSDL → verify → deploy. Follow the skill's Interview Protocol.
+**Specifically:**
+- **Planning and task tracking** → Use the PM OS app (`await temper.install_app("pm")` if not installed, tenant `rita-agents`). Create Issues, use `BeginPlanning` → `WritePlan` → `ApprovePlan` → `StartWork` flow. Do NOT use `.progress/` files when Temper is available.
+- **Building apps for users** → Use the Temper App Builder skill (`.claude/skills/temper-developer.md`). Workflow: interview → generate IOA specs + CSDL → verify → deploy. Use `/temper-developer`.
+- **Any MCP tool call** → ALWAYS read `.claude/skills/temper-agent.md` first. It has the exact Python API, spec format, and governance flow.
 
-Use `/temper-developer` or read `.claude/skills/temper-developer.md` and follow it step by step.
+**Cedar governance applies to everything.** If denied, surface the pending decision to the human. They approve via the Observe UI. You poll and retry.
 
-## IMPORTANT: Using Temper MCP Tools
-
-**When calling `mcp__temper__execute` — ALWAYS read `.claude/skills/temper-agent.md` first.** It has the exact Python API, spec format, and governance flow. Without it you will get spec parse errors and method signature mistakes. The MCP server exposes a single `execute` tool (no separate `search` tool).
-
-Use `/temper-agent` or read `.claude/skills/temper-agent.md` and follow its patterns.
+Use `/temper-agent` or read `.claude/skills/temper-agent.md` for the full API reference.
 
 ## PM App: Planning/Planned Workflow
 
@@ -82,6 +81,7 @@ Two separated contexts: Developer Chat (design-time, can modify specs) and Produ
 - SpecRegistry maps (TenantId, EntityType) → specs + TransitionTable
 - Postgres/Redis are tenant-scoped
 - Single-tenant uses TenantId::default() = "default"
+- **Active agent tenant: `rita-agents`** — all agent MCP calls should use tenant `"rita-agents"`
 
 ### Deterministic Simulation (FoundationDB/TigerBeetle Standards)
 In simulation-visible crates (temper-runtime, temper-jit, temper-server):
@@ -120,34 +120,31 @@ cargo test -p temper-platform --test platform_e2e_dst  # E2E shared registry pro
 See `docs/HARNESS.md` for the full harness reference with diagrams.
 
 ### Automated Enforcement (Claude Code Hooks)
-- **Plan Reminder** (advisory): Reminds to create `.progress/` plan before edits
+- **Plan Reminder** (advisory): Reminds to create a plan (Temper issue or `.progress/` fallback) before edits
 - **Spec Verification** (BLOCKING): L0-L3 cascade on every `.ioa.toml` edit
-- **Dependency Isolation** (BLOCKING): Prevents temper-jit from pulling verify deps
-- **Determinism Guard** (BLOCKING): 25-pattern DST scan based on FoundationDB/TigerBeetle practices
-- **Pre-Commit Review Gate** (BLOCKING): Blocks `git commit` without DST review + code review + passing tests
-- **Post-Push Verify** (advisory): Runs tests after push, writes markers
-- **Session Exit Gate** (BLOCKING): Blocks exit if unverified pushes, missing reviews, or compile errors
+- **Determinism Guard** (BLOCKING): 25-pattern DST scan on `.rs` edits in sim-visible crates
+- **Pre-Commit Review Gate** (BLOCKING): Blocks `git commit` without DST review + code review markers
+- **Post-Push Marker** (advisory): Records push for session tracking
+- **Session Exit Gate** (DISABLED): Can be re-enabled in settings.json Stop hook
 
 ### Mandatory Reviews Before Commit
 **You MUST run both reviews before committing any code changes:**
 
 1. **DST Compliance Review** (for simulation-visible code in temper-runtime, temper-jit, temper-server):
    - Invoke the DST reviewer agent (`.claude/agents/dst-reviewer.md`)
-   - Reviews code for determinism violations beyond pattern matching
    - Writes a marker file on PASS — the pre-commit gate checks for it
 
 2. **Code Quality Review** (for all significant changes):
    - Invoke the code-reviewer agent
-   - Reviews against plan, coding standards, TigerStyle
    - Writes a marker file on PASS — the pre-commit gate checks for it
 
-The pre-commit gate BLOCKS `git commit` if either marker is missing. The session exit gate is a safety net that catches anything that slips through.
+The pre-commit gate BLOCKS `git commit` if either marker is missing. Markers are session-scoped (`/tmp/temper-harness/{project_hash}/{session_id}/`) so multiple Claude sessions don't conflict.
 
 ### Git Hooks (installed via `scripts/setup-hooks.sh`)
 - **Pre-commit**: Integrity check (no TODO/unwrap), spec syntax, dep audit
-- **Pre-push**: 3-gate pipeline — integrity check, determinism audit, full test suite
+- **Pre-push**: 4-gate pipeline — rustfmt, clippy, readability ratchet, full test suite
 
-Everything is automated. The harness runs on edit, commit, push, and session exit. No manual scripts to remember.
+Tests run once at push time only — not at commit or post-push. This keeps commits fast.
 
 ## Error Handling Standards (TigerStyle)
 - **Bounded mailboxes**: Every actor mailbox has a capacity limit
