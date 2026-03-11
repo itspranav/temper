@@ -20,19 +20,9 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
             package: temper-mcp-darwin-arm64
-          - target: x86_64-apple-darwin
-            os: macos-14
-            package: temper-mcp-darwin-x64
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             package: temper-mcp-linux-x64
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            package: temper-mcp-linux-arm64
-            use_cross: true
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            package: temper-mcp-win32-x64
 
     runs-on: ${{ matrix.os }}
 
@@ -50,42 +40,18 @@ jobs:
         run: brew install z3
 
       - name: Install z3 (Linux)
-        if: runner.os == 'Linux' && !matrix.use_cross
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libz3-dev
 
-      - name: Install z3 (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          choco install z3 -y
-          echo "Z3_SYS_Z3_HEADER=C:\ProgramData\chocolatey\lib\z3\tools\include\z3.h" >> $env:GITHUB_ENV
-          echo "LIBZ3_SYS_Z3_HEADER=C:\ProgramData\chocolatey\lib\z3\tools\include\z3.h" >> $env:GITHUB_ENV
-          echo "C:\ProgramData\chocolatey\lib\z3\tools\bin" >> $env:GITHUB_PATH
-
-      - name: Install cross
-        if: matrix.use_cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
-
-      - name: Build (cross)
-        if: matrix.use_cross
-        run: cross build -p temper-cli --release --target ${{ matrix.target }}
-
-      - name: Build (cargo)
-        if: ${{ !matrix.use_cross }}
+      - name: Build
         run: cargo build -p temper-cli --release --target ${{ matrix.target }}
 
-      - name: Copy binary (Unix)
-        if: runner.os != 'Windows'
+      - name: Copy binary
         run: |
           mkdir -p packages/${{ matrix.package }}/bin
           cp target/${{ matrix.target }}/release/temper packages/${{ matrix.package }}/bin/temper
-
-      - name: Copy binary (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          New-Item -ItemType Directory -Force -Path packages/${{ matrix.package }}/bin
-          Copy-Item target/${{ matrix.target }}/release/temper.exe packages/${{ matrix.package }}/bin/temper.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -111,16 +77,16 @@ jobs:
 
       - name: Copy artifacts to packages
         run: |
-          for pkg in temper-mcp-darwin-arm64 temper-mcp-darwin-x64 temper-mcp-linux-x64 temper-mcp-linux-arm64 temper-mcp-win32-x64; do
+          for pkg in temper-mcp-darwin-arm64 temper-mcp-linux-x64; do
             cp -r artifacts/$pkg/* packages/$pkg/
-            chmod +x packages/$pkg/bin/* 2>/dev/null || true
+            chmod +x packages/$pkg/bin/*
           done
 
       - name: Publish platform packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          for pkg in temper-mcp-darwin-arm64 temper-mcp-darwin-x64 temper-mcp-linux-x64 temper-mcp-linux-arm64 temper-mcp-win32-x64; do
+          for pkg in temper-mcp-darwin-arm64 temper-mcp-linux-x64; do
             cd packages/$pkg
             npm publish || echo "Failed to publish $pkg"
             cd ../..
