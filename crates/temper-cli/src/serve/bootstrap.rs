@@ -347,12 +347,38 @@ pub(super) async fn bootstrap_tenants(state: &PlatformState, apps: &[(String, St
     for (tenant, _dir) in apps {
         temper_platform::bootstrap_agent_specs(state, tenant);
     }
-    // In TenantRouted mode, bootstrap agent specs for all registered tenants.
+    // In TenantRouted mode, bootstrap agent specs for all registered tenants
+    // and restore any previously installed OS apps.
     if let Some(ref store) = state.server.event_store
         && let Some(tenant_router) = store.tenant_router()
     {
         for tenant in tenant_router.connected_tenants().await {
             temper_platform::bootstrap_agent_specs(state, &tenant);
+        }
+        // Restore OS apps from tenant_installed_apps table.
+        if let Some(turso) = store.platform_turso_store() {
+            match turso.list_all_installed_apps().await {
+                Ok(installed) => {
+                    for (tenant, app_name) in &installed {
+                        match temper_platform::install_os_app(state, tenant, app_name).await {
+                            Ok(entities) => {
+                                eprintln!(
+                                    "  Restored OS app '{app_name}' for tenant '{tenant}': {}",
+                                    entities.join(", ")
+                                );
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "  Warning: failed to restore OS app '{app_name}' for tenant '{tenant}': {e}"
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("  Warning: failed to read installed apps from platform DB: {e}");
+                }
+            }
         }
     }
 }
