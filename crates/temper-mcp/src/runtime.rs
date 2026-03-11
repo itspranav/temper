@@ -96,11 +96,6 @@ impl RuntimeContext {
             };
             self.agent_id = Some(format!("{prefix}-{}", &hash[..12]));
 
-            eprintln!(
-                "temper-mcp: derived agent_id={} from clientInfo.name={:?}",
-                self.agent_id.as_deref().unwrap_or("?"),
-                info.name,
-            );
         }
 
         self.client_info = info;
