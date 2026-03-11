@@ -146,25 +146,25 @@ pub(crate) async fn handle_approve_decision(
     }
 
     // Persist to Turso FIRST — if fails, roll back Cedar engine and return 500.
-    if let Some(turso) = state.persistent_store() {
-        if let Err(e) = turso.upsert_tenant_policy(&tenant, &new_tenant_text).await {
-            // Roll back: reload engine from current HashMap (without the new policy).
-            let rollback = {
-                let p = state.tenant_policies.read().unwrap(); // ci-ok: infallible lock
-                let mut all = String::new();
-                for text in p.values() {
-                    all.push_str(text);
-                    all.push('\n');
-                }
-                all
-            };
-            let _ = state.authz.reload_policies(&rollback);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to persist Cedar policy: {e}"),
-            )
-                .into_response();
-        }
+    if let Some(turso) = state.persistent_store()
+        && let Err(e) = turso.upsert_tenant_policy(&tenant, &new_tenant_text).await
+    {
+        // Roll back: reload engine from current HashMap (without the new policy).
+        let rollback = {
+            let p = state.tenant_policies.read().unwrap(); // ci-ok: infallible lock
+            let mut all = String::new();
+            for text in p.values() {
+                all.push_str(text);
+                all.push('\n');
+            }
+            all
+        };
+        let _ = state.authz.reload_policies(&rollback);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to persist Cedar policy: {e}"),
+        )
+            .into_response();
     }
 
     // Commit the validated policy to in-memory HashMap.
