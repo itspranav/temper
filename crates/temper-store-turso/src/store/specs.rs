@@ -73,6 +73,24 @@ impl TursoEventStore {
 
     // ── Installed Apps ─────────────────────────────────────────────
 
+    /// Check if an OS app is already installed for a tenant.
+    #[instrument(skip_all, fields(tenant_id, app_name, otel.name = "turso.is_app_installed"))]
+    pub async fn is_app_installed(
+        &self,
+        tenant_id: &str,
+        app_name: &str,
+    ) -> Result<bool, PersistenceError> {
+        let conn = self.configured_connection().await?;
+        let mut rows = conn
+            .query(
+                "SELECT 1 FROM tenant_installed_apps WHERE tenant_id = ?1 AND app_name = ?2 LIMIT 1",
+                params![tenant_id, app_name],
+            )
+            .await
+            .map_err(storage_error)?;
+        Ok(rows.next().await.map_err(storage_error)?.is_some())
+    }
+
     /// Record that an OS app was installed in a tenant.
     #[instrument(skip_all, fields(tenant_id, app_name, otel.name = "turso.record_installed_app"))]
     pub async fn record_installed_app(

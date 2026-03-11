@@ -305,8 +305,16 @@ pub(super) async fn recover_cedar_policies(state: &PlatformState) {
 
     if !all_policy_rows.is_empty() {
         let mut policies = state.server.tenant_policies.write().unwrap(); // ci-ok: infallible lock
+        let mut loaded_count = 0usize;
         for (tenant, policy_text) in &all_policy_rows {
+            // Validate each tenant's policies individually so one bad tenant
+            // doesn't prevent all others from loading.
+            if temper_authz::AuthzEngine::new(policy_text).is_err() {
+                eprintln!("  Warning: skipping invalid Cedar policies for tenant '{tenant}'");
+                continue;
+            }
             policies.insert(tenant.clone(), policy_text.clone());
+            loaded_count += 1;
         }
         let mut combined = String::new();
         for text in policies.values() {
@@ -315,11 +323,8 @@ pub(super) async fn recover_cedar_policies(state: &PlatformState) {
         }
         if let Err(e) = state.server.authz.reload_policies(&combined) {
             eprintln!("  Warning: failed to reload Cedar policies: {e}");
-        } else {
-            println!(
-                "  Restored Cedar policies for {} tenants.",
-                all_policy_rows.len()
-            );
+        } else if loaded_count > 0 {
+            println!("  Restored Cedar policies for {loaded_count} tenants.");
         }
     }
 }

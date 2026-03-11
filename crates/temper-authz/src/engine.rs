@@ -4,12 +4,12 @@
 //! for OData operations. Translates Temper concepts (entities, actions,
 //! security contexts) into Cedar's authorization model.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::RwLock;
 
 use cedar_policy::{
-    Authorizer, Context, Decision, Entities, EntityUid, PolicySet, Request,
+    Authorizer, Context, Decision, Entities, Entity, EntityUid, PolicySet, Request,
     Response as CedarResponse,
 };
 
@@ -192,6 +192,43 @@ impl AuthzEngine {
             }
         };
 
+        // Build principal entity with attributes so Cedar can resolve both
+        // exact UID matches (`principal == Agent::"bot-1"`) and attribute
+        // access (`principal.agent_type in [...]`).
+        let mut principal_attrs: HashMap<String, cedar_policy::RestrictedExpression> =
+            HashMap::new();
+        if let Some(ref agent_type) = security_ctx.principal.agent_type {
+            principal_attrs.insert(
+                "agent_type".to_string(),
+                cedar_policy::RestrictedExpression::new_string(agent_type.clone()),
+            );
+        }
+        if let Some(ref role) = security_ctx.principal.role {
+            principal_attrs.insert(
+                "role".to_string(),
+                cedar_policy::RestrictedExpression::new_string(role.clone()),
+            );
+        }
+        for (key, value) in &security_ctx.principal.attributes {
+            insert_json_as_cedar(&mut principal_attrs, key.clone(), value);
+        }
+
+        let entities = match Entity::new(principal_uid.clone(), principal_attrs, HashSet::new()) {
+            Ok(entity) => match Entities::from_entities([entity], None) {
+                Ok(e) => e,
+                Err(e) => {
+                    return AuthzDecision::Deny(AuthzDenial::EngineError(format!(
+                        "failed to build entity store: {e}"
+                    )));
+                }
+            },
+            Err(e) => {
+                return AuthzDecision::Deny(AuthzDenial::EngineError(format!(
+                    "failed to build principal entity: {e}"
+                )));
+            }
+        };
+
         let request = match Request::new(
             principal_uid,
             action_uid,
@@ -206,8 +243,6 @@ impl AuthzEngine {
                 )));
             }
         };
-
-        let entities = Entities::empty();
 
         let policy_set = match self.policy_set.read() {
             Ok(ps) => ps,
@@ -516,6 +551,83 @@ mod tests {
         attrs2.insert("id".to_string(), serde_json::json!("doc-2"));
         let result2 = engine.authorize(&ctx2, "read", "Doc", &attrs2);
         assert!(!result2.is_allowed(), "should deny non-claude-code agent");
+    }
+
+    #[test]
+    fn test_exact_agent_principal_match() {
+        // Approval policies use exact UID match: `principal == Agent::"bot-1"`
+        // This requires the principal entity to exist in the entity store.
+        let policy = r#"permit(principal == Agent::"bot-1", action == Action::"Assign", resource is Issue);"#;
+        let engine = AuthzEngine::new(policy).unwrap();
+        let ctx = SecurityContext::from_headers(&[
+            ("X-Temper-Principal-Id".to_string(), "bot-1".to_string()),
+            ("X-Temper-Principal-Kind".to_string(), "agent".to_string()),
+        ]);
+        let mut attrs = HashMap::new();
+        attrs.insert("id".to_string(), serde_json::json!("issue-1"));
+        let decision = engine.authorize(&ctx, "Assign", "Issue", &attrs);
+        assert!(
+            decision.is_allowed(),
+            "exact principal match should work: {decision:?}"
+        );
+    }
+
+    #[test]
+    fn test_exact_principal_match_wrong_id_denied() {
+        let policy = r#"permit(principal == Agent::"bot-1", action == Action::"Assign", resource is Issue);"#;
+        let engine = AuthzEngine::new(policy).unwrap();
+        let ctx = SecurityContext::from_headers(&[
+            ("X-Temper-Principal-Id".to_string(), "bot-2".to_string()),
+            ("X-Temper-Principal-Kind".to_string(), "agent".to_string()),
+        ]);
+        let mut attrs = HashMap::new();
+        attrs.insert("id".to_string(), serde_json::json!("issue-1"));
+        let decision = engine.authorize(&ctx, "Assign", "Issue", &attrs);
+        assert!(
+            !decision.is_allowed(),
+            "wrong principal ID should be denied"
+        );
+    }
+
+    #[test]
+    fn test_principal_attribute_access_in_policy() {
+        // PM base policies use: `principal.agent_type in ["supervisor", "human"]`
+        let policy = r#"
+            permit(
+                principal is Agent,
+                action == Action::"Triage",
+                resource is Issue
+            ) when {
+                principal.agent_type == "supervisor"
+            };
+        "#;
+        let engine = AuthzEngine::new(policy).unwrap();
+
+        // With matching agent_type → Allow
+        let ctx = SecurityContext::from_headers(&[
+            ("X-Temper-Principal-Id".to_string(), "bot-1".to_string()),
+            ("X-Temper-Principal-Kind".to_string(), "agent".to_string()),
+            ("X-Temper-Agent-Type".to_string(), "supervisor".to_string()),
+        ]);
+        let mut attrs = HashMap::new();
+        attrs.insert("id".to_string(), serde_json::json!("issue-1"));
+        let decision = engine.authorize(&ctx, "Triage", "Issue", &attrs);
+        assert!(
+            decision.is_allowed(),
+            "supervisor agent_type should be allowed: {decision:?}"
+        );
+
+        // Without matching agent_type → Deny
+        let ctx2 = SecurityContext::from_headers(&[
+            ("X-Temper-Principal-Id".to_string(), "bot-2".to_string()),
+            ("X-Temper-Principal-Kind".to_string(), "agent".to_string()),
+            ("X-Temper-Agent-Type".to_string(), "worker".to_string()),
+        ]);
+        let decision2 = engine.authorize(&ctx2, "Triage", "Issue", &attrs);
+        assert!(
+            !decision2.is_allowed(),
+            "non-supervisor agent_type should be denied"
+        );
     }
 
     #[test]
