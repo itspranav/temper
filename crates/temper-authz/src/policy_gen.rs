@@ -236,7 +236,8 @@ mod tests {
             role_value: None,
             session_id: None,
         };
-        let policy = generate_cedar_from_matrix("bot-1", "Agent", "submitOrder", "Order", "order-123", &m);
+        let policy =
+            generate_cedar_from_matrix("bot-1", "Agent", "submitOrder", "Order", "order-123", &m);
         assert!(policy.contains("principal == Agent::\"bot-1\""));
         assert!(policy.contains("action == Action::\"submitOrder\""));
         assert!(policy.contains("resource == Order::\"order-123\""));
@@ -254,7 +255,8 @@ mod tests {
             role_value: None,
             session_id: None,
         };
-        let policy = generate_cedar_from_matrix("bot-1", "Agent", "submitOrder", "Order", "order-123", &m);
+        let policy =
+            generate_cedar_from_matrix("bot-1", "Agent", "submitOrder", "Order", "order-123", &m);
         assert!(policy.contains("resource is Order"));
     }
 
@@ -269,7 +271,8 @@ mod tests {
             role_value: None,
             session_id: None,
         };
-        let policy = generate_cedar_from_matrix("bot-1", "Agent", "submitOrder", "Order", "order-123", &m);
+        let policy =
+            generate_cedar_from_matrix("bot-1", "Agent", "submitOrder", "Order", "order-123", &m);
         assert!(policy.contains("principal is Agent"));
         assert!(!policy.contains("Action::"));
         assert!(!policy.contains("Order"));
@@ -286,7 +289,8 @@ mod tests {
             role_value: None,
             session_id: None,
         };
-        let policy = generate_cedar_from_matrix("bot-1", "Agent", "submitOrder", "Order", "order-123", &m);
+        let policy =
+            generate_cedar_from_matrix("bot-1", "Agent", "submitOrder", "Order", "order-123", &m);
         assert!(policy.contains("principal is Agent"));
         assert!(policy.contains("context.agentType == \"claude-code\""));
     }
@@ -302,7 +306,8 @@ mod tests {
             role_value: Some("operations_agent".to_string()),
             session_id: None,
         };
-        let policy = generate_cedar_from_matrix("bot-1", "Agent", "submitOrder", "Order", "order-123", &m);
+        let policy =
+            generate_cedar_from_matrix("bot-1", "Agent", "submitOrder", "Order", "order-123", &m);
         assert!(policy.contains("context.role == \"operations_agent\""));
     }
 
@@ -317,7 +322,8 @@ mod tests {
             role_value: None,
             session_id: Some("sess-abc".to_string()),
         };
-        let policy = generate_cedar_from_matrix("bot-1", "Agent", "submitOrder", "Order", "order-123", &m);
+        let policy =
+            generate_cedar_from_matrix("bot-1", "Agent", "submitOrder", "Order", "order-123", &m);
         assert!(policy.contains("context.sessionId == \"sess-abc\""));
     }
 
@@ -332,7 +338,8 @@ mod tests {
             role_value: None,
             session_id: Some("sess-xyz".to_string()),
         };
-        let policy = generate_cedar_from_matrix("bot-1", "Agent", "submitOrder", "Order", "order-123", &m);
+        let policy =
+            generate_cedar_from_matrix("bot-1", "Agent", "submitOrder", "Order", "order-123", &m);
         assert!(policy.contains("context.agentType == \"openclaw\""));
         assert!(policy.contains("context.sessionId == \"sess-xyz\""));
     }
@@ -348,7 +355,8 @@ mod tests {
             role_value: None,
             session_id: None,
         };
-        let policy = generate_cedar_from_matrix("bot-1", "Agent", "submitOrder", "Order", "order-123", &m);
+        let policy =
+            generate_cedar_from_matrix("bot-1", "Agent", "submitOrder", "Order", "order-123", &m);
         assert!(policy.contains("resource is Order"));
         assert!(!policy.contains("Action::"));
     }
