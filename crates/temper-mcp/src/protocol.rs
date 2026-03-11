@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{MCP_PROTOCOL_VERSION, MCP_SERVER_NAME, RuntimeContext};
+use super::runtime::ClientInfo;
 
 #[derive(Debug, Deserialize)]
 struct JsonRpcRequest {
@@ -59,7 +60,15 @@ pub(super) async fn dispatch_json_value(ctx: &mut RuntimeContext, raw: Value) ->
     let id = request.id.clone();
 
     let result = match request.method.as_str() {
-        "initialize" => Ok(json!({
+        "initialize" => {
+            // Extract clientInfo from the initialize params (MCP spec).
+            if let Some(client_info) = request.params.get("clientInfo") {
+                let name = client_info.get("name").and_then(Value::as_str).map(String::from);
+                let version = client_info.get("version").and_then(Value::as_str).map(String::from);
+                ctx.apply_client_info(ClientInfo { name, version });
+            }
+
+            Ok(json!({
             "protocolVersion": MCP_PROTOCOL_VERSION,
             "capabilities": {
                 "tools": {
@@ -76,7 +85,8 @@ pub(super) async fn dispatch_json_value(ctx: &mut RuntimeContext, raw: Value) ->
         the execute tool. Use execute to start the server, submit specs, create entities, \
         and invoke actions — all governed by Cedar policies. If an action is denied, the \
         decision surfaces to the human developer for approval."
-        })),
+        }))
+        }
         "tools/list" => Ok(json!({ "tools": tool_definitions() })),
         "tools/call" => {
             let params: ToolCallParams = match serde_json::from_value(request.params) {

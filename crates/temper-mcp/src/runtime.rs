@@ -7,6 +7,13 @@ use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use super::McpConfig;
 use super::protocol::dispatch_json_line;
 
+/// Client identity received from the MCP `initialize` handshake.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ClientInfo {
+    pub(crate) name: Option<String>,
+    pub(crate) version: Option<String>,
+}
+
 /// Thin-client runtime context for the MCP server.
 ///
 /// Connects to an already-running Temper server via `--port` (local) or
@@ -22,6 +29,10 @@ pub(crate) struct RuntimeContext {
     pub(crate) agent_type: Option<String>,
     pub(crate) session_id: Option<String>,
     pub(crate) api_key: Option<String>,
+    /// Identity from the MCP client's `initialize` request.
+    pub(crate) client_info: ClientInfo,
+    /// Timestamp when this MCP session started (used for agent ID derivation).
+    pub(crate) started_at: std::time::Instant,
     sandbox: temper_sandbox::runner::PersistentSandbox,
 }
 
@@ -45,8 +56,54 @@ impl RuntimeContext {
                 .api_key
                 .clone()
                 .or_else(|| std::env::var("TEMPER_API_KEY").ok()), // determinism-ok: startup config
+            client_info: ClientInfo::default(),
+            started_at: std::time::Instant::now(), // determinism-ok: startup config, used only for agent ID derivation
             sandbox: temper_sandbox::runner::PersistentSandbox::new(&[("temper", "Temper", 1)]),
         })
+    }
+
+    /// Apply MCP `clientInfo` from the `initialize` handshake.
+    ///
+    /// Derives `agent_type` from the client name and `agent_id` from a hash
+    /// of `clientInfo.name`, `clientInfo.version`, hostname, and connection
+    /// timestamp — unless an explicit `agent_id` was already set via CLI.
+    pub(crate) fn apply_client_info(&mut self, info: ClientInfo) {
+        // Always set agent_type from the client name (e.g. "claude-code", "codex-cli").
+        if let Some(ref name) = info.name {
+            self.agent_type = Some(name.clone());
+        }
+
+        // Derive agent_id only if not explicitly set via --agent-id CLI flag.
+        if self.agent_id.is_none() || self.agent_id.as_deref() == Some("mcp-agent") {
+            let client_name = info.name.as_deref().unwrap_or("unknown");
+            let client_version = info.version.as_deref().unwrap_or("0");
+            let host = hostname::get()
+                .map(|h| h.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| "unknown".to_string()); // determinism-ok: startup config
+            let nonce = self.started_at.elapsed().as_nanos();
+
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(format!("{client_name}:{client_version}:{host}:{nonce}"));
+            let hash_bytes = hasher.finalize();
+            let hash: String = hash_bytes.iter().map(|b| format!("{b:02x}")).collect();
+
+            // Prefix with a short client identifier for readability.
+            let prefix = match client_name {
+                "claude-code" => "cc",
+                "codex-cli" => "cx",
+                _ => "mc",
+            };
+            self.agent_id = Some(format!("{prefix}-{}", &hash[..12]));
+
+            eprintln!(
+                "temper-mcp: derived agent_id={} from clientInfo.name={:?}",
+                self.agent_id.as_deref().unwrap_or("?"),
+                info.name,
+            );
+        }
+
+        self.client_info = info;
     }
 
     pub(crate) async fn run_execute(&mut self, code: &str) -> Result<String> {
