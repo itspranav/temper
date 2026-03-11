@@ -17,15 +17,17 @@ export default function VisionSection() {
                 An agent that accumulates <em className="italic text-[var(--color-accent-teal)]">capabilities.</em>
               </h2>
               <p className="text-base text-[var(--color-text-secondary)] max-w-[520px] mb-4 leading-[1.7]">
-                Most agents start from zero every session. A tempered agent builds
-                its own operating environment — task systems, knowledge bases,
-                notification pipelines — as verified specs that persist and compose.
+                Agent scaffolding — prompt templates, tool wrappers, output
+                parsers — shrinks as models get smarter. The infrastructure
+                underneath compounds: verified state machines, authorization
+                policies, persistent trajectories. A tempered agent builds on
+                that layer.
               </p>
               <p className="text-base text-[var(--color-text-secondary)] max-w-[520px] mb-0 leading-[1.7]">
-                Each capability is formally proven before deployment, authorized by
-                Cedar policy on every action, and continuously refined through an
-                evolution feedback loop. The agent proposes changes to its own
-                harness. You hold the gate.
+                Everything an agent touches — tools, apps, harnesses — is a
+                declarative spec with a signature. The kernel interprets specs
+                into running systems. Agents write them, verify them, and
+                rewrite them. You hold the approval gate.
               </p>
             </ScrollReveal>
           </div>

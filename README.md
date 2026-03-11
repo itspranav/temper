@@ -54,9 +54,7 @@ The kernel is a thin Rust runtime that interprets whatever the mediation pipelin
 
 ## Why Temper?
 
-Models are an API call. The model-facing scaffolding — prompt templates, output parsers, tool wrappers — is being absorbed by smarter models. What remains is the world-facing infrastructure: state, authorization, verification, persistence. That's the layer that compounds.
-
-Skills should be code with a signature. Harnesses should be too — and agents should be the ones writing and rewriting them.
+Agent scaffolding — prompt templates, tool wrappers, output parsers — shrinks as models get smarter. What compounds is the world-facing infrastructure: verified state machines, authorization policies, persistent trajectories. The kernel is a [universal interpreter](https://en.wikipedia.org/wiki/Von_Neumann_universal_constructor) — everything else is a spec. Tools, harnesses, applications are all declarative descriptions with a signature that agents write, verify, deploy, and rewrite. The kernel rarely changes. The descriptions evolve.
 
 | What's developing in the field | Temper's angle |
 |---|---|
@@ -184,9 +182,9 @@ temper decide --approve <id> medium  # approve with medium scope
 ## Architecture
 
 ```
-┌────────────────────────────────────────────────────────┐
-│  Agent (Claude Code, Cursor, LangChain, CrewAI, etc.)  │
-└───────────────────────┬────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│  Agent (Claude Code, Pi, Pydantic AI, OpenClaw, Cursor, LangChain, etc.)  │
+└───────────────────────────────────┬────────────────────────────────────────┘
                         │  MCP (execute)
                         ▼
 ┌────────────────────────────────────────────────────────┐
@@ -195,24 +193,24 @@ temper decide --approve <id> medium  # approve with medium scope
 └───────────────────────┬────────────────────────────────┘
                         │
                         ▼
-┌────────────────────────────────────────────────────────┐
-│  Temper Kernel                                         │
-│                                                        │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐              │
-│  │ Spec     │→ │ Verify   │→ │ Deploy   │              │
-│  │ IOA+CSDL │  │ L0-L3    │  │ Actor RT │              │
-│  └──────────┘  └──────────┘  └────┬─────┘              │
-│                                   │                    │
-│  ┌──────────┐  ┌──────────┐  ┌────▼─────┐              │
-│  │ Cedar    │  │ WASM     │  │ OData    │              │
-│  │ AuthZ    │  │ Integr.  │  │ API      │              │
-│  └──────────┘  └──────────┘  └──────────┘              │
-│                                                        │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐              │
-│  │ Event    │  │ OTEL     │  │ Evolution│              │
-│  │ Sourcing │  │ Telemetry│  │ Engine   │              │
-│  └──────────┘  └──────────┘  └──────────┘              │
-└────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│  Temper Kernel                                           │
+│                                                          │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐                │
+│  │ Spec     │→ │ Verify   │→ │ Deploy   │                │
+│  │ IOA+CSDL │  │ L0-L3    │  │ Actor RT │                │
+│  └──────────┘  └──────────┘  └────┬─────┘                │
+│                                   │                      │
+│  ┌──────────┐  ┌──────────┐  ┌────▼─────┐                │
+│  │ Cedar    │  │ WASM     │  │ OData    │                │
+│  │ AuthZ    │  │ Integr.  │  │ API      │                │
+│  └──────────┘  └──────────┘  └──────────┘                │
+│                                                          │
+│  ┌──────────┐  ┌─────────────────────┐  ┌──────────┐    │
+│  │ Event    │  │ OTEL → Logfire,     │  │ Evolution│    │
+│  │ Sourcing │  │ Datadog, ClickHouse │  │ Engine   │    │
+│  └──────────┘  └─────────────────────┘  └──────────┘    │
+└──────────────────────────────────────────────────────────┘
                         │
                         ▼
 ┌────────────────────────────────────────────────────────┐
@@ -306,7 +304,7 @@ Temper is being built bottom-up. Each layer enables the next.
 
 **Layer 3 — Integrations.** Agents need to reach external systems. Instead of bespoke tool implementations per agent, Temper provides an integration layer where agents write integrations as WASM modules + specs. Cedar mediates which integrations an agent can use.
 
-**Layer 4 — Harness composition.** The harness should always be rewritable. With apps for tracking work, a filesystem for state, and integrations for external systems — agents have what they need to design complete harnesses as specs: what polls what, what reviews what, what gates what. Skills and harnesses are both code with a signature — declarative specs that agents author, verify, and rewrite as they evolve.
+**Layer 4 — Harness composition.** The harness should always be rewritable. With apps for tracking work, a filesystem for state, and integrations for external systems — agents have what they need to design complete harnesses as specs: what polls what, what reviews what, what gates what. Tools and harnesses are both code with a signature — declarative specs that agents author, verify, and rewrite as they evolve.
 
 **Layer 5 — Pure Temper agent.** An agent whose only tool is Temper. No raw filesystem, no shell, no bespoke API clients. Everything mediated, queryable, auditable.
 
