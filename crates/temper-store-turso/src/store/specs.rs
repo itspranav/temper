@@ -92,9 +92,7 @@ impl TursoEventStore {
 
     /// List all installed apps across all tenants (for boot + UI).
     #[instrument(skip_all, fields(otel.name = "turso.list_all_installed_apps"))]
-    pub async fn list_all_installed_apps(
-        &self,
-    ) -> Result<Vec<(String, String)>, PersistenceError> {
+    pub async fn list_all_installed_apps(&self) -> Result<Vec<(String, String)>, PersistenceError> {
         let conn = self.configured_connection().await?;
         let mut rows = conn
             .query(
@@ -115,10 +113,7 @@ impl TursoEventStore {
 
     /// Remove all installed app records for a tenant (for deletion cleanup).
     #[instrument(skip_all, fields(tenant_id, otel.name = "turso.remove_installed_apps"))]
-    pub async fn remove_installed_apps(
-        &self,
-        tenant_id: &str,
-    ) -> Result<(), PersistenceError> {
+    pub async fn remove_installed_apps(&self, tenant_id: &str) -> Result<(), PersistenceError> {
         let conn = self.configured_connection().await?;
         conn.execute(
             "DELETE FROM tenant_installed_apps WHERE tenant_id = ?1",
