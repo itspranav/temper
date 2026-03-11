@@ -4,41 +4,108 @@
 
 ---
 
-## Our Palette
+## Philosophy
 
-These are the named colors. Use the names, not raw hex. When an agent reads this file, these names become the vocabulary.
+**Clean. Minimal. Only theme colors.**
+
+Every element earns its place. No decorative clutter, no gratuitous color, no visual noise. Surfaces are quiet. Typography does the heavy lifting. Color is reserved for meaning — status, actions, emphasis. When nothing is competing for attention, the right thing stands out naturally.
+
+- White space is a design tool, not wasted space
+- Fewer elements, each with clear purpose
+- Color only from the palette below — never ad-hoc hex values
+- Monochrome by default, accent color only where it communicates something
+
+---
+
+## Our Palette — Dark Temper
+
+Two modes. Same structure, different values. Dark is the default. Light is the alternative.
+
+### Dark Mode (default)
 
 ```
 ── Surfaces ──────────────────────────────────────────────
   s1   #0A0A0A   page background
   s2   #0F0F0F   card / panel
-  s3   #141414   elevated — dropdowns, modals
-  s4   #1C1C1C   active / hover
+  s3   rgba(255,255,255,0.03)   elevated — dropdowns, modals
+  s4   rgba(255,255,255,0.06)   active / hover
 
 ── Text ──────────────────────────────────────────────────
   t1   #D4D4D4   primary — read this
   t2   #8A8A8A   secondary — supporting
   t3   #4A4A4A   muted — labels, whispers
 
-── Accent — Blue Steel ───────────────────────────────────
-  c1   #7dd3fc   steel — primary actions, focus, highlights
-  c1-dim  rgba(125,211,252,0.08)   tinted backgrounds
-  c2   #fef08a   straw — secondary accent, warnings
-  c2-dim  rgba(254,240,138,0.07)   tinted backgrounds
-  c3   #94a3b8   gunmetal — tertiary, neutral accent
-  c3-dim  rgba(148,163,184,0.07)   tinted backgrounds
+── Accent ────────────────────────────────────────────────
+  c1   #9333ea   violet — primary actions, focus, highlights
+  c1-dim  rgba(147,51,234,0.10)   tinted backgrounds
+  c2   #d97706   bronze — secondary accent, warmth, warnings
+  c2-dim  rgba(217,119,6,0.10)    tinted backgrounds
+  c3   #3b82f6   blue — tertiary, informational
+  c3-dim  rgba(59,130,246,0.10)   tinted backgrounds
 
 ── Status ────────────────────────────────────────────────
   green   #3dd68c   / dim: rgba(61,214,140,0.10)
-  amber   #fef08a   / dim: rgba(254,240,138,0.10)
+  amber   #d97706   / dim: rgba(217,119,6,0.10)
   red     #fb7185   / dim: rgba(251,113,133,0.10)
-  sky     #7dd3fc   / dim: rgba(125,211,252,0.10)
 
 ── Borders ───────────────────────────────────────────────
   b1   rgba(255,255,255,0.05)   default, barely there
   b2   rgba(255,255,255,0.08)   hover
   b3   rgba(255,255,255,0.16)   active / focus
+
+── Corner accents ────────────────────────────────────────
+  corner   rgba(255,255,255,0.03)
+
+── Scrollbar ─────────────────────────────────────────────
+  thumb       rgba(255,255,255,0.08)
+  thumb-hover rgba(255,255,255,0.14)
 ```
+
+### Light Mode
+
+```
+── Surfaces ──────────────────────────────────────────────
+  s1   #FAFAFA   page background
+  s2   #F5F5F5   card / panel
+  s3   rgba(0,0,0,0.02)   elevated
+  s4   rgba(0,0,0,0.04)   active / hover
+
+── Text ──────────────────────────────────────────────────
+  t1   #2A2A2A   primary
+  t2   #6B6B6B   secondary
+  t3   #A0A0A0   muted
+
+── Accent ────────────────────────────────────────────────
+  c1   #581c87   deep violet
+  c1-dim  rgba(88,28,135,0.08)
+  c2   #92400e   deep bronze
+  c2-dim  rgba(146,64,14,0.08)
+  c3   #1d4ed8   deep blue
+  c3-dim  rgba(29,78,216,0.08)
+
+── Status ────────────────────────────────────────────────
+  green   #15803d   / dim: rgba(21,128,61,0.08)
+  amber   #92400e   / dim: rgba(146,64,14,0.08)
+  red     #be123c   / dim: rgba(190,18,60,0.08)
+
+── Borders ───────────────────────────────────────────────
+  b1   rgba(0,0,0,0.06)
+  b2   rgba(0,0,0,0.10)
+  b3   rgba(0,0,0,0.18)
+
+── Corner accents ────────────────────────────────────────
+  corner   rgba(0,0,0,0.04)
+
+── Scrollbar ─────────────────────────────────────────────
+  thumb       rgba(0,0,0,0.10)
+  thumb-hover rgba(0,0,0,0.18)
+```
+
+### Mode Switching
+
+Apply `.dark` or `.light` class to `<html>`. Use CSS custom properties so every component adapts automatically.
+
+**Rule:** Always define both modes. Never hardcode dark-only hex values in components. Use the token names.
 
 ---
 
@@ -46,8 +113,8 @@ These are the named colors. Use the names, not raw hex. When an agent reads this
 
 **Three fonts. That's it.**
 
-**Source Serif 4** — Display and title headings. Weight 300 for display (hero), 400 for titles. Brings editorial warmth.
-**Plus Jakarta Sans** — UI, body, all readable text. Weight 400–600. Clean geometric sans.
+**Source Serif 4** — Display and title headings. Weight 300 for display (hero), 400 for titles. Editorial warmth.
+**Plus Jakarta Sans** — UI, body, all readable text. Weight 400-600. Clean geometric sans.
 **SF Mono / Cascadia Code / Menlo** — Data, labels, IDs, timestamps, code. Monospace.
 
 ```html
@@ -56,55 +123,41 @@ These are the named colors. Use the names, not raw hex. When an agent reads this
 
 | Role | Font | Size | Weight |
 |------|------|------|--------|
-| Display / Hero | Source Serif 4 | 36–58px | 300 |
-| Title | Source Serif 4 | 20–28px | 400 |
-| Heading | Plus Jakarta Sans | 16–18px | 600 |
+| Display / Hero | Source Serif 4 | 36-58px | 300 |
+| Title | Source Serif 4 | 20-28px | 400 |
+| Heading | Plus Jakarta Sans | 16-18px | 600 |
 | Body | Plus Jakarta Sans | 14px | 400 |
 | Secondary body | Plus Jakarta Sans | 13px | 400 |
 | Data, IDs | SF Mono | 12px | 400 |
 | Labels, badges | SF Mono | 11px | 500, uppercase, tracking 0.06em |
 | Code | SF Mono | 13px | 400 |
 
-**Rule:** if it's a display/title heading → Source Serif 4. If it's a sentence → Plus Jakarta Sans. If it's a value, ID, timestamp, status code, label → SF Mono.
+**Rule:** Display/title heading = Source Serif 4. Sentence = Plus Jakarta Sans. Value, ID, timestamp, status, label = SF Mono.
 
 ---
 
 ## Highlight — The Primary Design Tool
 
-Highlight is the most underused element in dark UIs. We use it as a first-class design tool, not just for selection.
+Color is scarce. When it appears, it means something. These are the sanctioned highlight patterns.
 
 ### 1. Corner Accents
 L-shaped decorative borders at two opposite corners. Frames content with architectural precision.
 
-```html
-<div style="position:relative">
-  <!-- Top-left corner -->
-  <div style="position:absolute;top:-8px;left:-8px;width:48px;height:48px;
-    border-left:1px solid rgba(255,255,255,0.03);border-top:1px solid rgba(255,255,255,0.03);
-    pointer-events:none"></div>
-  <!-- Bottom-right corner -->
-  <div style="position:absolute;bottom:-8px;right:-8px;width:48px;height:48px;
-    border-right:1px solid rgba(255,255,255,0.03);border-bottom:1px solid rgba(255,255,255,0.03);
-    pointer-events:none"></div>
-  content here
-</div>
-```
-
-As CSS pseudo-elements:
 ```css
 .corner-accents { position: relative; }
 .corner-accents::before, .corner-accents::after {
   content: ''; position: absolute; width: 48px; height: 48px; pointer-events: none;
 }
-.corner-accents::before { top: -8px; left: -8px; border-left: 1px solid rgba(255,255,255,0.03); border-top: 1px solid rgba(255,255,255,0.03); }
-.corner-accents::after { bottom: -8px; right: -8px; border-right: 1px solid rgba(255,255,255,0.03); border-bottom: 1px solid rgba(255,255,255,0.03); }
+.corner-accents::before { top: -8px; left: -8px; border-left: 1px solid var(--corner-color); border-top: 1px solid var(--corner-color); }
+.corner-accents::after { bottom: -8px; right: -8px; border-right: 1px solid var(--corner-color); border-bottom: 1px solid var(--corner-color); }
 ```
 
 ### 2. Gradient Text
-Steel-to-straw gradient clip for emphasis words, hero text, and key metrics.
+Violet-to-bronze gradient clip for emphasis words, hero text, and key metrics.
 
 ```html
-<span style="background:linear-gradient(135deg,#7dd3fc 0%,#fef08a 100%);
+<!-- Dark mode -->
+<span style="background:linear-gradient(135deg,#9333ea 0%,#d97706 100%);
   -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent">
   key insight
 </span>
@@ -116,9 +169,10 @@ Use sparingly — one gradient text element per section maximum. Best on display
 Two-color gradient background that gives panels depth and identity.
 
 ```html
-<div style="background:linear-gradient(135deg,rgba(125,211,252,0.10) 0%,transparent 50%),
-  linear-gradient(225deg,rgba(254,240,138,0.07) 0%,transparent 50%),
-  rgba(15,15,15,0.6);padding:24px;border-radius:2px">
+<!-- Dark mode -->
+<div style="background:linear-gradient(135deg,rgba(147,51,234,0.08) 0%,transparent 50%),
+  linear-gradient(225deg,rgba(217,119,6,0.05) 0%,transparent 50%),
+  #0F0F0F;padding:24px;border-radius:2px">
   hero section content
 </div>
 ```
@@ -126,57 +180,32 @@ Two-color gradient background that gives panels depth and identity.
 Use on hero panels, featured cards, or section introductions. Not on every card.
 
 ### 4. Gradient Dividers
-Replace boring borders with gradient lines. Color should fade to transparent — one direction, same family.
+Replace boring borders with gradient lines. Color fades to transparent.
 
 ```html
-<!-- Section separator — left to right, fades out -->
-<div style="height:1px;background:linear-gradient(90deg,rgba(125,211,252,0.4) 0%,transparent 80%);margin:16px 0"></div>
+<!-- Section separator -->
+<div style="height:1px;background:linear-gradient(90deg,rgba(147,51,234,0.4) 0%,transparent 80%);margin:16px 0"></div>
 
-<!-- Under a heading — narrow pop -->
-<div style="height:2px;width:40px;background:linear-gradient(90deg,#7dd3fc,#fef08a);border-radius:2px;margin-top:6px"></div>
-
-<!-- Page footer accent — full width -->
-<div style="height:1px;background:linear-gradient(90deg,transparent 0%,rgba(125,211,252,0.3) 30%,rgba(254,240,138,0.2) 70%,transparent 100%)"></div>
+<!-- Under a heading -->
+<div style="height:2px;width:40px;background:linear-gradient(90deg,#9333ea,#d97706);border-radius:2px;margin-top:6px"></div>
 ```
 
 ### 5. Left Accent Bars
-The fastest visual scanner. 2–3px colored bar on the left edge of a card or row, color-coded by status.
+The fastest visual scanner. 2-3px colored bar on the left edge of a card or row.
 
 ```html
 <div style="position:relative;padding-left:16px">
-  <div style="position:absolute;left:0;top:0;bottom:0;width:3px;background:#7dd3fc;border-radius:0 2px 2px 0"></div>
+  <div style="position:absolute;left:0;top:0;bottom:0;width:3px;background:#9333ea;border-radius:0 2px 2px 0"></div>
   content here
 </div>
 ```
 
 ### 6. Strikethrough as Design Element
-Strikethrough communicates state: completed, superseded, deprecated. Color-coded by meaning.
+Strikethrough communicates state. Color-coded by meaning.
 
-```html
-<!-- Rose through — for rejected/scratched items -->
-<span style="text-decoration:line-through;text-decoration-color:rgba(251,113,133,0.7);
-  text-decoration-thickness:2px;color:#4A4A4A">
-  PROP-012: Seed Dead Worlds
-</span>
-
-<!-- Amber through — for deprecated -->
-<span style="text-decoration:line-through;text-decoration-color:rgba(254,240,138,0.6);
-  text-decoration-thickness:1.5px;color:#8A8A8A">
-  old approach
-</span>
-
-<!-- Steel through — for completed items -->
-<span style="text-decoration:line-through;text-decoration-color:rgba(125,211,252,0.6);
-  text-decoration-thickness:2px;color:#8A8A8A">
-  done task
-</span>
-```
-
-**When to use colored strikethrough:**
-- Scratched proposals → rose through
-- Replaced decisions → amber through
-- Completed items in a mixed list → steel through (done, not deleted)
-- Deprecated config → t3 + gray through
+- Rejected/scratched = red through
+- Deprecated = bronze through
+- Completed = violet through
 
 ---
 
@@ -197,31 +226,33 @@ Subtle noise texture across the entire page. Adds tactile depth to flat surfaces
 Add `<div class="grain-overlay"></div>` as the last child of `<body>`.
 
 ### Flow+Sparks Canvas Background
-Canvas 2D animation with drifting radial gradient blobs and rising spark particles using Blue Steel palette colors. The blobs drift slowly across the page as ambient light sources, while small spark particles rise upward with slight lateral drift.
+Canvas 2D animation with drifting radial gradient blobs and rising spark particles. Blobs drift slowly as ambient light sources. Sparks rise with slight lateral drift.
 
-- Blobs: 2–3 large radial gradients using `rgba(125,211,252,0.06)` and `rgba(254,240,138,0.03)`, drifting on sine-wave paths
-- Sparks: tiny circles (1–2px) in `#7dd3fc` or `#fef08a` at low opacity (0.2–0.5), rising with randomized speed and lateral wobble
-- Canvas sits behind all content at `z-index: 0`, replaces static ambient orbs when animation is desired
+- Blobs: 2-3 large radial gradients using `rgba(147,51,234,0.06)` (violet) and `rgba(217,119,6,0.04)` (bronze)
+- Sparks: tiny circles (1-2px) in c1 or c2 at low opacity (0.2-0.5), rising with randomized speed
+- Canvas sits behind all content at `z-index: 0`
+- Bias toward bronze/warm tones for visual warmth
 
 ### Ambient Orbs (Static Fallback)
-When canvas animation is not needed, use CSS pseudo-elements for ambient light:
+When canvas animation is not needed, use CSS pseudo-elements:
 
 ```css
+/* Dark mode */
 body::before {
   content: '';
   position: fixed; top: -30%; left: -10%; width: 60%; height: 60%;
-  background: radial-gradient(circle, rgba(125,211,252,0.06) 0%, transparent 70%);
+  background: radial-gradient(circle, rgba(147,51,234,0.06) 0%, transparent 70%);
   pointer-events: none; z-index: 0;
 }
 body::after {
   content: '';
   position: fixed; bottom: -20%; right: -10%; width: 50%; height: 50%;
-  background: radial-gradient(circle, rgba(254,240,138,0.03) 0%, transparent 70%);
+  background: radial-gradient(circle, rgba(217,119,6,0.03) 0%, transparent 70%);
   pointer-events: none; z-index: 0;
 }
 ```
 
-Colors are steel + straw — cool top-left, warm bottom-right. The orbs are atmosphere, not decoration.
+Violet top-left, bronze bottom-right. The orbs are atmosphere, not decoration.
 
 ---
 
@@ -230,40 +261,50 @@ Colors are steel + straw — cool top-left, warm bottom-right. The orbs are atmo
 Gradients should feel like light, not like a design decision.
 
 **Good gradients:**
-- Same family: `steel (c1) → straw (c2)` at low opacity
-- Fade to transparent (always preferred over fade to another color)
-- `steel → gunmetal` with low opacity (cool family)
+- Same family: `violet (c1) → bronze (c2)` at low opacity
+- Fade to transparent (always preferred)
 - One end always breathes toward transparent
 
 **Avoid:**
-- High contrast: `steel → red`, `straw → rose`
+- High contrast color jumps
 - Pure white gradients
-- More than 2 stops unless it's a spectrum decoration
-- `opacity: 1` on both ends — always let one end breathe toward transparent
+- More than 2 stops
+- `opacity: 1` on both ends
+
+---
+
+## Easing & Motion
+
+One easing curve for everything: `cubic-bezier(0.16, 1, 0.3, 1)` — expo out. Confident deceleration.
+
+| Purpose | Duration |
+|---------|----------|
+| Instant feedback (button, toggle) | 100-150ms |
+| State change (hover, menu) | 200-300ms |
+| Layout change (accordion, modal) | 300-500ms |
+| Entrance animation (page load) | 500-800ms |
+
+**Rule:** Exit animations are 75% of entrance duration. Never use bounce or elastic easing. Always respect `prefers-reduced-motion`.
 
 ```css
-/* good — low contrast, fades out */
-background: linear-gradient(135deg, rgba(125,211,252,0.3) 0%, rgba(254,240,138,0.15) 100%);
-
-/* good — fades out */
-background: linear-gradient(90deg, rgba(125,211,252,0.4) 0%, transparent 80%);
-
-/* avoid — high contrast colors */
-background: linear-gradient(135deg, #7dd3fc 0%, #ef4444 100%);
-
-/* avoid — harsh solid fill */
-background: linear-gradient(135deg, rgba(125,211,252,0.8) 0%, rgba(125,211,252,0.6) 100%);
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
 ```
 
 ---
 
 ## Full Head Block
 
-Every Temper UI starts with this:
+Every Temper UI starts with this. Supports both dark and light modes.
 
 ```html
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -275,43 +316,54 @@ Every Temper UI starts with this:
     theme: {
       extend: {
         colors: {
-          s1:'#0A0A0A', s2:'#0F0F0F', s3:'#141414', s4:'#1C1C1C',
-          t1:'#D4D4D4', t2:'#8A8A8A', t3:'#4A4A4A',
-          c1:'#7dd3fc', c2:'#fef08a', c3:'#94a3b8',
-          b1:'rgba(255,255,255,0.05)', b2:'rgba(255,255,255,0.08)', b3:'rgba(255,255,255,0.16)',
+          s1:'var(--s1)', s2:'var(--s2)', s3:'var(--s3)', s4:'var(--s4)',
+          t1:'var(--t1)', t2:'var(--t2)', t3:'var(--t3)',
+          c1:'var(--c1)', c2:'var(--c2)', c3:'var(--c3)',
+          b1:'var(--b1)', b2:'var(--b2)', b3:'var(--b3)',
         },
         fontFamily: {
           sans: ['Plus Jakarta Sans','system-ui','sans-serif'],
           serif: ['Source Serif 4','Georgia','serif'],
           mono: ['SF Mono','Cascadia Code','Menlo','monospace'],
         },
-        borderRadius: {
-          DEFAULT: '2px',
-        },
+        borderRadius: { DEFAULT: '2px' },
       },
     },
   }
   </script>
   <style>
     *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
-    body{font-family:'Plus Jakarta Sans',system-ui,sans-serif;background:#0A0A0A;color:#D4D4D4;
-      min-height:100vh;-webkit-font-smoothing:antialiased;font-optical-sizing:auto}
-    body::before{content:'';position:fixed;top:-30%;left:-10%;width:60%;height:60%;
-      background:radial-gradient(circle,rgba(125,211,252,0.06) 0%,transparent 70%);
-      pointer-events:none;z-index:0}
-    body::after{content:'';position:fixed;bottom:-20%;right:-10%;width:50%;height:50%;
-      background:radial-gradient(circle,rgba(254,240,138,0.03) 0%,transparent 70%);
-      pointer-events:none;z-index:0}
+
+    .dark {
+      --s1:#0A0A0A; --s2:#0F0F0F; --s3:rgba(255,255,255,0.03); --s4:rgba(255,255,255,0.06);
+      --t1:#D4D4D4; --t2:#8A8A8A; --t3:#4A4A4A;
+      --c1:#9333ea; --c2:#d97706; --c3:#3b82f6;
+      --c1-dim:rgba(147,51,234,0.10); --c2-dim:rgba(217,119,6,0.10); --c3-dim:rgba(59,130,246,0.10);
+      --b1:rgba(255,255,255,0.05); --b2:rgba(255,255,255,0.08); --b3:rgba(255,255,255,0.16);
+      --corner-color:rgba(255,255,255,0.03);
+    }
+    .light {
+      --s1:#FAFAFA; --s2:#F5F5F5; --s3:rgba(0,0,0,0.02); --s4:rgba(0,0,0,0.04);
+      --t1:#2A2A2A; --t2:#6B6B6B; --t3:#A0A0A0;
+      --c1:#581c87; --c2:#92400e; --c3:#1d4ed8;
+      --c1-dim:rgba(88,28,135,0.08); --c2-dim:rgba(146,64,14,0.08); --c3-dim:rgba(29,78,216,0.08);
+      --b1:rgba(0,0,0,0.06); --b2:rgba(0,0,0,0.10); --b3:rgba(0,0,0,0.18);
+      --corner-color:rgba(0,0,0,0.04);
+    }
+
+    body{font-family:'Plus Jakarta Sans',system-ui,sans-serif;background:var(--s1);color:var(--t1);
+      min-height:100vh;-webkit-font-smoothing:antialiased;font-optical-sizing:auto;
+      transition:background-color 0.3s cubic-bezier(0.16,1,0.3,1),color 0.3s cubic-bezier(0.16,1,0.3,1)}
     body>*{position:relative;z-index:1}
     .corner-accents{position:relative}
     .corner-accents::before,.corner-accents::after{content:'';position:absolute;width:48px;height:48px;pointer-events:none}
-    .corner-accents::before{top:-8px;left:-8px;border-left:1px solid rgba(255,255,255,0.03);border-top:1px solid rgba(255,255,255,0.03)}
-    .corner-accents::after{bottom:-8px;right:-8px;border-right:1px solid rgba(255,255,255,0.03);border-bottom:1px solid rgba(255,255,255,0.03)}
+    .corner-accents::before{top:-8px;left:-8px;border-left:1px solid var(--corner-color);border-top:1px solid var(--corner-color)}
+    .corner-accents::after{bottom:-8px;right:-8px;border-right:1px solid var(--corner-color);border-bottom:1px solid var(--corner-color)}
     ::-webkit-scrollbar{width:6px;height:6px}
     ::-webkit-scrollbar-track{background:transparent}
     ::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.08);border-radius:99px}
-    ::selection{background:rgba(125,211,252,0.3);color:#D4D4D4}
-    :focus-visible{outline:2px solid rgba(125,211,252,0.5);outline-offset:2px}
+    ::selection{background:var(--c1-dim);color:var(--t1)}
+    :focus-visible{outline:2px solid color-mix(in srgb, var(--c1) 50%, transparent);outline-offset:2px}
   </style>
 </head>
 ```
@@ -324,29 +376,28 @@ Every Temper UI starts with this:
 ```html
 <div class="bg-s2 border border-b1 rounded-[2px] p-5 hover:border-b2 transition-all duration-150 relative corner-accents">
 ```
-2px radius — sharp, not bubbly. Corner accents frame the card.
+2px radius. Corner accents frame the card. No shadows — borders and surface color create depth.
 
 ### Badge
 ```html
-<!-- Status badge -->
+<!-- Status badge — uses c1 -->
 <span style="font-family:'SF Mono',monospace;font-size:11px;font-weight:500;
   letter-spacing:0.06em;text-transform:uppercase;padding:3px 9px;border-radius:2px;
-  background:rgba(125,211,252,0.08);color:#7dd3fc">
+  background:var(--c1-dim);color:var(--c1)">
   Active
 </span>
 
-<!-- Colored strikethrough badge for Scratched/Done -->
+<!-- Warning badge — uses c2 -->
 <span style="font-family:'SF Mono',monospace;font-size:11px;font-weight:500;
   letter-spacing:0.06em;text-transform:uppercase;padding:3px 9px;border-radius:2px;
-  background:rgba(251,113,133,0.08);color:#4A4A4A;
-  text-decoration:line-through;text-decoration-color:rgba(251,113,133,0.5);text-decoration-thickness:1.5px">
-  Scratched
+  background:var(--c2-dim);color:var(--c2)">
+  Pending
 </span>
 ```
 
 ### Button — Primary
 ```html
-<button style="height:36px;padding:0 16px;border-radius:2px;background:#D4D4D4;color:#0A0A0A;
+<button style="height:36px;padding:0 16px;border-radius:2px;background:var(--c1);color:var(--s1);
   font-family:'Plus Jakarta Sans',sans-serif;font-size:13px;font-weight:500;border:none;cursor:pointer;
   transition:all 120ms cubic-bezier(0.16,1,0.3,1)">Deploy</button>
 ```
@@ -354,44 +405,44 @@ Every Temper UI starts with this:
 ### Button — Ghost
 ```html
 <button style="height:36px;padding:0 16px;border-radius:2px;background:transparent;
-  border:1px solid rgba(255,255,255,0.05);color:#8A8A8A;
+  border:1px solid var(--b1);color:var(--t2);
   font-family:'Plus Jakarta Sans',sans-serif;font-size:13px;font-weight:500;cursor:pointer;
   transition:all 120ms cubic-bezier(0.16,1,0.3,1)">Cancel</button>
 ```
 
 ### Button — Accent Soft
 ```html
-<button style="height:36px;padding:0 16px;border-radius:2px;background:rgba(125,211,252,0.08);
-  color:#7dd3fc;border:none;font-family:'Plus Jakarta Sans',sans-serif;font-size:13px;
-  font-weight:500;cursor:pointer">Evolve</button>
+<button style="height:36px;padding:0 16px;border-radius:2px;background:var(--c1-dim);
+  color:var(--c1);border:none;font-family:'Plus Jakarta Sans',sans-serif;font-size:13px;
+  font-weight:500;cursor:pointer;transition:all 120ms cubic-bezier(0.16,1,0.3,1)">Evolve</button>
 ```
 
 ### Input
 ```html
 <input style="width:100%;height:40px;padding:0 14px;border-radius:2px;
-  background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.05);
-  color:#D4D4D4;font-family:'Plus Jakarta Sans',sans-serif;font-size:14px;outline:none"
+  background:var(--s3);border:1px solid var(--b1);
+  color:var(--t1);font-family:'Plus Jakarta Sans',sans-serif;font-size:14px;outline:none"
   placeholder="Enter value...">
 ```
 
 ### Data Row
 ```html
 <div style="display:flex;align-items:center;gap:12px;padding:10px 0;
-  border-bottom:1px solid rgba(255,255,255,0.05);cursor:pointer;transition:color 120ms">
+  border-bottom:1px solid var(--b1);cursor:pointer;transition:color 120ms">
   <div style="flex:1;min-width:0">
-    <div style="font-size:13px;font-weight:450;color:#D4D4D4">Title</div>
-    <div style="font-family:'SF Mono',monospace;font-size:12px;color:#4A4A4A;margin-top:2px">ID · timestamp</div>
+    <div style="font-size:13px;font-weight:450;color:var(--t1)">Title</div>
+    <div style="font-family:'SF Mono',monospace;font-size:12px;color:var(--t3);margin-top:2px">ID · timestamp</div>
   </div>
   <span style="font-family:'SF Mono',monospace;font-size:11px;font-weight:500;
     letter-spacing:0.06em;text-transform:uppercase;padding:3px 9px;border-radius:2px;
-    background:rgba(125,211,252,0.08);color:#7dd3fc">Status</span>
+    background:var(--c1-dim);color:var(--c1)">Status</span>
 </div>
 ```
 
 ### Section Label
 ```html
 <div style="font-family:'SF Mono',monospace;font-size:11px;font-weight:500;
-  letter-spacing:0.06em;text-transform:uppercase;color:#4A4A4A;margin-bottom:10px">
+  letter-spacing:0.06em;text-transform:uppercase;color:var(--t3);margin-bottom:10px">
   Section Name
 </div>
 ```
@@ -401,7 +452,7 @@ Every Temper UI starts with this:
 <div id="overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);
   backdrop-filter:blur(4px);z-index:50" onclick="closeDrawer()">
   <div style="position:fixed;top:0;right:0;bottom:0;width:100%;max-width:420px;
-    background:#0A0A0A;border-left:1px solid rgba(255,255,255,0.05);
+    background:var(--s1);border-left:1px solid var(--b1);
     overflow-y:auto;padding:24px;transition:transform 200ms cubic-bezier(0.16,1,0.3,1)"
     onclick="event.stopPropagation()">
   </div>
@@ -420,19 +471,20 @@ Every Temper UI starts with this:
 | Tooltips | 2px |
 | Status dots | 50% (circle) |
 
-**Sharp, not bubbly. Not rounded — architectural.** 2px everywhere keeps the system rigid and intentional.
+**Sharp, not bubbly. Architectural.** 2px everywhere keeps the system rigid and intentional.
 
 ---
 
 ## Color Rules
 
-1. **Corner accents and gradient text are design tools, not exceptions.** Use corner accents on featured cards, gradient text on hero elements. Don't overuse — one gradient text per section.
-2. **Three accents** — steel (`c1`), straw (`c2`), gunmetal (`c3`). Steel is primary. Straw is secondary/warning. Gunmetal is neutral. Status colors are for state only.
-3. **Strikethrough has color.** Don't default to gray through on everything — match the meaning (rose = rejected, steel = done, amber = deprecated).
-4. **Gradients fade, not contrast.** Always fade toward transparent or a related hue. No jarring color jumps.
-5. **Text has three tiers** — t1/t2/t3. Never raw white.
-6. **Surfaces stack** — s1 → s2 → s3 → s4. Each step is perceptibly brighter.
-7. **Temper wash** — use the two-color steel+straw gradient on hero sections and featured panels, not on every surface.
+1. **Only theme colors.** Never introduce colors outside this palette. No random blues, no brand colors from elsewhere. If it's not in the palette, it doesn't exist.
+2. **Three accents** — violet (`c1`), bronze (`c2`), blue (`c3`). Violet is primary. Bronze is secondary/warm. Blue is informational. Status colors are for state only.
+3. **Monochrome first.** Default to surfaces and text tiers. Add accent color only when it communicates meaning — a status, an action, emphasis.
+4. **Gradients fade, not contrast.** Always fade toward transparent. No jarring color jumps.
+5. **Text has three tiers** — t1/t2/t3. Never raw white. Never raw black.
+6. **Surfaces stack** — s1 → s2 → s3 → s4. Each step is perceptibly different.
+7. **Temper wash** — violet+bronze gradient on hero sections and featured panels only.
+8. **Both modes must work.** Every component uses CSS variables, never hardcoded hex.
 
 ---
 
@@ -440,9 +492,9 @@ Every Temper UI starts with this:
 
 1. **Left accent bars** — 3px colored bar = fastest visual scanner
 2. **Big numbers first** — metric value in SF Mono 28px+, label below in t3 11px
-3. **Summary strip** — 3–5 key metrics at top before the detail grid
+3. **Summary strip** — 3-5 key metrics at top before the detail grid
 4. **Gradient dividers** — `linear-gradient(90deg, c1 at 40% opacity → transparent)`
-5. **Colored sparklines** — latest bars at full opacity, older bars at 30%
+5. **White space** — generous padding between sections, tight padding within groups
 
 ---
 
@@ -452,17 +504,11 @@ This file is the **default** that ships with the Temper skill. It defines the ae
 
 **To use your own aesthetic:**
 1. Write your own `design-system.md` in `apps/shared/`
-2. Define your palette, fonts, design elements (or not), and component patterns using the same section structure
+2. Define your palette, fonts, design elements, and component patterns
 3. Every UI your agent generates will follow your system instead
 
-The contract between the skill and the design system:
-- Skill says "read `apps/shared/design-system.md` before generating any UI"
-- Design system defines: palette names, font rules, design element patterns, component atoms
-- Agents look for: palette section, component examples, color rules
-- The rest is up to your aesthetic
-
-**You are not locked into Blue Steel + dark. You are locked into reading the file before you build.**
+**You are not locked into Dark Temper. You are locked into reading the file before you build.**
 
 ---
 
-*Sharp corners, soft orbs, three fonts. Steel wash on key moments. Straw sparks rising from below. Corner accents frame the content.*
+*Sharp corners, quiet surfaces, three fonts. Violet wash on key moments. Bronze warmth rising from below. Corner accents frame the content. Clean, minimal, intentional.*
