@@ -71,6 +71,66 @@ impl TursoEventStore {
         Ok(())
     }
 
+    // ── Installed Apps ─────────────────────────────────────────────
+
+    /// Record that an OS app was installed in a tenant.
+    #[instrument(skip_all, fields(tenant_id, app_name, otel.name = "turso.record_installed_app"))]
+    pub async fn record_installed_app(
+        &self,
+        tenant_id: &str,
+        app_name: &str,
+    ) -> Result<(), PersistenceError> {
+        let conn = self.configured_connection().await?;
+        conn.execute(
+            "INSERT OR IGNORE INTO tenant_installed_apps (tenant_id, app_name) VALUES (?1, ?2)",
+            params![tenant_id, app_name],
+        )
+        .await
+        .map_err(storage_error)?;
+        Ok(())
+    }
+
+    /// List all installed apps across all tenants (for boot + UI).
+    #[instrument(skip_all, fields(otel.name = "turso.list_all_installed_apps"))]
+    pub async fn list_all_installed_apps(
+        &self,
+    ) -> Result<Vec<(String, String)>, PersistenceError> {
+        let conn = self.configured_connection().await?;
+        let mut rows = conn
+            .query(
+                "SELECT tenant_id, app_name FROM tenant_installed_apps ORDER BY tenant_id, app_name",
+                (),
+            )
+            .await
+            .map_err(storage_error)?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await.map_err(storage_error)? {
+            out.push((
+                row.get::<String>(0).map_err(storage_error)?,
+                row.get::<String>(1).map_err(storage_error)?,
+            ));
+        }
+        Ok(out)
+    }
+
+    /// Remove all installed app records for a tenant (for deletion cleanup).
+    #[instrument(skip_all, fields(tenant_id, otel.name = "turso.remove_installed_apps"))]
+    pub async fn remove_installed_apps(
+        &self,
+        tenant_id: &str,
+    ) -> Result<(), PersistenceError> {
+        let conn = self.configured_connection().await?;
+        conn.execute(
+            "DELETE FROM tenant_installed_apps WHERE tenant_id = ?1",
+            params![tenant_id],
+        )
+        .await
+        .map_err(storage_error)?;
+        Ok(())
+    }
+
+    // ── Spec Loading ──────────────────────────────────────────────
+
     /// Load all persisted specs (for startup recovery).
     #[instrument(skip_all, fields(otel.name = "turso.load_specs"))]
     pub async fn load_specs(&self) -> Result<Vec<TursoSpecRow>, PersistenceError> {

@@ -80,7 +80,7 @@ impl ServerState {
             return Ok(());
         };
 
-        if let Some(turso) = store.turso_store() {
+        if let Some(turso) = store.platform_turso_store() {
             let status_str = match decision.status {
                 super::super::DecisionStatus::Pending => "pending",
                 super::super::DecisionStatus::Approved => "approved",
@@ -235,7 +235,7 @@ mod tests {
     #[tokio::test]
     async fn turso_secret_operations_are_explicitly_unsupported() {
         let db_path =
-            std::env::temp_dir().join(format!("temper-secrets-{}.db", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("temper-secrets-{}.db", uuid::Uuid::new_v4())); // determinism-ok: test-only temp file
         let db_url = format!("file:{}", db_path.display());
         let store = TursoEventStore::new(&db_url, None)
             .await
@@ -265,6 +265,6 @@ mod tests {
             .expect_err("turso secret load should fail");
         assert!(load_err.contains("not supported"));
 
-        let _ = std::fs::remove_file(db_path);
+        let _ = std::fs::remove_file(db_path); // determinism-ok: test-only cleanup
     }
 }

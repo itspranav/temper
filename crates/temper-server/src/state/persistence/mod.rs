@@ -28,7 +28,7 @@ impl ServerState {
         if let Some(pool) = store.postgres_pool() {
             return Some(MetadataBackend::Postgres(pool));
         }
-        if let Some(turso) = store.turso_store() {
+        if let Some(turso) = store.platform_turso_store() {
             return Some(MetadataBackend::Turso(turso));
         }
         if store.redis_store().is_some() {
@@ -155,7 +155,7 @@ impl ServerState {
         }
 
         // Turso path.
-        if let Some(turso) = store.turso_store() {
+        if let Some(turso) = store.platform_turso_store() {
             turso
                 .persist_wasm_invocation(&TursoWasmInvocationInsert {
                     tenant: &entry.tenant,
@@ -224,7 +224,7 @@ impl ServerState {
         }
 
         // Turso path (single-DB).
-        if let Some(turso) = store.turso_store() {
+        if let Some(turso) = store.platform_turso_store() {
             let rows = turso
                 .load_wasm_modules_all_tenants()
                 .await

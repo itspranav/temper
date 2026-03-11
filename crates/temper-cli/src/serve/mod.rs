@@ -123,7 +123,7 @@ pub async fn run(
 
     // Phase 8b: Install OS apps into default tenant (from --os-app flags)
     for app_name in &os_apps {
-        match temper_platform::install_os_app(&state, "default", app_name) {
+        match temper_platform::install_os_app(&state, "default", app_name).await {
             Ok(entities) => {
                 println!("  OS app '{app_name}' installed: {}", entities.join(", "));
             }

@@ -466,7 +466,7 @@ impl ServerState {
     pub fn persistent_store(&self) -> Option<&temper_store_turso::TursoEventStore> {
         self.event_store
             .as_ref()
-            .and_then(|store| store.turso_store())
+            .and_then(|store| store.platform_turso_store())
     }
 
     /// Find an entity spec by name across all tenants.

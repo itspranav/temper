@@ -111,11 +111,12 @@ pub fn get_os_app(name: &str) -> Option<OsAppBundle> {
     }
 }
 
-/// Install an OS app into a tenant.
+/// Install an OS app into a tenant (workspace).
 ///
 /// Runs the verification cascade and registers specs in the SpecRegistry,
-/// then loads Cedar policies. Returns the list of installed entity types.
-pub fn install_os_app(
+/// loads Cedar policies, and **persists everything to the platform DB** so
+/// specs survive redeployments.
+pub async fn install_os_app(
     state: &PlatformState,
     tenant: &str,
     app_name: &str,
@@ -133,7 +134,7 @@ pub fn install_os_app(
     );
 
     // Load Cedar policies for the tenant.
-    if !bundle.cedar_policies.is_empty() {
+    let combined_policy = if !bundle.cedar_policies.is_empty() {
         let combined: String = bundle.cedar_policies.join("\n");
         let mut policies = state.server.tenant_policies.write().unwrap(); // ci-ok: infallible lock
         let existing = policies.entry(tenant.to_string()).or_default();
@@ -147,6 +148,28 @@ pub fn install_os_app(
         }
         if let Err(e) = state.server.authz.reload_policies(&all_policies) {
             tracing::warn!("Failed to reload Cedar policies after OS app install: {e}");
+        }
+        Some(policies.get(tenant).cloned().unwrap_or_default())
+    } else {
+        None
+    };
+
+    // Persist specs + policies + install record to the platform DB.
+    if let Some(ref store) = state.server.event_store {
+        if let Some(turso) = store.platform_turso_store() {
+            for (entity_type, ioa_source) in bundle.specs {
+                if let Err(e) = turso.upsert_spec(tenant, entity_type, ioa_source, bundle.csdl).await {
+                    tracing::warn!(error = %e, tenant, entity_type, "failed to persist OS app spec");
+                }
+            }
+            if let Some(ref policy_text) = combined_policy {
+                if let Err(e) = turso.upsert_tenant_policy(tenant, policy_text).await {
+                    tracing::warn!(error = %e, tenant, "failed to persist OS app Cedar policy");
+                }
+            }
+            if let Err(e) = turso.record_installed_app(tenant, app_name).await {
+                tracing::warn!(error = %e, tenant, app_name, "failed to record OS app installation");
+            }
         }
     }
 
@@ -223,11 +246,13 @@ mod tests {
     }
 
     #[test]
-    fn test_list_os_apps_returns_project_management() {
+    fn test_list_os_apps_returns_catalog() {
         let apps = list_os_apps();
-        assert_eq!(apps.len(), 1);
+        assert_eq!(apps.len(), 2);
         assert_eq!(apps[0].name, "project-management");
         assert_eq!(apps[0].entity_types.len(), 5);
+        assert_eq!(apps[1].name, "temper-fs");
+        assert_eq!(apps[1].entity_types.len(), 4);
     }
 
     #[test]
@@ -245,10 +270,10 @@ mod tests {
         assert!(get_os_app("nonexistent").is_none());
     }
 
-    #[test]
-    fn test_install_os_app_registers_entities() {
+    #[tokio::test]
+    async fn test_install_os_app_registers_entities() {
         let state = PlatformState::new(None);
-        let result = install_os_app(&state, "test-pm", "project-management");
+        let result = install_os_app(&state, "test-pm", "project-management").await;
         assert!(result.is_ok());
         let entities = result.unwrap();
         assert_eq!(entities.len(), 5);
@@ -268,10 +293,10 @@ mod tests {
         assert!(registry.get_table(&tenant, "Label").is_some());
     }
 
-    #[test]
-    fn test_install_os_app_nonexistent_returns_error() {
+    #[tokio::test]
+    async fn test_install_os_app_nonexistent_returns_error() {
         let state = PlatformState::new(None);
-        let result = install_os_app(&state, "test", "nonexistent");
+        let result = install_os_app(&state, "test", "nonexistent").await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not found in catalog"));
     }

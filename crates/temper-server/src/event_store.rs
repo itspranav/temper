@@ -56,6 +56,18 @@ impl ServerEventStore {
         }
     }
 
+    /// Return the platform Turso store for shared tables (decisions, trajectories, etc.).
+    ///
+    /// Works in both single-DB mode (returns the shared store) and
+    /// tenant-routed mode (returns the platform store from the router).
+    pub fn platform_turso_store(&self) -> Option<&TursoEventStore> {
+        match self {
+            Self::Turso(store) => Some(store),
+            Self::TenantRouted(router) => Some(router.platform_store()),
+            _ => None,
+        }
+    }
+
     /// Return the tenant store router when using database-per-tenant mode.
     pub fn tenant_router(&self) -> Option<&TenantStoreRouter> {
         match self {

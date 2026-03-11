@@ -57,11 +57,15 @@ export default function OsAppsPage() {
   }, [apps, loadedEntityTypes]);
 
   const handleInstall = async (appName: string) => {
+    const tenant = window.prompt("Install to which tenant (workspace)?");
+    if (!tenant) return;
     setInstalling(appName);
     setInstallResult(null);
     try {
-      await installOsApp(appName, "default");
+      await installOsApp(appName, tenant);
       setInstallResult({ app: appName, status: "installed" });
+      specsPoll.refresh();
+      appsPoll.refresh();
     } catch (err) {
       setInstallResult({
         app: appName,

@@ -243,9 +243,15 @@ impl TenantStoreRouter {
     pub async fn remove_tenant(&self, tenant_id: &str) -> Result<bool, PersistenceError> {
         let conn = self.platform.connection().map_err(storage_error)?;
 
-        // Delete associated users first.
+        // Delete associated users and installed apps first.
         conn.execute(
             "DELETE FROM tenant_users WHERE tenant_id = ?1",
+            libsql::params![tenant_id],
+        )
+        .await
+        .map_err(storage_error)?;
+        conn.execute(
+            "DELETE FROM tenant_installed_apps WHERE tenant_id = ?1",
             libsql::params![tenant_id],
         )
         .await

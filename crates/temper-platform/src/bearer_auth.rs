@@ -47,6 +47,12 @@ pub async fn bearer_auth_check(
 
     // Constant-time comparison to prevent timing attacks.
     if constant_time_eq(token.as_bytes(), expected.as_bytes()) {
+        // Valid API key → elevate to Admin so Cedar checks pass.
+        let mut req = req;
+        req.headers_mut().insert(
+            axum::http::HeaderName::from_static("x-temper-principal-kind"),
+            axum::http::HeaderValue::from_static("admin"),
+        );
         Ok(next.run(req).await)
     } else {
         Err(StatusCode::UNAUTHORIZED)

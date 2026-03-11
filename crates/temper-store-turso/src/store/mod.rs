@@ -158,6 +158,9 @@ impl TursoEventStore {
         conn.execute(schema::CREATE_TENANT_POLICIES_TABLE, ())
             .await
             .map_err(storage_error)?;
+        conn.execute(schema::CREATE_TENANT_INSTALLED_APPS_TABLE, ())
+            .await
+            .map_err(storage_error)?;
 
         // Phase 0: New tables for Turso-as-single-source-of-truth.
         conn.execute(schema::CREATE_FEATURE_REQUESTS_TABLE, ())
