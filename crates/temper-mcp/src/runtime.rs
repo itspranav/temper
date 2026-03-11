@@ -95,7 +95,6 @@ impl RuntimeContext {
                 _ => "mc",
             };
             self.agent_id = Some(format!("{prefix}-{}", &hash[..12]));
-
         }
 
         self.client_info = info;
