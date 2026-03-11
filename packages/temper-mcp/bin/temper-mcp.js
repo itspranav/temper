@@ -26,8 +26,12 @@ if (!pkg) {
 let binPath;
 try {
   const binName = os.platform() === "win32" ? "temper.exe" : "temper";
+  // Resolve relative to this script's location, not cwd, so it finds the
+  // npx-cached platform package instead of a local source directory.
+  const { createRequire } = require("module");
+  const localRequire = createRequire(__filename);
   binPath = path.join(
-    path.dirname(require.resolve(`${pkg}/package.json`)),
+    path.dirname(localRequire.resolve(`${pkg}/package.json`)),
     "bin",
     binName
   );
