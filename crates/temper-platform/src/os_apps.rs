@@ -145,25 +145,25 @@ pub async fn install_os_app(
 
     // ── Step 1: Persist to Turso FIRST (if available). ──────────────
     // If any write fails, bail before touching in-memory state.
-    if let Some(ref store) = state.server.event_store {
-        if let Some(turso) = store.platform_turso_store() {
-            for (entity_type, ioa_source) in bundle.specs {
-                turso
-                    .upsert_spec(tenant, entity_type, ioa_source, bundle.csdl)
-                    .await
-                    .map_err(|e| format!("Failed to persist spec {entity_type}: {e}"))?;
-            }
-            if let Some(ref policy_text) = combined_policy {
-                turso
-                    .upsert_tenant_policy(tenant, policy_text)
-                    .await
-                    .map_err(|e| format!("Failed to persist Cedar policy: {e}"))?;
-            }
+    if let Some(ref store) = state.server.event_store
+        && let Some(turso) = store.platform_turso_store()
+    {
+        for (entity_type, ioa_source) in bundle.specs {
             turso
-                .record_installed_app(tenant, app_name)
+                .upsert_spec(tenant, entity_type, ioa_source, bundle.csdl)
                 .await
-                .map_err(|e| format!("Failed to record app installation: {e}"))?;
+                .map_err(|e| format!("Failed to persist spec {entity_type}: {e}"))?;
         }
+        if let Some(ref policy_text) = combined_policy {
+            turso
+                .upsert_tenant_policy(tenant, policy_text)
+                .await
+                .map_err(|e| format!("Failed to persist Cedar policy: {e}"))?;
+        }
+        turso
+            .record_installed_app(tenant, app_name)
+            .await
+            .map_err(|e| format!("Failed to record app installation: {e}"))?;
     }
 
     // ── Step 2: Bootstrap into memory (verification + registry). ────
