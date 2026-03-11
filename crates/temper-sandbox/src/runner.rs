@@ -164,7 +164,7 @@ impl PersistentSandbox {
         Fut: Future<Output = Result<Value, String>>,
     {
         let repl = match self.repl.take() {
-            Some(repl) => repl,
+            Some(repl) => self.restore_repl_for_next_turn(repl)?,
             None => self.init_repl()?,
         };
 
@@ -180,6 +180,21 @@ impl PersistentSandbox {
         };
 
         self.drive_repl_progress(progress, dispatch).await
+    }
+
+    /// Serialize/deserialize the REPL between turns to refresh tracker start time.
+    ///
+    /// Monty's `LimitedTracker` resets `start_time` on deserialization while
+    /// preserving heap + namespace state, giving per-turn time budgets with
+    /// persistent REPL variables.
+    fn restore_repl_for_next_turn(
+        &self,
+        repl: MontyRepl<LimitedTracker>,
+    ) -> Result<MontyRepl<LimitedTracker>> {
+        let snapshot = repl
+            .dump()
+            .context("failed to snapshot persistent sandbox state")?;
+        MontyRepl::load(&snapshot).context("failed to restore persistent sandbox state")
     }
 
     /// Initialize the REPL with dataclass inputs and empty code.
