@@ -140,27 +140,37 @@ pub(crate) async fn handle_approve_decision(
         }
     };
 
+    // Validate + reload Cedar engine with the prospective policy.
     if let Err(resp) = super::validate_and_reload_policies(&state, &tenant, &new_tenant_text) {
         return resp;
     }
 
-    // Commit the validated policy.
+    // Persist to Turso FIRST — if fails, roll back Cedar engine and return 500.
+    if let Some(turso) = state.persistent_store() {
+        if let Err(e) = turso.upsert_tenant_policy(&tenant, &new_tenant_text).await {
+            // Roll back: reload engine from current HashMap (without the new policy).
+            let rollback = {
+                let p = state.tenant_policies.read().unwrap(); // ci-ok: infallible lock
+                let mut all = String::new();
+                for text in p.values() {
+                    all.push_str(text);
+                    all.push('\n');
+                }
+                all
+            };
+            let _ = state.authz.reload_policies(&rollback);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to persist Cedar policy: {e}"),
+            )
+                .into_response();
+        }
+    }
+
+    // Commit the validated policy to in-memory HashMap.
     {
         let mut policies = state.tenant_policies.write().unwrap(); // ci-ok: infallible lock
         policies.insert(tenant.clone(), new_tenant_text);
-    }
-
-    // Persist updated policies to Turso synchronously.
-    if let Some(turso) = state.persistent_store() {
-        let policies_snapshot = {
-            let p = state.tenant_policies.read().unwrap(); // ci-ok: infallible lock
-            p.clone()
-        };
-        for (t, text) in &policies_snapshot {
-            if let Err(e) = turso.upsert_tenant_policy(t, text).await {
-                tracing::warn!(tenant = %t, error = %e, "failed to persist Cedar policy");
-            }
-        }
     }
 
     // Mark decision approved only after policy reload succeeds.

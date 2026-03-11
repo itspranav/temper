@@ -116,6 +116,10 @@ pub fn get_os_app(name: &str) -> Option<OsAppBundle> {
 /// Runs the verification cascade and registers specs in the SpecRegistry,
 /// loads Cedar policies, and **persists everything to the platform DB** so
 /// specs survive redeployments.
+///
+/// **Write ordering:** Turso first, then memory. If Turso persistence fails
+/// the operation returns an error *before* touching in-memory state, so the
+/// registry and Cedar engine stay consistent with the durable store.
 pub async fn install_os_app(
     state: &PlatformState,
     tenant: &str,
@@ -124,7 +128,45 @@ pub async fn install_os_app(
     let bundle =
         get_os_app(app_name).ok_or_else(|| format!("OS app '{app_name}' not found in catalog"))?;
 
-    // Reuse the same bootstrap path as system/agent specs.
+    // Build the full Cedar policy text for this tenant (existing + new).
+    let combined_policy = if !bundle.cedar_policies.is_empty() {
+        let combined: String = bundle.cedar_policies.join("\n");
+        let policies = state.server.tenant_policies.read().unwrap(); // ci-ok: infallible lock
+        let existing = policies.get(tenant).cloned().unwrap_or_default();
+        let full_text = if existing.is_empty() {
+            combined
+        } else {
+            format!("{existing}\n{combined}")
+        };
+        Some(full_text)
+    } else {
+        None
+    };
+
+    // ── Step 1: Persist to Turso FIRST (if available). ──────────────
+    // If any write fails, bail before touching in-memory state.
+    if let Some(ref store) = state.server.event_store {
+        if let Some(turso) = store.platform_turso_store() {
+            for (entity_type, ioa_source) in bundle.specs {
+                turso
+                    .upsert_spec(tenant, entity_type, ioa_source, bundle.csdl)
+                    .await
+                    .map_err(|e| format!("Failed to persist spec {entity_type}: {e}"))?;
+            }
+            if let Some(ref policy_text) = combined_policy {
+                turso
+                    .upsert_tenant_policy(tenant, policy_text)
+                    .await
+                    .map_err(|e| format!("Failed to persist Cedar policy: {e}"))?;
+            }
+            turso
+                .record_installed_app(tenant, app_name)
+                .await
+                .map_err(|e| format!("Failed to record app installation: {e}"))?;
+        }
+    }
+
+    // ── Step 2: Bootstrap into memory (verification + registry). ────
     bootstrap::bootstrap_tenant_specs(
         state,
         tenant,
@@ -133,13 +175,10 @@ pub async fn install_os_app(
         &format!("OS-App({app_name})"),
     );
 
-    // Load Cedar policies for the tenant.
-    let combined_policy = if !bundle.cedar_policies.is_empty() {
-        let combined: String = bundle.cedar_policies.join("\n");
+    // ── Step 3: Load Cedar policies into memory. ────────────────────
+    if let Some(ref policy_text) = combined_policy {
         let mut policies = state.server.tenant_policies.write().unwrap(); // ci-ok: infallible lock
-        let existing = policies.entry(tenant.to_string()).or_default();
-        existing.push_str(&combined);
-        existing.push('\n');
+        policies.insert(tenant.to_string(), policy_text.clone());
         // Rebuild the authorization engine with all policies.
         let mut all_policies = String::new();
         for text in policies.values() {
@@ -148,28 +187,6 @@ pub async fn install_os_app(
         }
         if let Err(e) = state.server.authz.reload_policies(&all_policies) {
             tracing::warn!("Failed to reload Cedar policies after OS app install: {e}");
-        }
-        Some(policies.get(tenant).cloned().unwrap_or_default())
-    } else {
-        None
-    };
-
-    // Persist specs + policies + install record to the platform DB.
-    if let Some(ref store) = state.server.event_store {
-        if let Some(turso) = store.platform_turso_store() {
-            for (entity_type, ioa_source) in bundle.specs {
-                if let Err(e) = turso.upsert_spec(tenant, entity_type, ioa_source, bundle.csdl).await {
-                    tracing::warn!(error = %e, tenant, entity_type, "failed to persist OS app spec");
-                }
-            }
-            if let Some(ref policy_text) = combined_policy {
-                if let Err(e) = turso.upsert_tenant_policy(tenant, policy_text).await {
-                    tracing::warn!(error = %e, tenant, "failed to persist OS app Cedar policy");
-                }
-            }
-            if let Err(e) = turso.record_installed_app(tenant, app_name).await {
-                tracing::warn!(error = %e, tenant, app_name, "failed to record OS app installation");
-            }
         }
     }
 
@@ -299,5 +316,102 @@ mod tests {
         let result = install_os_app(&state, "test", "nonexistent").await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not found in catalog"));
+    }
+
+    /// Proves the full install → persist → reboot → restore cycle.
+    ///
+    /// 1. Install OS app with a real Turso-backed SQLite DB.
+    /// 2. Verify specs land in both registry and Turso.
+    /// 3. Build a fresh PlatformState (simulating restart) with the same DB.
+    /// 4. Restore registry from Turso.
+    /// 5. Verify specs survived the "restart".
+    #[tokio::test]
+    async fn test_os_app_install_survives_restart() {
+        use std::sync::Arc;
+        use temper_server::event_store::ServerEventStore;
+        use temper_server::registry_bootstrap::restore_registry_from_turso;
+        use temper_store_turso::TursoEventStore;
+
+        // Use a unique temp file DB for this test.
+        let db_path = format!("/tmp/temper-test-{}.db", uuid::Uuid::new_v4());
+        let db_url = format!("file:{db_path}");
+
+        // ── Phase A: Install into a fresh state with Turso. ─────────
+        let turso = TursoEventStore::new(&db_url, None).await.unwrap();
+        let mut state = PlatformState::new(None);
+        state.server.event_store = Some(Arc::new(ServerEventStore::Turso(turso)));
+
+        let result = install_os_app(&state, "test-ws", "project-management").await;
+        assert!(result.is_ok(), "install failed: {:?}", result.err());
+        let entities = result.unwrap();
+        assert_eq!(entities.len(), 5);
+
+        // Verify specs are in the in-memory registry.
+        {
+            let registry = state.registry.read().unwrap();
+            let tenant = TenantId::new("test-ws");
+            assert!(registry.get_table(&tenant, "Issue").is_some());
+            assert!(registry.get_table(&tenant, "Project").is_some());
+        }
+
+        // Verify specs are persisted to Turso.
+        let turso_ref = state
+            .server
+            .event_store
+            .as_ref()
+            .unwrap()
+            .platform_turso_store()
+            .unwrap();
+        let rows = turso_ref.load_specs().await.unwrap();
+        assert!(
+            rows.iter()
+                .any(|r| r.tenant == "test-ws" && r.entity_type == "Issue"),
+            "Issue spec not found in Turso"
+        );
+
+        // Verify installed_apps record is in Turso.
+        let installed = turso_ref.list_all_installed_apps().await.unwrap();
+        assert!(
+            installed.contains(&("test-ws".to_string(), "project-management".to_string())),
+            "installed app record not found"
+        );
+
+        // ── Phase B: Simulate restart — fresh state, same DB. ───────
+        let turso2 = TursoEventStore::new(&db_url, None).await.unwrap();
+        let state2 = PlatformState::new(None);
+        // Verify fresh registry is empty for this tenant.
+        {
+            let registry = state2.registry.read().unwrap();
+            let tenant = TenantId::new("test-ws");
+            assert!(
+                registry.get_table(&tenant, "Issue").is_none(),
+                "fresh registry should be empty"
+            );
+        }
+
+        // Restore from Turso (this is what build_registry does on boot).
+        {
+            let mut registry = state2.registry.write().unwrap();
+            let restored = restore_registry_from_turso(&mut registry, &turso2)
+                .await
+                .unwrap();
+            assert!(restored > 0, "expected restored specs, got 0");
+        }
+
+        // Verify specs survived the restart.
+        {
+            let registry = state2.registry.read().unwrap();
+            let tenant = TenantId::new("test-ws");
+            assert!(registry.get_table(&tenant, "Issue").is_some());
+            assert!(registry.get_table(&tenant, "Project").is_some());
+            assert!(registry.get_table(&tenant, "Cycle").is_some());
+            assert!(registry.get_table(&tenant, "Comment").is_some());
+            assert!(registry.get_table(&tenant, "Label").is_some());
+        }
+
+        // Clean up temp DB.
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_file(format!("{db_path}-wal"));
+        let _ = std::fs::remove_file(format!("{db_path}-shm"));
     }
 }
