@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "description": "Temper MCP binary for Windows x64",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nerdsane/temper"
+  },
   "os": ["win32"],
   "cpu": ["x64"],
   "files": ["bin/**/*"]
