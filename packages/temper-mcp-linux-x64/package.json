@@ -1,12 +1,8 @@
 {
   "name": "temper-mcp-linux-x64",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Temper MCP binary for Linux x64",
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/nerdsane/temper"
-  },
   "os": ["linux"],
   "cpu": ["x64"],
   "files": ["bin/**/*"]
