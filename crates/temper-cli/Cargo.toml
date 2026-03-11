@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 description = "Command-line interface for Temper specification management and code generation"
+repository = "https://github.com/nerdsane/temper"
 
 [[bin]]
 name = "temper"
@@ -47,6 +48,13 @@ termimad = "0.34.1"
 console = "0.16.2"
 indicatif = "0.18.4"
 dialoguer = "0.12.0"
+
+[package.metadata.dist]
+# npm package name for the generated npm installer
+npm-package = "temper-mcp"
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-{ target }{ archive-suffix }"
 
 [dev-dependencies]
 tempfile = "3"
