@@ -33,4 +33,3 @@ pub async fn run(port: Option<u16>, url: Option<String>, agent_id: Option<String
     })
     .await
 }
-
