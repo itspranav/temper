@@ -44,10 +44,13 @@ impl ServerState {
                 .map(|_| ())
                 .map_err(|e| format!("failed to upsert spec {tenant}/{entity_type} in postgres: {e}"))
             }
-            MetadataBackend::Turso(turso) => turso
-                .upsert_spec(tenant, entity_type, ioa_source, csdl_xml)
-                .await
-                .map_err(|e| format!("failed to upsert spec {tenant}/{entity_type} in turso: {e}")),
+            MetadataBackend::Turso(turso) => {
+                let hash = temper_store_turso::spec_content_hash(ioa_source);
+                turso
+                    .upsert_spec(tenant, entity_type, ioa_source, csdl_xml, &hash)
+                    .await
+                    .map_err(|e| format!("failed to upsert spec {tenant}/{entity_type} in turso: {e}"))
+            }
             MetadataBackend::Redis => Err(Self::redis_ephemeral_error("Spec source persistence")),
         }
     }

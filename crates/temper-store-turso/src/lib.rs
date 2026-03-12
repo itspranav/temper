@@ -9,6 +9,17 @@ pub mod router;
 pub mod schema;
 pub mod store;
 
+/// Compute a SHA-256 hex digest of IOA spec content.
+///
+/// Used to detect whether a spec has changed since its last verification,
+/// avoiding redundant (and expensive) verification cascade runs.
+pub fn spec_content_hash(ioa_source: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(ioa_source.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct TursoSpecVerificationUpdate<'a> {
     pub status: &'a str,

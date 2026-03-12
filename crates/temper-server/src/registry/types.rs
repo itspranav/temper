@@ -27,6 +27,16 @@ pub enum VerificationStatus {
     Restored(EntityVerificationResult),
 }
 
+impl VerificationStatus {
+    /// Returns true if verification completed and all levels passed.
+    pub fn is_passed(&self) -> bool {
+        match self {
+            Self::Completed(r) | Self::Restored(r) => r.all_passed,
+            _ => false,
+        }
+    }
+}
+
 /// Summary of verification results for an entity type.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EntityVerificationResult {

@@ -15,6 +15,8 @@ use tower::ServiceExt;
 
 mod common;
 
+use std::collections::BTreeMap;
+
 use common::http::{body_json, body_string};
 use temper_platform::bootstrap::bootstrap_system_tenant;
 use temper_platform::router::build_platform_router;
@@ -119,7 +121,7 @@ fn build_user_registry(tenant: &str, ioa_specs: &[(&str, &str)]) -> SpecRegistry
 async fn e2e_compile_first_order_lifecycle() {
     let registry = build_user_registry("alpha", &[("Order", ORDER_IOA)]);
     let state = PlatformState::with_registry(registry, None);
-    bootstrap_system_tenant(&state);
+    bootstrap_system_tenant(&state, &BTreeMap::new());
     let app = build_platform_router(state);
 
     // POST /tdata/Orders → 201, creates entity in Draft
@@ -267,7 +269,7 @@ async fn e2e_compile_first_two_tenants() {
     }
 
     let state = PlatformState::with_registry(registry, None);
-    bootstrap_system_tenant(&state);
+    bootstrap_system_tenant(&state, &BTreeMap::new());
     let app = build_platform_router(state);
 
     // POST /tdata/Orders with X-Tenant-Id: alpha → 201
@@ -408,7 +410,7 @@ async fn e2e_compile_first_two_tenants() {
 async fn e2e_compile_first_system_and_user_coexist() {
     let registry = build_user_registry("alpha", &[("Order", ORDER_IOA)]);
     let state = PlatformState::with_registry(registry, None);
-    bootstrap_system_tenant(&state);
+    bootstrap_system_tenant(&state, &BTreeMap::new());
     let app = build_platform_router(state);
 
     // GET /tdata/$metadata with X-Tenant-Id: alpha → sees user entities (Order)

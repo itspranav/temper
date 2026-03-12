@@ -362,12 +362,39 @@ pub(super) async fn recover_wasm_modules(state: &PlatformState) {
     }
 }
 
+/// Load the verification cache from Turso for a tenant (hash + verified status).
+///
+/// Returns an empty map if no Turso store is available.
+async fn load_verified_cache(
+    state: &PlatformState,
+    tenant: &str,
+) -> std::collections::BTreeMap<String, (String, bool)> {
+    if let Some(ref store) = state.server.event_store
+        && let Some(turso) = store.platform_turso_store()
+    {
+        match turso.load_verification_cache(tenant).await {
+            Ok(cache) => cache,
+            Err(e) => {
+                eprintln!("  Warning: failed to load verification cache for {tenant}: {e}");
+                std::collections::BTreeMap::new()
+            }
+        }
+    } else {
+        std::collections::BTreeMap::new()
+    }
+}
+
 /// Phase 8: Bootstrap system tenant and agent specs.
 pub(super) async fn bootstrap_tenants(state: &PlatformState, apps: &[(String, String)]) {
-    temper_platform::bootstrap_system_tenant(state);
-    temper_platform::bootstrap_agent_specs(state, "default");
+    let sys_cache = load_verified_cache(state, "temper-system").await;
+    temper_platform::bootstrap_system_tenant(state, &sys_cache);
+
+    let default_cache = load_verified_cache(state, "default").await;
+    temper_platform::bootstrap_agent_specs(state, "default", &default_cache);
+
     for (tenant, _dir) in apps {
-        temper_platform::bootstrap_agent_specs(state, tenant);
+        let cache = load_verified_cache(state, tenant).await;
+        temper_platform::bootstrap_agent_specs(state, tenant, &cache);
     }
     // In TenantRouted mode, bootstrap agent specs for all registered tenants.
     // OS app specs are already restored from the `specs` table by
@@ -377,7 +404,8 @@ pub(super) async fn bootstrap_tenants(state: &PlatformState, apps: &[(String, St
         && let Some(tenant_router) = store.tenant_router()
     {
         for tenant in tenant_router.connected_tenants().await {
-            temper_platform::bootstrap_agent_specs(state, &tenant);
+            let cache = load_verified_cache(state, &tenant).await;
+            temper_platform::bootstrap_agent_specs(state, &tenant, &cache);
         }
     }
 }

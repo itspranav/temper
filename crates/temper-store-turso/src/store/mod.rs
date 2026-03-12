@@ -182,6 +182,9 @@ impl TursoEventStore {
             .await
             .map_err(storage_error)?;
 
+        // Specs table extensions — add content_hash column for verification caching.
+        let _ = conn.execute(schema::ALTER_SPECS_ADD_CONTENT_HASH, ()).await;
+
         // Trajectory table extensions — ALTER TABLE to add missing columns.
         // SQLite returns an error for duplicate columns, so we ignore failures.
         for stmt in &[
@@ -242,6 +245,8 @@ pub struct TursoSpecRow {
     pub levels_total: Option<i32>,
     /// Serialized verification result JSON.
     pub verification_result: Option<String>,
+    /// SHA-256 hex digest of the IOA source content.
+    pub content_hash: Option<String>,
     /// ISO-8601 updated_at timestamp.
     pub updated_at: String,
 }

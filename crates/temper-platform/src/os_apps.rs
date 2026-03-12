@@ -149,8 +149,9 @@ pub async fn install_os_app(
         && let Some(turso) = store.platform_turso_store()
     {
         for (entity_type, ioa_source) in bundle.specs {
+            let hash = temper_store_turso::spec_content_hash(ioa_source);
             turso
-                .upsert_spec(tenant, entity_type, ioa_source, bundle.csdl)
+                .upsert_spec(tenant, entity_type, ioa_source, bundle.csdl, &hash)
                 .await
                 .map_err(|e| format!("Failed to persist spec {entity_type}: {e}"))?;
         }
@@ -167,12 +168,23 @@ pub async fn install_os_app(
     }
 
     // ── Step 2: Bootstrap into memory (verification + registry). ────
+    let verified_cache = if let Some(ref store) = state.server.event_store
+        && let Some(turso) = store.platform_turso_store()
+    {
+        turso
+            .load_verification_cache(tenant)
+            .await
+            .unwrap_or_default()
+    } else {
+        std::collections::BTreeMap::new()
+    };
     bootstrap::bootstrap_tenant_specs(
         state,
         tenant,
         bundle.csdl,
         bundle.specs,
         &format!("OS-App({app_name})"),
+        &verified_cache,
     );
 
     // ── Step 3: Load Cedar policies into memory. ────────────────────

@@ -102,7 +102,8 @@ async fn create_tenant(
     match router.register_tenant(&req.tenant_id).await {
         Ok(_store) => {
             // Bootstrap agent specs for the new tenant.
-            crate::bootstrap_agent_specs(&state, &req.tenant_id);
+            // New tenant — no prior verification cache.
+            crate::bootstrap_agent_specs(&state, &req.tenant_id, &std::collections::BTreeMap::new());
             (
                 StatusCode::CREATED,
                 Json(serde_json::json!(CreateTenantResponse {

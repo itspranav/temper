@@ -9,6 +9,10 @@ use crate::TursoSpecVerificationUpdate;
 
 impl TursoEventStore {
     /// Upsert a spec source (IOA + CSDL) for a tenant/entity_type.
+    ///
+    /// Uses content-hash gating: if the spec already exists with the same
+    /// `content_hash` and is verified, verification status is preserved.
+    /// Only resets to "pending" when the content actually changed.
     #[instrument(skip_all, fields(tenant, entity_type, otel.name = "turso.upsert_spec"))]
     pub async fn upsert_spec(
         &self,
@@ -16,22 +20,26 @@ impl TursoEventStore {
         entity_type: &str,
         ioa_source: &str,
         csdl_xml: &str,
+        content_hash: &str,
     ) -> Result<(), PersistenceError> {
         let conn = self.configured_connection().await?;
+        // When content_hash matches the existing row, keep verification intact.
+        // Otherwise reset to pending so the cascade re-runs.
         conn.execute(
-            "INSERT INTO specs (tenant, entity_type, ioa_source, csdl_xml, version, verified, verification_status, updated_at)
-             VALUES (?1, ?2, ?3, ?4, 1, 0, 'pending', datetime('now'))
+            "INSERT INTO specs (tenant, entity_type, ioa_source, csdl_xml, content_hash, version, verified, verification_status, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 1, 0, 'pending', datetime('now'))
              ON CONFLICT (tenant, entity_type) DO UPDATE SET
                  ioa_source = excluded.ioa_source,
                  csdl_xml = excluded.csdl_xml,
+                 content_hash = excluded.content_hash,
                  version = specs.version + 1,
-                 verified = 0,
-                 verification_status = 'pending',
-                 levels_passed = NULL,
-                 levels_total = NULL,
-                 verification_result = NULL,
+                 verified = CASE WHEN specs.content_hash = excluded.content_hash THEN specs.verified ELSE 0 END,
+                 verification_status = CASE WHEN specs.content_hash = excluded.content_hash THEN specs.verification_status ELSE 'pending' END,
+                 levels_passed = CASE WHEN specs.content_hash = excluded.content_hash THEN specs.levels_passed ELSE NULL END,
+                 levels_total = CASE WHEN specs.content_hash = excluded.content_hash THEN specs.levels_total ELSE NULL END,
+                 verification_result = CASE WHEN specs.content_hash = excluded.content_hash THEN specs.verification_result ELSE NULL END,
                  updated_at = datetime('now')",
-            params![tenant, entity_type, ioa_source, csdl_xml],
+            params![tenant, entity_type, ioa_source, csdl_xml, content_hash],
         )
         .await
         .map_err(storage_error)?;
@@ -69,6 +77,35 @@ impl TursoEventStore {
         .await
         .map_err(storage_error)?;
         Ok(())
+    }
+
+    /// Load verification cache: (entity_type → (content_hash, verified)) for a tenant.
+    ///
+    /// Used by bootstrap to skip the verification cascade when the spec
+    /// content hasn't changed since the last successful verification.
+    #[instrument(skip_all, fields(tenant, otel.name = "turso.load_verification_cache"))]
+    pub async fn load_verification_cache(
+        &self,
+        tenant: &str,
+    ) -> Result<std::collections::BTreeMap<String, (String, bool)>, PersistenceError> {
+        let conn = self.configured_connection().await?;
+        let mut rows = conn
+            .query(
+                "SELECT entity_type, content_hash, verified FROM specs WHERE tenant = ?1",
+                params![tenant],
+            )
+            .await
+            .map_err(storage_error)?;
+        let mut cache = std::collections::BTreeMap::new();
+        while let Some(row) = rows.next().await.map_err(storage_error)? {
+            let entity_type: String = row.get(0).map_err(storage_error)?;
+            let hash: Option<String> = row.get(1).map_err(storage_error)?;
+            let verified: i64 = row.get(2).map_err(storage_error)?;
+            if let Some(h) = hash {
+                cache.insert(entity_type, (h, verified != 0));
+            }
+        }
+        Ok(cache)
     }
 
     // ── Installed Apps ─────────────────────────────────────────────
@@ -151,7 +188,7 @@ impl TursoEventStore {
         let mut rows = conn
             .query(
                 "SELECT tenant, entity_type, ioa_source, csdl_xml, verification_status, verified, \
-                        levels_passed, levels_total, verification_result, updated_at \
+                        levels_passed, levels_total, verification_result, content_hash, updated_at \
                  FROM specs \
                  ORDER BY tenant, entity_type",
                 (),
@@ -177,7 +214,8 @@ impl TursoEventStore {
                     .map_err(storage_error)?
                     .map(|v| v as i32),
                 verification_result: row.get::<Option<String>>(8).map_err(storage_error)?,
-                updated_at: row.get::<String>(9).map_err(storage_error)?,
+                content_hash: row.get::<Option<String>>(9).map_err(storage_error)?,
+                updated_at: row.get::<String>(10).map_err(storage_error)?,
             });
         }
         Ok(out)

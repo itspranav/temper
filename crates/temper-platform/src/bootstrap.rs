@@ -5,10 +5,13 @@
 //! them as the `temper-system` tenant. This is dogfooding: the platform
 //! manages itself using its own framework.
 
+use std::collections::BTreeMap;
+
 use temper_runtime::tenant::TenantId;
 use temper_server::registry::{EntityLevelSummary, EntityVerificationResult, VerificationStatus};
 use temper_spec::automaton;
 use temper_spec::csdl::parse_csdl;
+use temper_store_turso::spec_content_hash;
 use temper_verify::cascade::VerificationCascade;
 
 use crate::state::PlatformState;
@@ -70,12 +73,10 @@ const AGENT_SPECS: &[(&str, &str)] = &[
 
 /// Verify, parse, and register a set of IOA specs under a tenant.
 ///
-/// Shared routine that eliminates duplication between system and agent bootstrap:
-/// 1. Validates all specs parse correctly
-/// 2. Runs verification cascade on each
-/// 3. Parses the CSDL schema
-/// 4. Registers the tenant in the SpecRegistry
-/// 5. Marks all entities as pre-verified
+/// Uses content-hash gating: if a spec's SHA-256 hash matches a previously
+/// verified entry in `verified_cache`, the verification cascade is skipped.
+/// This prevents the expensive Z3 + Stateright + proptest cascade from
+/// running on every boot (which caused OOM on Railway's 512 MB containers).
 ///
 /// Panics if any spec fails to parse or verify (fatal startup error).
 pub(crate) fn bootstrap_tenant_specs(
@@ -84,6 +85,7 @@ pub(crate) fn bootstrap_tenant_specs(
     csdl_source: &str,
     specs: &[(&str, &str)],
     label: &str,
+    verified_cache: &BTreeMap<String, (String, bool)>,
 ) {
     tracing::info!(
         "Bootstrapping {label} specs for tenant '{tenant}' with {} entities",
@@ -96,31 +98,33 @@ pub(crate) fn bootstrap_tenant_specs(
             .unwrap_or_else(|e| panic!("{label} spec {entity_type} failed to parse: {e}"));
     }
 
-    // Built-in specs are verified in CI tests (test_system_specs_verify,
-    // test_pm_specs_verify, etc.).  Running Z3 + Stateright + proptest at
-    // every boot is redundant and consumes hundreds of MB — enough to OOM
-    // on Railway's 512 MB containers.  Skip by default; opt-in with
-    // TEMPER_BOOTSTRAP_VERIFY=true for local debugging.
-    let run_cascade = std::env::var("TEMPER_BOOTSTRAP_VERIFY") // determinism-ok: startup config
-        .map(|v| v == "true" || v == "1")
-        .unwrap_or(false);
+    // Hash-gated verification: only run the cascade for specs whose
+    // content has changed since the last successful verification.
+    for (entity_type, ioa_source) in specs {
+        let hash = spec_content_hash(ioa_source);
+        let already_verified = verified_cache
+            .get(*entity_type)
+            .is_some_and(|(cached_hash, verified)| *verified && cached_hash == &hash);
 
-    if run_cascade {
-        for (entity_type, ioa_source) in specs {
+        if already_verified {
+            tracing::info!(
+                "Spec {entity_type} unchanged (hash={}…), skipping verification",
+                &hash[..8]
+            );
+        } else {
+            tracing::info!(
+                "Spec {entity_type} needs verification (hash={}…), running cascade",
+                &hash[..8]
+            );
             let cascade = VerificationCascade::from_ioa(ioa_source)
                 .with_sim_seeds(3)
-                .with_prop_test_cases(50);
+                .with_prop_test_cases(20);
             let result = cascade.run();
             assert!(
                 result.all_passed,
                 "{label} spec {entity_type} failed verification cascade"
             );
         }
-    } else {
-        tracing::info!(
-            "Skipping verification cascade for {label} (built-in specs verified in CI). \
-             Set TEMPER_BOOTSTRAP_VERIFY=true to re-enable."
-        );
     }
 
     // Parse CSDL schema.
@@ -161,16 +165,37 @@ pub(crate) fn bootstrap_tenant_specs(
 ///
 /// Validates, verifies, and registers all temper-system entity specs.
 /// Panics if system specs fail to parse or verify (fatal startup error).
-pub fn bootstrap_system_tenant(state: &PlatformState) {
-    bootstrap_tenant_specs(state, SYSTEM_TENANT, SYSTEM_CSDL, SYSTEM_SPECS, "System");
+pub fn bootstrap_system_tenant(
+    state: &PlatformState,
+    verified_cache: &BTreeMap<String, (String, bool)>,
+) {
+    bootstrap_tenant_specs(
+        state,
+        SYSTEM_TENANT,
+        SYSTEM_CSDL,
+        SYSTEM_SPECS,
+        "System",
+        verified_cache,
+    );
 }
 
 /// Bootstrap agent entity specs (Agent, Plan, Task, ToolCall) for a tenant.
 ///
 /// Parses and verifies the agent IOA specs, then registers them under the
 /// given tenant. Panics if agent specs fail to parse or verify.
-pub fn bootstrap_agent_specs(state: &PlatformState, tenant: &str) {
-    bootstrap_tenant_specs(state, tenant, AGENT_CSDL, AGENT_SPECS, "Agent");
+pub fn bootstrap_agent_specs(
+    state: &PlatformState,
+    tenant: &str,
+    verified_cache: &BTreeMap<String, (String, bool)>,
+) {
+    bootstrap_tenant_specs(
+        state,
+        tenant,
+        AGENT_CSDL,
+        AGENT_SPECS,
+        "Agent",
+        verified_cache,
+    );
 }
 
 #[cfg(test)]
@@ -204,7 +229,7 @@ mod tests {
     fn test_bootstrap_registers_system_tenant() {
         let state = PlatformState::new(None);
 
-        bootstrap_system_tenant(&state);
+        bootstrap_system_tenant(&state, &BTreeMap::new());
 
         let registry = state.registry.read().unwrap();
         let tenant = TenantId::new(SYSTEM_TENANT);
@@ -316,7 +341,7 @@ mod tests {
     fn test_bootstrap_registers_new_entities() {
         let state = PlatformState::new(None);
 
-        bootstrap_system_tenant(&state);
+        bootstrap_system_tenant(&state, &BTreeMap::new());
 
         let registry = state.registry.read().unwrap();
         let tenant = TenantId::new(SYSTEM_TENANT);
@@ -385,7 +410,7 @@ mod tests {
     #[test]
     fn test_bootstrap_agent_specs_registers_tenant() {
         let state = PlatformState::new(None);
-        bootstrap_agent_specs(&state, "test-agent");
+        bootstrap_agent_specs(&state, "test-agent", &BTreeMap::new());
         let registry = state.registry.read().unwrap();
         let tenant = TenantId::new("test-agent");
         assert!(registry.get_tenant(&tenant).is_some());

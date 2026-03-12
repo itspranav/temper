@@ -111,8 +111,9 @@ pub(super) async fn upsert_loaded_specs_to_turso(
     loaded: &LoadedTenantSpecs,
 ) -> Result<()> {
     for (entity_type, ioa_source) in &loaded.ioa_sources {
+        let hash = temper_store_turso::spec_content_hash(ioa_source);
         turso
-            .upsert_spec(tenant, entity_type, ioa_source, &loaded.csdl_xml)
+            .upsert_spec(tenant, entity_type, ioa_source, &loaded.csdl_xml, &hash)
             .await
             .with_context(|| format!("Failed to persist spec {tenant}/{entity_type} in Turso"))?;
     }

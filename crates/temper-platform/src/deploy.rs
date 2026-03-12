@@ -15,6 +15,7 @@ use opentelemetry::trace::{Span, Status, Tracer};
 use temper_runtime::tenant::TenantId;
 use temper_spec::automaton;
 use temper_spec::csdl::parse_csdl;
+use temper_store_turso::spec_content_hash;
 use temper_verify::cascade::{CascadeResult, VerificationCascade};
 
 use crate::protocol::{PlatformEvent, VerifyStepStatus};
@@ -204,29 +205,68 @@ impl DeployPipeline {
                 }
             }
 
-            let prop_cases: u32 = std::env::var("TEMPER_VERIFY_PROP_CASES") // determinism-ok: startup config
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(20);
-            let cascade = VerificationCascade::from_ioa(&entity.ioa_source)
-                .with_sim_seeds(3)
-                .with_prop_test_cases(prop_cases);
-            let result = cascade.run();
+            // Hash-gated verification: skip cascade if spec content is unchanged
+            // and already verified in the registry.
+            let content_hash = spec_content_hash(&entity.ioa_source);
+            let tenant_id = TenantId::new(&input.tenant_name);
+            let already_verified = {
+                let registry = state.registry.read().unwrap(); // ci-ok: infallible lock
+                registry
+                    .get_tenant(&tenant_id)
+                    .and_then(|tc| tc.entities.get(&entity.entity_type))
+                    .is_some_and(|spec| {
+                        spec_content_hash(&spec.ioa_source) == content_hash
+                    })
+                    && registry
+                        .get_tenant(&tenant_id)
+                        .and_then(|tc| tc.verification.get(&entity.entity_type))
+                        .is_some_and(|vs| vs.is_passed())
+            };
 
-            // Broadcast per-level results
-            for level_result in &result.levels {
-                let status = if level_result.passed {
-                    VerifyStepStatus::Passed
-                } else {
-                    VerifyStepStatus::Failed
-                };
+            let result = if already_verified {
+                tracing::info!(
+                    "Spec {} unchanged (hash={}…), skipping cascade",
+                    entity.entity_type,
+                    &content_hash[..8]
+                );
                 state.broadcast(PlatformEvent::VerifyStatus {
                     tenant: input.tenant_name.clone(),
-                    level: format!("{}", level_result.level),
-                    status,
-                    summary: level_result.summary.clone(),
+                    level: "Hash Check".into(),
+                    status: VerifyStepStatus::Passed,
+                    summary: format!(
+                        "Spec {} unchanged, verification cached",
+                        entity.entity_type
+                    ),
                 });
-            }
+                // Synthesize a passing result.
+                CascadeResult {
+                    all_passed: true,
+                    levels: vec![],
+                    warnings: vec![],
+                    reachable_paths: None,
+                }
+            } else {
+                let cascade = VerificationCascade::from_ioa(&entity.ioa_source)
+                    .with_sim_seeds(3)
+                    .with_prop_test_cases(20);
+                let r = cascade.run();
+
+                // Broadcast per-level results
+                for level_result in &r.levels {
+                    let status = if level_result.passed {
+                        VerifyStepStatus::Passed
+                    } else {
+                        VerifyStepStatus::Failed
+                    };
+                    state.broadcast(PlatformEvent::VerifyStatus {
+                        tenant: input.tenant_name.clone(),
+                        level: format!("{}", level_result.level),
+                        status,
+                        summary: level_result.summary.clone(),
+                    });
+                }
+                r
+            };
 
             // Record per-level results on the entity span
             for (i, level_result) in result.levels.iter().enumerate() {
