@@ -509,8 +509,12 @@ impl ServerState {
         let cutoff = sim_now() - chrono::Duration::seconds(timeout_secs);
 
         let candidates: Vec<(String, ActorRef<EntityMsg>)> = {
-            let registry = self.actor_registry.read().unwrap(); // ci-ok: infallible lock
-            let last_accessed = self.last_accessed.read().unwrap(); // ci-ok: infallible lock
+            let Ok(registry) = self.actor_registry.read() else {
+                return;
+            };
+            let Ok(last_accessed) = self.last_accessed.read() else {
+                return;
+            };
             registry
                 .iter()
                 .filter_map(|(key, actor_ref)| {
@@ -565,7 +569,9 @@ impl ServerState {
             let _ = actor_ref.stop();
 
             let removed = {
-                let mut registry = self.actor_registry.write().unwrap(); // ci-ok: infallible lock
+                let Ok(mut registry) = self.actor_registry.write() else {
+                    continue;
+                };
                 if registry
                     .get(&actor_key)
                     .is_some_and(|current| current.id().uid == actor_ref.id().uid)
@@ -593,7 +599,9 @@ impl ServerState {
     /// Update Agent.Hint annotations based on trajectory analysis.
     pub fn enrich_metadata(&self, action_name: &str, hint: &str) {
         const AGENT_HINTS_BUDGET: usize = 1_000;
-        let mut hints = self.agent_hints.write().unwrap(); // ci-ok: infallible lock
+        let Ok(mut hints) = self.agent_hints.write() else {
+            return;
+        };
         hints.insert(action_name.to_string(), hint.to_string());
         while hints.len() > AGENT_HINTS_BUDGET {
             let oldest_key = hints.iter().next().map(|(k, _)| k.clone());

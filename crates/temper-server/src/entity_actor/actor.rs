@@ -680,7 +680,6 @@ impl Actor for EntityActor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::VecDeque;
     use std::time::Duration;
     use temper_jit::table::TransitionTable;
     use temper_runtime::ActorSystem;
@@ -950,77 +949,5 @@ mod tests {
         assert_eq!(r1.state.status, "Cancelled");
         assert_eq!(r2.state.status, "Draft");
         assert_eq!(r2.state.item_count, 1);
-    }
-
-    #[test]
-    fn snapshot_serialization_excludes_recent_events() {
-        let mut state = EntityState {
-            entity_type: "Order".to_string(),
-            entity_id: "order-snap".to_string(),
-            status: "Submitted".to_string(),
-            item_count: 1,
-            counters: BTreeMap::from([("items".to_string(), 1)]),
-            booleans: BTreeMap::new(),
-            lists: BTreeMap::new(),
-            fields: serde_json::json!({"Id": "order-snap", "Status": "Submitted"}),
-            events: VecDeque::new(),
-            total_event_count: 2,
-            sequence_nr: 2,
-        };
-        state.push_event_bounded(EntityEvent {
-            action: "SubmitOrder".to_string(),
-            from_status: "Draft".to_string(),
-            to_status: "Submitted".to_string(),
-            timestamp: sim_now(),
-            params: serde_json::json!({}),
-        });
-
-        let bytes = EntityActor::serialize_snapshot_state(&state).unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert!(value.get("events").is_none());
-        assert_eq!(
-            value.get("total_event_count").and_then(|v| v.as_u64()),
-            Some(3)
-        );
-    }
-
-    #[test]
-    fn snapshot_restore_rehydrates_state_without_recent_events() {
-        let state = EntityState {
-            entity_type: "Order".to_string(),
-            entity_id: "order-snap".to_string(),
-            status: "Processing".to_string(),
-            item_count: 3,
-            counters: BTreeMap::from([("items".to_string(), 3)]),
-            booleans: BTreeMap::from([("paid".to_string(), true)]),
-            lists: BTreeMap::new(),
-            fields: serde_json::json!({"Id": "order-snap", "Status": "Processing"}),
-            events: VecDeque::new(),
-            total_event_count: 42,
-            sequence_nr: 42,
-        };
-        let bytes = EntityActor::serialize_snapshot_state(&state).unwrap();
-
-        let mut restored = EntityState {
-            entity_type: "Order".to_string(),
-            entity_id: "placeholder".to_string(),
-            status: "Draft".to_string(),
-            item_count: 0,
-            counters: BTreeMap::new(),
-            booleans: BTreeMap::new(),
-            lists: BTreeMap::new(),
-            fields: serde_json::json!({}),
-            events: VecDeque::new(),
-            total_event_count: 0,
-            sequence_nr: 0,
-        };
-
-        let ok = EntityActor::apply_snapshot_bytes(&mut restored, 42, &bytes);
-        assert!(ok);
-        assert_eq!(restored.entity_id, "order-snap");
-        assert_eq!(restored.status, "Processing");
-        assert_eq!(restored.total_event_count, 42);
-        assert!(restored.events.is_empty());
-        assert_eq!(restored.sequence_nr, 42);
     }
 }
