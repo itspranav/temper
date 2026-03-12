@@ -96,15 +96,30 @@ pub(crate) fn bootstrap_tenant_specs(
             .unwrap_or_else(|e| panic!("{label} spec {entity_type} failed to parse: {e}"));
     }
 
-    // Run verification cascade on each.
-    for (entity_type, ioa_source) in specs {
-        let cascade = VerificationCascade::from_ioa(ioa_source)
-            .with_sim_seeds(3)
-            .with_prop_test_cases(50);
-        let result = cascade.run();
-        assert!(
-            result.all_passed,
-            "{label} spec {entity_type} failed verification cascade"
+    // Built-in specs are verified in CI tests (test_system_specs_verify,
+    // test_pm_specs_verify, etc.).  Running Z3 + Stateright + proptest at
+    // every boot is redundant and consumes hundreds of MB — enough to OOM
+    // on Railway's 512 MB containers.  Skip by default; opt-in with
+    // TEMPER_BOOTSTRAP_VERIFY=true for local debugging.
+    let run_cascade = std::env::var("TEMPER_BOOTSTRAP_VERIFY") // determinism-ok: startup config
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
+
+    if run_cascade {
+        for (entity_type, ioa_source) in specs {
+            let cascade = VerificationCascade::from_ioa(ioa_source)
+                .with_sim_seeds(3)
+                .with_prop_test_cases(50);
+            let result = cascade.run();
+            assert!(
+                result.all_passed,
+                "{label} spec {entity_type} failed verification cascade"
+            );
+        }
+    } else {
+        tracing::info!(
+            "Skipping verification cascade for {label} (built-in specs verified in CI). \
+             Set TEMPER_BOOTSTRAP_VERIFY=true to re-enable."
         );
     }
 

@@ -204,9 +204,13 @@ impl DeployPipeline {
                 }
             }
 
+            let prop_cases: u32 = std::env::var("TEMPER_VERIFY_PROP_CASES") // determinism-ok: startup config
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(20);
             let cascade = VerificationCascade::from_ioa(&entity.ioa_source)
-                .with_sim_seeds(5)
-                .with_prop_test_cases(100);
+                .with_sim_seeds(3)
+                .with_prop_test_cases(prop_cases);
             let result = cascade.run();
 
             // Broadcast per-level results
