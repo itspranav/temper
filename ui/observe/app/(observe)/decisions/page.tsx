@@ -147,7 +147,12 @@ function HistoryRow({
 }) {
   const [expanded, setExpanded] = useState(false);
   const decidedTs = decision.decided_at
-    ? new Date(decision.decided_at).toLocaleString()
+    ? new Date(decision.decided_at).toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
     : "--";
 
   return (
@@ -159,22 +164,22 @@ function HistoryRow({
         }
       >
         {showTenant && (
-          <td className="px-3.5 py-2.5 font-mono text-[var(--color-text-secondary)] text-[11px]">
+          <td className="px-3 py-2 font-mono text-[var(--color-text-secondary)] text-[11px] whitespace-nowrap">
             {decision.tenant}
           </td>
         )}
-        <td className="px-3.5 py-2.5 font-mono text-[var(--color-text-secondary)] max-w-[160px] truncate" title={decision.agent_id}>
+        <td className="px-3 py-2 font-mono text-[var(--color-text-secondary)] max-w-[140px] truncate" title={decision.agent_id}>
           {decision.agent_id}
         </td>
-        <td className="px-3.5 py-2.5 font-mono text-[var(--color-accent-teal)] max-w-[120px] truncate" title={decision.action}>
+        <td className="px-3 py-2 font-mono text-[var(--color-accent-teal)] max-w-[100px] truncate" title={decision.action}>
           {decision.action}
         </td>
-        <td className="px-3.5 py-2.5 font-mono text-[var(--color-text-secondary)] max-w-[200px] truncate" title={`${decision.resource_type}::${decision.resource_id}`}>
+        <td className="px-3 py-2 font-mono text-[var(--color-text-secondary)] max-w-[160px] truncate" title={`${decision.resource_type}::${decision.resource_id}`}>
           {decision.resource_type}::{decision.resource_id}
         </td>
-        <td className="px-3.5 py-2.5">
+        <td className="px-3 py-2 whitespace-nowrap">
           <span
-            className={`text-xs font-mono px-2 py-0.5 rounded-full ${
+            className={`text-[11px] font-mono px-1.5 py-0.5 rounded-full ${
               decision.status === "approved"
                 ? "bg-[var(--color-accent-teal-dim)] text-[var(--color-accent-teal)]"
                 : decision.status === "denied"
@@ -185,13 +190,13 @@ function HistoryRow({
             {decision.status}
           </span>
         </td>
-        <td className="px-3.5 py-2.5 font-mono text-[var(--color-text-secondary)] text-[11px]">
-          {decision.approved_scope ? `${decision.approved_scope.principal}/${decision.approved_scope.action}/${decision.approved_scope.resource}` : "--"}
+        <td className="px-3 py-2 font-mono text-[var(--color-text-secondary)] text-[11px] max-w-[180px] truncate" title={decision.approved_scope ? `${decision.approved_scope.principal} / ${decision.approved_scope.action} / ${decision.approved_scope.resource}` : undefined}>
+          {decision.approved_scope ? `${decision.approved_scope.principal} / ${decision.approved_scope.action} / ${decision.approved_scope.resource}` : "--"}
         </td>
-        <td className="px-3.5 py-2.5 text-right font-mono text-[var(--color-text-muted)] text-[11px]">
+        <td className="px-3 py-2 text-right font-mono text-[var(--color-text-muted)] text-[11px] whitespace-nowrap">
           {decidedTs}
           {decision.generated_policy && (
-            <span className="ml-1.5 text-[var(--color-text-muted)]">
+            <span className="ml-1 text-[var(--color-text-muted)]">
               {expanded ? "\u25B4" : "\u25BE"}
             </span>
           )}
@@ -528,30 +533,30 @@ export default function DecisionsPage() {
                   </span>
                 </div>
                 <div className="glass rounded overflow-hidden max-h-96 overflow-y-auto overflow-x-auto">
-                  <table className="w-full text-[13px] table-fixed">
+                  <table className="w-full text-[13px]">
                     <thead className="sticky top-0 bg-[color-mix(in_srgb,var(--color-bg-surface)_90%,transparent)] backdrop-blur-sm z-10">
                       <tr className="border-b border-[var(--color-border)]">
                         {showTenantBadge && (
-                          <th className="text-left px-3.5 py-2.5 text-[var(--color-text-muted)] font-medium text-xs uppercase tracking-wider">
+                          <th className="text-left px-3 py-2 text-[var(--color-text-muted)] font-medium text-xs uppercase tracking-wider whitespace-nowrap">
                             Tenant
                           </th>
                         )}
-                        <th className="text-left px-3.5 py-2.5 text-[var(--color-text-muted)] font-medium text-xs uppercase tracking-wider">
+                        <th className="text-left px-3 py-2 text-[var(--color-text-muted)] font-medium text-xs uppercase tracking-wider whitespace-nowrap">
                           Agent
                         </th>
-                        <th className="text-left px-3.5 py-2.5 text-[var(--color-text-muted)] font-medium text-xs uppercase tracking-wider">
+                        <th className="text-left px-3 py-2 text-[var(--color-text-muted)] font-medium text-xs uppercase tracking-wider whitespace-nowrap">
                           Action
                         </th>
-                        <th className="text-left px-3.5 py-2.5 text-[var(--color-text-muted)] font-medium text-xs uppercase tracking-wider">
+                        <th className="text-left px-3 py-2 text-[var(--color-text-muted)] font-medium text-xs uppercase tracking-wider whitespace-nowrap">
                           Resource
                         </th>
-                        <th className="text-left px-3.5 py-2.5 text-[var(--color-text-muted)] font-medium text-xs uppercase tracking-wider">
+                        <th className="text-left px-3 py-2 text-[var(--color-text-muted)] font-medium text-xs uppercase tracking-wider whitespace-nowrap">
                           Status
                         </th>
-                        <th className="text-left px-3.5 py-2.5 text-[var(--color-text-muted)] font-medium text-xs uppercase tracking-wider">
+                        <th className="text-left px-3 py-2 text-[var(--color-text-muted)] font-medium text-xs uppercase tracking-wider whitespace-nowrap">
                           Scope
                         </th>
-                        <th className="text-right px-3.5 py-2.5 text-[var(--color-text-muted)] font-medium text-xs uppercase tracking-wider">
+                        <th className="text-right px-3 py-2 text-[var(--color-text-muted)] font-medium text-xs uppercase tracking-wider whitespace-nowrap">
                           Decided
                         </th>
                       </tr>

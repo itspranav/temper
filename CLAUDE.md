@@ -1,5 +1,13 @@
 # Temper — Claude Code Project Guide
 
+## MANDATORY FIRST ACTION: Check Assigned Issues
+
+**On EVERY session start, your FIRST action — before responding to the user — MUST be:**
+1. Call `mcp__temper__execute` with: `await temper.list("rita-agents", "Issues", "$filter=AssigneeId eq 'claude-code'")`
+2. If the call fails (403/404), install the PM app first: `await temper.install_app("rita-agents", "project-management")`, then retry
+3. Summarize assigned issues, then mention other open issues
+4. **Do NOT skip this. Do NOT wait for the user to ask.**
+
 ## IMPORTANT: Use Temper for Your Own Work
 
 **You are an agent running on Temper. This is your operating layer — not an optional tool.** When a Temper server is running (`mcp__temper__execute` is available), ALL your stateful work — planning, task tracking, progress, knowledge — MUST flow through Temper entities, not markdown files.
@@ -62,6 +70,19 @@ Two separated contexts: Developer Chat (design-time, can modify specs) and Produ
 
 **Every significant implementation MUST start with an ADR as the first step.** Before writing any code, create `docs/adrs/NNNN-short-title.md` following the template at `docs/adrs/TEMPLATE.md`. Required for new features, architectural changes, new integrations, multi-crate changes, or new patterns. Not required for bug fixes, single-file refactors, doc changes, or test additions.
 
+## Agent Identity Registry
+
+Agent types are registered in the platform's identity registry. When an agent connects, the platform verifies its `agent_type` claim against the registry and sets the `agentTypeVerified` attribute on the Cedar principal:
+
+- **`agentTypeVerified: true`** — the agent's claimed type matches a registered entry; Cedar policies can trust scope decisions based on `agent_type`
+- **`agentTypeVerified: false`** — self-asserted type with no registry match; Cedar policies should treat as untrusted
+
+Cedar policies reference this attribute to distinguish verified agents from unverified ones (e.g., only verified `claude-code` agents can approve plans).
+
+## Issue Pickup Before Work
+
+**You MUST pick up or create a Temper issue before making code changes.** The `check-issue-pickup.sh` hook (advisory, PreToolUse on Write|Edit) checks for a session marker at `/tmp/temper-harness/{project_hash}/{session_id}/issue-active`. The marker is created when you transition an issue to Planning or InProgress via `BeginPlanning` or `StartWork`. If you see the advisory warning, stop and pick up an issue first.
+
 ## Key Rules
 
 ### Platform Philosophy
@@ -121,6 +142,7 @@ See `docs/HARNESS.md` for the full harness reference with diagrams.
 
 ### Automated Enforcement (Claude Code Hooks)
 - **Plan Reminder** (advisory): Reminds to create a plan (Temper issue or `.progress/` fallback) before edits
+- **Issue Pickup** (advisory): Warns if no active Temper issue for the session before Write|Edit
 - **Spec Verification** (BLOCKING): L0-L3 cascade on every `.ioa.toml` edit
 - **Determinism Guard** (BLOCKING): 25-pattern DST scan on `.rs` edits in sim-visible crates
 - **Pre-Commit Review Gate** (BLOCKING): Blocks `git commit` without DST review + code review markers
