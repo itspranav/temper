@@ -440,23 +440,20 @@ impl crate::state::ServerState {
                 Ok(Some(resp))
             }
             WasmDispatchMode::Background => {
-                if let Err(e) = self
-                    .dispatch_tenant_action(
-                        entity_ref.tenant,
-                        entity_ref.entity_type,
-                        entity_ref.entity_id,
-                        callback_action,
-                        callback_params,
-                        &AgentContext::system(),
-                    )
-                    .await
-                {
-                    tracing::error!(
-                        callback = %callback_action,
-                        error = %e,
-                        "failed to dispatch WASM callback"
-                    );
-                }
+                self.dispatch_tenant_action(
+                    entity_ref.tenant,
+                    entity_ref.entity_type,
+                    entity_ref.entity_id,
+                    callback_action,
+                    callback_params,
+                    &AgentContext::system(),
+                )
+                .await
+                .map_err(|e| {
+                    let msg = format!("failed to dispatch WASM callback '{callback_action}': {e}");
+                    tracing::error!(callback = %callback_action, error = %e, "{msg}");
+                    msg
+                })?;
                 Ok(None)
             }
         }

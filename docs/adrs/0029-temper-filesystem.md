@@ -1,4 +1,4 @@
-# ADR-0027: TemperFS — A Governed File System on Temper Primitives
+# ADR-0029: TemperFS — A Governed File System on Temper Primitives
 
 - Status: Accepted
 - Date: 2026-03-10
