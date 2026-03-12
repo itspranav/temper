@@ -210,7 +210,7 @@ impl EntityActor {
             return Ok(());
         }
         let interval = Self::snapshot_interval();
-        if interval == 0 || state.sequence_nr % interval != 0 {
+        if !state.sequence_nr.is_multiple_of(interval) {
             return Ok(());
         }
 
