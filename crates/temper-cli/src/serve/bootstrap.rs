@@ -250,9 +250,22 @@ pub(super) async fn hydrate_entities(state: &PlatformState, apps: &[(String, Str
     if state.server.event_store.is_none() {
         return;
     }
+    let eager_hydrate = std::env::var("TEMPER_EAGER_HYDRATE") // determinism-ok: read once at startup
+        .ok()
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "on" | "yes"
+            )
+        })
+        .unwrap_or(false);
     for (tenant, _dir) in apps {
         let tenant_id = TenantId::new(tenant.as_str());
-        state.server.hydrate_from_store(&tenant_id).await;
+        if eager_hydrate {
+            state.server.hydrate_from_store(&tenant_id).await;
+        } else {
+            state.server.populate_index_from_store(&tenant_id).await;
+        }
     }
     // In TenantRouted mode, also hydrate all registered tenants.
     if let Some(ref store) = state.server.event_store
@@ -260,7 +273,11 @@ pub(super) async fn hydrate_entities(state: &PlatformState, apps: &[(String, Str
     {
         for tenant in router.connected_tenants().await {
             let tenant_id = TenantId::new(&tenant);
-            state.server.hydrate_from_store(&tenant_id).await;
+            if eager_hydrate {
+                state.server.hydrate_from_store(&tenant_id).await;
+            } else {
+                state.server.populate_index_from_store(&tenant_id).await;
+            }
         }
     }
 }

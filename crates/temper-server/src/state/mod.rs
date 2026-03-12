@@ -22,7 +22,7 @@ pub use trajectory::{TrajectoryEntry, TrajectorySource};
 pub use wasm_invocation_log::WasmInvocationEntry;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 use temper_authz::AuthzEngine;
 use temper_evolution::PostgresRecordStore;
@@ -117,6 +117,19 @@ fn env_timeout() -> Duration {
     Duration::from_secs(secs)
 }
 
+fn env_usize(name: &str, default: usize) -> usize {
+    std::env::var(name) // determinism-ok: read once at startup
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(default)
+}
+
+fn state_cache_budget() -> usize {
+    static STATE_CACHE_BUDGET: OnceLock<usize> = OnceLock::new();
+    *STATE_CACHE_BUDGET.get_or_init(|| env_usize("TEMPER_STATE_CACHE_BUDGET", 10_000))
+}
+
 /// Shared state for the Temper HTTP server.
 #[derive(Clone)]
 // ADR-0025 Phase 4: remove record_store field after IOA entity migration complete
@@ -133,6 +146,8 @@ pub struct ServerState {
     pub transition_tables: Arc<BTreeMap<String, Arc<TransitionTable>>>,
     /// Live actor registry: actor_key -> ActorRef.
     pub actor_registry: Arc<RwLock<BTreeMap<String, ActorRef<EntityMsg>>>>,
+    /// Last access time per actor key (used for idle passivation).
+    pub last_accessed: Arc<RwLock<BTreeMap<String, chrono::DateTime<chrono::Utc>>>>,
     /// Optional runtime event store backend for persistence.
     pub event_store: Option<Arc<ServerEventStore>>,
     /// Runtime data directory for persisted local metadata (e.g. specs registry).
@@ -230,6 +245,7 @@ impl ServerState {
             entity_set_map: Arc::new(entity_set_map),
             transition_tables: Arc::new(BTreeMap::new()),
             actor_registry: Arc::new(RwLock::new(BTreeMap::new())),
+            last_accessed: Arc::new(RwLock::new(BTreeMap::new())),
             event_store: None,
             data_dir: std::path::PathBuf::new(),
             agent_hints: Arc::new(RwLock::new(BTreeMap::new())),
@@ -366,6 +382,7 @@ impl ServerState {
             entity_set_map: Arc::new(BTreeMap::new()),
             transition_tables: Arc::new(BTreeMap::new()),
             actor_registry: Arc::new(RwLock::new(BTreeMap::new())),
+            last_accessed: Arc::new(RwLock::new(BTreeMap::new())),
             event_store: None,
             data_dir: std::path::PathBuf::new(),
             agent_hints: Arc::new(RwLock::new(BTreeMap::new())),
@@ -449,6 +466,27 @@ impl ServerState {
     pub fn with_secrets_vault(mut self, vault: SecretsVault) -> Self {
         self.secrets_vault = Some(Arc::new(vault));
         self
+    }
+
+    /// Insert/update an entity status cache entry with bounded eviction.
+    ///
+    /// When over budget, evicts the oldest timestamped entries first.
+    pub fn cache_entity_status(&self, cache_key: String, status: String) {
+        if let Ok(mut cache) = self.entity_state_cache.write() {
+            cache.insert(cache_key, (status, sim_now()));
+            let budget = state_cache_budget();
+            while cache.len() > budget {
+                let oldest_key = cache
+                    .iter()
+                    .min_by_key(|(_, (_, ts))| *ts)
+                    .map(|(k, _)| k.clone());
+                if let Some(k) = oldest_key {
+                    cache.remove(&k);
+                } else {
+                    break;
+                }
+            }
+        }
     }
 
     /// Get a reference to the Turso event store.

@@ -1,6 +1,6 @@
 //! OData read handlers (`GET` and metadata/service endpoints).
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -21,6 +21,74 @@ use crate::response::{ODataResponse, ODataStreamResponse, ODataXmlResponse, odat
 use crate::state::ServerState;
 use crate::state::trajectory::{TrajectoryEntry, TrajectorySource};
 use temper_runtime::scheduler::sim_now;
+
+fn env_usize(name: &str, default: usize) -> usize {
+    std::env::var(name) // determinism-ok: read once at startup
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(default)
+}
+
+fn odata_default_page_size() -> usize {
+    static DEFAULT_PAGE_SIZE: OnceLock<usize> = OnceLock::new();
+    *DEFAULT_PAGE_SIZE.get_or_init(|| env_usize("TEMPER_ODATA_DEFAULT_PAGE_SIZE", 100))
+}
+
+fn odata_max_entities() -> usize {
+    static MAX_ENTITIES: OnceLock<usize> = OnceLock::new();
+    *MAX_ENTITIES.get_or_init(|| env_usize("TEMPER_ODATA_MAX_ENTITIES", 1000))
+}
+
+fn select_entity_ids_for_materialization(
+    mut entity_ids: Vec<String>,
+    query_options: &temper_odata::query::types::QueryOptions,
+    default_page_size: usize,
+    max_entities: usize,
+) -> (
+    Vec<String>,
+    temper_odata::query::types::QueryOptions,
+    Option<usize>,
+) {
+    let has_filter_or_order = query_options.filter.is_some() || query_options.orderby.is_some();
+    let mut precomputed_count = None;
+
+    let apply_options = if !has_filter_or_order {
+        let total_available = entity_ids.len();
+        if query_options.count == Some(true) {
+            precomputed_count = Some(total_available);
+        }
+
+        let skip = query_options.skip.unwrap_or(0);
+        let top = query_options.top.unwrap_or(default_page_size);
+        let requested = top.min(max_entities);
+        entity_ids = entity_ids
+            .into_iter()
+            .skip(skip)
+            .take(requested)
+            .collect::<Vec<_>>();
+
+        let mut adjusted = query_options.clone();
+        adjusted.skip = None;
+        adjusted.top = None;
+        adjusted.count = None;
+        adjusted
+    } else {
+        if entity_ids.len() > max_entities {
+            entity_ids.truncate(max_entities);
+        }
+
+        let mut adjusted = query_options.clone();
+        if adjusted.top.is_none() {
+            adjusted.top = Some(default_page_size);
+        } else if let Some(top) = adjusted.top {
+            adjusted.top = Some(top.min(max_entities));
+        }
+        adjusted
+    };
+
+    (entity_ids, apply_options, precomputed_count)
+}
 
 /// Resolve an entity set name from an entity type name.
 ///
@@ -381,7 +449,16 @@ async fn handle_entity_set(
         }
     };
 
-    let entity_ids = state.list_entity_ids(tenant, &entity_type);
+    let default_page_size = odata_default_page_size();
+    let max_entities = odata_max_entities();
+
+    let (entity_ids, apply_options, precomputed_count) = select_entity_ids_for_materialization(
+        state.list_entity_ids_lazy(tenant, &entity_type).await,
+        query_options,
+        default_page_size,
+        max_entities,
+    );
+
     let mut entities = Vec::new();
     for id in &entity_ids {
         if let Ok(response) = state
@@ -399,7 +476,10 @@ async fn handle_entity_set(
         }
     }
 
-    let (mut result, count) = apply_query_options(entities, query_options);
+    let (mut result, mut count) = apply_query_options(entities, &apply_options);
+    if count.is_none() {
+        count = precomputed_count;
+    }
 
     if let Some(ref expand_items) = query_options.expand {
         for entity in &mut result {
@@ -983,4 +1063,71 @@ async fn handle_stream_get(
         etag,
     }
     .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::select_entity_ids_for_materialization;
+    use temper_odata::query::types::{
+        FilterExpr, ODataValue, OrderByClause, OrderDirection, QueryOptions,
+    };
+
+    #[test]
+    fn default_pagination_applies_when_top_missing_and_no_filter_orderby() {
+        let ids: Vec<String> = (0..150).map(|i| format!("id-{i}")).collect();
+        let opts = QueryOptions {
+            count: Some(true),
+            ..QueryOptions::default()
+        };
+
+        let (selected, apply_opts, count) =
+            select_entity_ids_for_materialization(ids, &opts, 100, 1000);
+
+        assert_eq!(selected.len(), 100);
+        assert_eq!(selected.first().unwrap(), "id-0");
+        assert_eq!(selected.last().unwrap(), "id-99");
+        assert_eq!(count, Some(150));
+        assert_eq!(apply_opts.top, None);
+        assert_eq!(apply_opts.skip, None);
+        assert_eq!(apply_opts.count, None);
+    }
+
+    #[test]
+    fn explicit_skip_top_are_applied_before_materialization() {
+        let ids: Vec<String> = (0..50).map(|i| format!("id-{i}")).collect();
+        let opts = QueryOptions {
+            top: Some(10),
+            skip: Some(5),
+            count: Some(true),
+            ..QueryOptions::default()
+        };
+
+        let (selected, _apply_opts, count) =
+            select_entity_ids_for_materialization(ids, &opts, 100, 1000);
+
+        assert_eq!(selected.len(), 10);
+        assert_eq!(selected.first().unwrap(), "id-5");
+        assert_eq!(selected.last().unwrap(), "id-14");
+        assert_eq!(count, Some(50));
+    }
+
+    #[test]
+    fn hard_cap_limits_materialization_and_filter_orderby_path_sets_default_top() {
+        let ids: Vec<String> = (0..2500).map(|i| format!("id-{i}")).collect();
+        let opts = QueryOptions {
+            filter: Some(FilterExpr::Literal(ODataValue::Boolean(true))),
+            orderby: Some(vec![OrderByClause {
+                property: "Status".to_string(),
+                direction: OrderDirection::Asc,
+            }]),
+            ..QueryOptions::default()
+        };
+
+        let (selected, apply_opts, count) =
+            select_entity_ids_for_materialization(ids, &opts, 100, 1000);
+
+        assert_eq!(selected.len(), 1000);
+        assert_eq!(count, None);
+        assert_eq!(apply_opts.top, Some(100));
+    }
 }

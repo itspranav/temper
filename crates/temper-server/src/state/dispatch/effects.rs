@@ -40,7 +40,7 @@ impl crate::state::ServerState {
             entity_id: ctx.entity_id.to_string(),
             action: ctx.action.to_string(),
             success: response.success,
-            from_status: response.state.events.last().map(|e| e.from_status.clone()),
+            from_status: response.state.events.back().map(|e| e.from_status.clone()),
             to_status: Some(response.state.status.clone()),
             error: if response.success {
                 None
@@ -82,9 +82,7 @@ impl crate::state::ServerState {
             session_id: ctx.agent_ctx.session_id.clone(),
         });
         let cache_key = format!("{}:{}:{}", ctx.tenant, ctx.entity_type, ctx.entity_id);
-        if let Ok(mut cache) = self.entity_state_cache.write() {
-            cache.insert(cache_key, (response.state.status.clone(), sim_now()));
-        }
+        self.cache_entity_status(cache_key, response.state.status.clone());
     }
 
     /// Fire webhooks for the trajectory entry (non-blocking).
@@ -98,7 +96,7 @@ impl crate::state::ServerState {
                 entity_id: ctx.entity_id.to_string(),
                 action: ctx.action.to_string(),
                 success: response.success,
-                from_status: response.state.events.last().map(|e| e.from_status.clone()),
+                from_status: response.state.events.back().map(|e| e.from_status.clone()),
                 to_status: Some(response.state.status.clone()),
                 error: response.error.clone(),
                 agent_id: ctx.agent_ctx.agent_id.clone(),

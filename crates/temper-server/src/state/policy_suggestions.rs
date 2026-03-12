@@ -7,6 +7,9 @@
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
+const PATTERN_BUDGET: usize = 5_000;
+const DISTINCT_RESOURCE_IDS_BUDGET: usize = 100;
+
 /// A single denial pattern for a specific (agent_type, action, resource_type) triple.
 #[derive(Debug, Clone, Serialize)]
 pub struct DenialPattern {
@@ -73,6 +76,36 @@ pub struct PolicySuggestionEngine {
 }
 
 impl PolicySuggestionEngine {
+    fn enforce_per_action_budget(&mut self) {
+        while self.per_action.len() > PATTERN_BUDGET {
+            let victim = self
+                .per_action
+                .iter()
+                .min_by_key(|(k, p)| (p.count, *k))
+                .map(|(k, _)| k.clone());
+            if let Some(key) = victim {
+                self.per_action.remove(&key);
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn enforce_per_type_budget(&mut self) {
+        while self.per_type.len() > PATTERN_BUDGET {
+            let victim = self
+                .per_type
+                .iter()
+                .min_by_key(|(k, p)| (p.total_denials, *k))
+                .map(|(k, _)| k.clone());
+            if let Some(key) = victim {
+                self.per_type.remove(&key);
+            } else {
+                break;
+            }
+        }
+    }
+
     /// Create a new engine with default thresholds.
     pub fn new() -> Self {
         Self {
@@ -115,6 +148,13 @@ impl PolicySuggestionEngine {
         pattern
             .distinct_resource_ids
             .insert(resource_id.to_string());
+        while pattern.distinct_resource_ids.len() > DISTINCT_RESOURCE_IDS_BUDGET {
+            if let Some(oldest) = pattern.distinct_resource_ids.iter().next().cloned() {
+                pattern.distinct_resource_ids.remove(&oldest);
+            } else {
+                break;
+            }
+        }
 
         // Update cross-action grouping.
         let type_key = (agent_type.map(String::from), resource_type.to_string());
@@ -129,6 +169,9 @@ impl PolicySuggestionEngine {
             });
         grouped.denied_actions.insert(action.to_string());
         grouped.total_denials += 1;
+
+        self.enforce_per_action_budget();
+        self.enforce_per_type_budget();
     }
 
     /// Generate policy suggestions from accumulated denial patterns.

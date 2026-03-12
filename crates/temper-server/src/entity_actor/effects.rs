@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use temper_jit::table::{Effect, EvalContext, TransitionTable};
 use temper_runtime::scheduler::{sim_now, sim_uuid};
 
-use super::types::{EntityEvent, EntityState};
+use super::types::{EntityEvent, EntityState, MAX_EVENTS_PER_ENTITY};
 
 /// A scheduled action to fire after a delay.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,6 +128,19 @@ pub fn process_action_with_xref(
     params: &serde_json::Value,
     cross_entity_booleans: &std::collections::BTreeMap<String, bool>,
 ) -> ProcessResult {
+    if state.total_event_count >= MAX_EVENTS_PER_ENTITY {
+        return ProcessResult {
+            success: false,
+            event: None,
+            custom_effects: vec![],
+            scheduled_actions: vec![],
+            spawn_requests: vec![],
+            error: Some(format!(
+                "Event budget exhausted ({MAX_EVENTS_PER_ENTITY} max)"
+            )),
+        };
+    }
+
     let ctx = build_eval_context_with_xref(state, cross_entity_booleans);
     let result = table.evaluate_ctx(&state.status, &ctx, action);
 
@@ -409,7 +422,8 @@ effect = [{ type = "schedule", action = "Refresh", delay_seconds = 2700 }]
             booleans: std::collections::BTreeMap::new(),
             lists: std::collections::BTreeMap::new(),
             fields: serde_json::json!({}),
-            events: vec![],
+            events: std::collections::VecDeque::new(),
+            total_event_count: 0,
             sequence_nr: 0,
         };
 
@@ -441,7 +455,8 @@ effect = [{ type = "schedule", action = "Refresh", delay_seconds = 2700 }]
             booleans: std::collections::BTreeMap::new(),
             lists: std::collections::BTreeMap::new(),
             fields: serde_json::json!({}),
-            events: vec![],
+            events: std::collections::VecDeque::new(),
+            total_event_count: 0,
             sequence_nr: 0,
         };
 
@@ -484,7 +499,8 @@ effect = [
             booleans: std::collections::BTreeMap::new(),
             lists: std::collections::BTreeMap::new(),
             fields: serde_json::json!({}),
-            events: vec![],
+            events: std::collections::VecDeque::new(),
+            total_event_count: 0,
             sequence_nr: 0,
         };
 
@@ -539,7 +555,8 @@ guard = [
             booleans: std::collections::BTreeMap::new(),
             lists: std::collections::BTreeMap::new(),
             fields: serde_json::json!({"test_wf_id": "wf-1"}),
-            events: vec![],
+            events: std::collections::VecDeque::new(),
+            total_event_count: 0,
             sequence_nr: 0,
         };
 

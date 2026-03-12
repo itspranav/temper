@@ -1,6 +1,7 @@
 //! Types for the entity actor: messages, state, events, and responses.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 use temper_runtime::actor::Message;
@@ -10,8 +11,24 @@ use temper_runtime::actor::Message;
 
 /// Maximum events per entity before the actor refuses new transitions.
 pub const MAX_EVENTS_PER_ENTITY: usize = 10_000;
+/// Default number of recent events retained in memory per entity.
+pub const RECENT_EVENTS_BUDGET_DEFAULT: usize = 50;
 /// Maximum items an entity can hold.
 pub const MAX_ITEMS_PER_ENTITY: usize = 1_000;
+
+/// Number of recent events retained in memory per entity.
+///
+/// Controlled by `TEMPER_RECENT_EVENTS_BUDGET` (default 50).
+pub fn recent_events_budget() -> usize {
+    static RECENT_EVENTS_BUDGET: OnceLock<usize> = OnceLock::new();
+    *RECENT_EVENTS_BUDGET.get_or_init(|| {
+        std::env::var("TEMPER_RECENT_EVENTS_BUDGET") // determinism-ok: read once at startup
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(RECENT_EVENTS_BUDGET_DEFAULT)
+    })
+}
 
 /// Messages the entity actor can receive.
 #[derive(Debug)]
@@ -60,11 +77,33 @@ pub struct EntityState {
     pub lists: BTreeMap<String, Vec<String>>,
     /// All entity fields as a JSON object.
     pub fields: serde_json::Value,
-    /// Event log (append-only history of all transitions).
-    pub events: Vec<EntityEvent>,
+    /// Recent event log (bounded in-memory history for observability).
+    #[serde(default)]
+    pub events: VecDeque<EntityEvent>,
+    /// Total event count ever applied to this entity.
+    #[serde(default)]
+    pub total_event_count: usize,
     /// Current event sourcing sequence number (for persistence).
     #[serde(default)]
     pub sequence_nr: u64,
+}
+
+impl EntityState {
+    /// Return true if this entity can accept one more event under budget.
+    pub fn can_accept_event(&self) -> bool {
+        self.total_event_count < MAX_EVENTS_PER_ENTITY
+    }
+
+    /// Append an event to recent history while enforcing bounded memory.
+    pub fn push_event_bounded(&mut self, event: EntityEvent) {
+        self.total_event_count = self.total_event_count.saturating_add(1);
+        self.events.push_back(event);
+
+        let budget = recent_events_budget();
+        while self.events.len() > budget {
+            self.events.pop_front();
+        }
+    }
 }
 
 /// A recorded state transition event.
@@ -130,7 +169,8 @@ mod tests {
             booleans: BTreeMap::from([("assigned".to_string(), true)]),
             lists: BTreeMap::new(),
             fields: json!({"title": "Test Order"}),
-            events: vec![],
+            events: VecDeque::new(),
+            total_event_count: 0,
             sequence_nr: 0,
         };
         let serialized = serde_json::to_string(&state).unwrap();
@@ -156,6 +196,7 @@ mod tests {
         assert!(state.counters.is_empty());
         assert!(state.booleans.is_empty());
         assert!(state.lists.is_empty());
+        assert_eq!(state.total_event_count, 0);
         assert_eq!(state.sequence_nr, 0);
     }
 
@@ -188,7 +229,8 @@ mod tests {
             booleans: BTreeMap::new(),
             lists: BTreeMap::new(),
             fields: json!({}),
-            events: vec![],
+            events: VecDeque::new(),
+            total_event_count: 0,
             sequence_nr: 0,
         };
         let resp = EntityResponse {

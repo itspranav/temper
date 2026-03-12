@@ -48,7 +48,8 @@ impl EntityActorHandler {
             booleans: std::collections::BTreeMap::new(),
             lists: std::collections::BTreeMap::new(),
             fields: serde_json::json!({}),
-            events: Vec::new(),
+            events: std::collections::VecDeque::new(),
+            total_event_count: 0,
             sequence_nr: 0,
         };
 
@@ -133,6 +134,7 @@ impl SimActorHandler for EntityActorHandler {
         self.state.booleans.clear();
         self.state.lists.clear();
         self.state.events.clear();
+        self.state.total_event_count = 0;
         self.state.sequence_nr = 0;
         self.state.fields = serde_json::json!({
             "Id": self.state.entity_id,
@@ -156,7 +158,7 @@ impl SimActorHandler for EntityActorHandler {
             self.last_custom_effects = result.custom_effects;
             self.last_scheduled_actions = result.scheduled_actions;
             if let Some(event) = result.event {
-                self.state.events.push(event);
+                self.state.push_event_bounded(event);
             }
             Ok(serde_json::to_value(&self.state).unwrap_or_default())
         } else {
@@ -175,7 +177,7 @@ impl SimActorHandler for EntityActorHandler {
     }
 
     fn event_count(&self) -> usize {
-        self.state.events.len()
+        self.state.total_event_count
     }
 
     fn valid_actions(&self) -> Vec<String> {

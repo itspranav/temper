@@ -151,6 +151,7 @@ pub async fn run(
         spawn_background_verification(&state, dir, tenant).await;
     }
     spawn_optimization_loop(&state);
+    spawn_actor_passivation_loop(&state);
 
     println!("Listening on http://0.0.0.0:{actual_port}");
     axum::serve(listener, router)
@@ -180,6 +181,27 @@ fn spawn_optimization_loop(state: &PlatformState) {
         loop {
             ticker.tick().await;
             let _ = run_optimization_cycle(&store, &state).await;
+        }
+    });
+}
+
+fn spawn_actor_passivation_loop(state: &PlatformState) {
+    let interval_secs = std::env::var("TEMPER_PASSIVATION_CHECK_INTERVAL") // determinism-ok: read once at startup
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(60)
+        .clamp(1, 86_400);
+
+    let server = state.server.clone();
+    tokio::spawn(async move {
+        // determinism-ok: background task for resource management
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        ticker.tick().await; // consume immediate tick
+
+        loop {
+            ticker.tick().await;
+            server.passivate_idle_actors().await;
         }
     });
 }

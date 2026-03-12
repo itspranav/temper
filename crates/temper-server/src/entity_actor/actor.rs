@@ -22,7 +22,7 @@
 //! - **Deterministic**: Same input -> same output. No randomness in transition logic.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use temper_jit::table::TransitionTable;
 use temper_observe::wide_event;
@@ -58,6 +58,59 @@ pub struct EntityActor {
 }
 
 impl EntityActor {
+    /// Snapshot frequency in events.
+    ///
+    /// Controlled by `TEMPER_SNAPSHOT_INTERVAL` (default 100).
+    fn snapshot_interval() -> u64 {
+        static SNAPSHOT_INTERVAL: OnceLock<u64> = OnceLock::new();
+        *SNAPSHOT_INTERVAL.get_or_init(|| {
+            std::env::var("TEMPER_SNAPSHOT_INTERVAL") // determinism-ok: read once at startup
+                .ok()
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .filter(|v| *v > 0)
+                .unwrap_or(100)
+        })
+    }
+
+    /// Serialize actor state for snapshot persistence, excluding recent event history.
+    fn serialize_snapshot_state(state: &EntityState) -> Result<Vec<u8>, PersistenceError> {
+        let mut value = serde_json::to_value(state)
+            .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+        if let Some(obj) = value.as_object_mut() {
+            obj.remove("events");
+        }
+        serde_json::to_vec(&value).map_err(|e| PersistenceError::Serialization(e.to_string()))
+    }
+
+    /// Attempt to load actor state from snapshot payload bytes.
+    fn apply_snapshot_bytes(state: &mut EntityState, sequence_nr: u64, bytes: &[u8]) -> bool {
+        let mut value = match serde_json::from_slice::<serde_json::Value>(bytes) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        let Some(obj) = value.as_object_mut() else {
+            return false;
+        };
+
+        // Snapshot intentionally excludes in-memory recent history.
+        obj.insert("events".to_string(), serde_json::json!([]));
+        if !obj.contains_key("total_event_count") {
+            obj.insert(
+                "total_event_count".to_string(),
+                serde_json::json!(sequence_nr as usize),
+            );
+        }
+
+        match serde_json::from_value::<EntityState>(value) {
+            Ok(mut restored) => {
+                restored.sequence_nr = sequence_nr;
+                *state = restored;
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     /// Create a new entity actor (in-memory only, no persistence).
     pub fn new(
         entity_type: impl Into<String>,
@@ -147,6 +200,26 @@ impl EntityActor {
         }
     }
 
+    /// Save a snapshot when the configured interval is reached.
+    async fn maybe_save_snapshot(
+        store: &ServerEventStore,
+        persistence_id: &str,
+        state: &EntityState,
+    ) -> Result<(), PersistenceError> {
+        if state.sequence_nr == 0 {
+            return Ok(());
+        }
+        let interval = Self::snapshot_interval();
+        if interval == 0 || state.sequence_nr % interval != 0 {
+            return Ok(());
+        }
+
+        let snapshot = Self::serialize_snapshot_state(state)?;
+        store
+            .save_snapshot(persistence_id, state.sequence_nr, &snapshot)
+            .await
+    }
+
     /// Replay events from the configured store to rebuild state (called in pre_start).
     ///
     /// Re-evaluates each event through the `TransitionTable` to reconstruct
@@ -159,7 +232,38 @@ impl EntityActor {
         persistence_id: &str,
         state: &mut EntityState,
     ) {
-        match store.read_events(persistence_id, 0).await {
+        let mut from_sequence = 0;
+        let mut loaded_snapshot = false;
+
+        match store.load_snapshot(persistence_id).await {
+            Ok(Some((snapshot_seq, snapshot_bytes))) => {
+                if Self::apply_snapshot_bytes(state, snapshot_seq, &snapshot_bytes) {
+                    from_sequence = snapshot_seq;
+                    loaded_snapshot = true;
+                    tracing::info!(
+                        entity = %state.entity_id,
+                        seq = snapshot_seq,
+                        "loaded snapshot before replay"
+                    );
+                } else {
+                    tracing::warn!(
+                        entity = %state.entity_id,
+                        seq = snapshot_seq,
+                        "failed to deserialize snapshot, falling back to full replay"
+                    );
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(
+                    entity = %state.entity_id,
+                    error = %e,
+                    "failed to load snapshot, falling back to full replay"
+                );
+            }
+        }
+
+        match store.read_events(persistence_id, from_sequence).await {
             Ok(envelopes) => {
                 for env in &envelopes {
                     if let Ok(event) = serde_json::from_value::<EntityEvent>(env.payload.clone()) {
@@ -191,36 +295,31 @@ impl EntityActor {
                             state.status = event.to_status.clone();
                         }
 
-                        state.events.push(event);
+                        state.push_event_bounded(event);
                     }
                     state.sequence_nr = env.sequence_nr;
                 }
                 if !envelopes.is_empty() {
                     // Sync all state into fields after full replay
                     super::effects::sync_fields(state, &serde_json::json!({}));
-
-                    // Restore initial fields from the first Created event.
-                    // Replay effects own their projected keys, so only fill gaps.
-                    if let Some(created_event) =
-                        state.events.first().filter(|e| e.action == "Created")
-                        && let (Some(fields_obj), Some(params_obj)) = (
-                            state.fields.as_object_mut(),
-                            created_event.params.as_object(),
-                        )
-                    {
-                        for (k, v) in params_obj {
-                            fields_obj.entry(k.clone()).or_insert_with(|| v.clone());
-                        }
-                    }
-
                     tracing::info!(
                         entity = %state.entity_id,
+                        snapshot_loaded = loaded_snapshot,
                         replayed = envelopes.len(),
                         status = %state.status,
                         seq = state.sequence_nr,
+                        total_events = state.total_event_count,
+                        recent_events = state.events.len(),
                         counters = ?state.counters,
                         booleans = ?state.booleans,
                         "state rebuilt from event journal via TransitionTable"
+                    );
+                } else if loaded_snapshot {
+                    tracing::info!(
+                        entity = %state.entity_id,
+                        seq = state.sequence_nr,
+                        total_events = state.total_event_count,
+                        "state restored from snapshot (no delta events)"
                     );
                 }
             }
@@ -260,7 +359,8 @@ impl Actor for EntityActor {
             booleans: BTreeMap::new(),
             lists: BTreeMap::new(),
             fields,
-            events: Vec::new(),
+            events: std::collections::VecDeque::new(),
+            total_event_count: 0,
             sequence_nr: 0,
         };
 
@@ -273,7 +373,7 @@ impl Actor for EntityActor {
 
         // Persist a bootstrap Created event for first-time entities so initial
         // fields are durable and replayable.
-        if self.event_store.is_some() && state.events.is_empty() {
+        if self.event_store.is_some() && state.total_event_count == 0 {
             let created = EntityEvent {
                 action: "Created".to_string(),
                 from_status: String::new(),
@@ -292,7 +392,7 @@ impl Actor for EntityActor {
                         ))
                     })?;
             }
-            state.events.push(created);
+            state.push_event_bounded(created);
         }
 
         Ok(state)
@@ -327,9 +427,9 @@ impl Actor for EntityActor {
                     table.states
                 );
                 debug_assert!(
-                    state.events.len() < MAX_EVENTS_PER_ENTITY,
+                    state.total_event_count < MAX_EVENTS_PER_ENTITY,
                     "PRECONDITION: event budget exhausted ({} >= {})",
-                    state.events.len(),
+                    state.total_event_count,
                     MAX_EVENTS_PER_ENTITY
                 );
                 debug_assert!(
@@ -340,7 +440,7 @@ impl Actor for EntityActor {
                 );
 
                 // TigerStyle: Budget enforcement (not just assertions -- hard limits)
-                if state.events.len() >= MAX_EVENTS_PER_ENTITY {
+                if state.total_event_count >= MAX_EVENTS_PER_ENTITY {
                     ctx.reply(EntityResponse {
                         success: false,
                         state: state.clone(),
@@ -355,7 +455,7 @@ impl Actor for EntityActor {
                     return Ok(());
                 }
 
-                let event_count_before = state.events.len();
+                let event_count_before = state.total_event_count;
                 let state_before = state.clone();
                 let result = super::effects::process_action_with_xref(
                     state,
@@ -414,7 +514,19 @@ impl Actor for EntityActor {
                     wide_event::emit_span(&wide);
                     wide_event::emit_metrics(&wide);
 
-                    state.events.push(event);
+                    state.push_event_bounded(event);
+
+                    if let Some(ref store) = self.event_store
+                        && let Err(e) =
+                            Self::maybe_save_snapshot(store, &self.persistence_id(), state).await
+                    {
+                        tracing::warn!(
+                            entity = %state.entity_id,
+                            seq = state.sequence_nr,
+                            error = %e,
+                            "failed to persist snapshot"
+                        );
+                    }
 
                     // TigerStyle: Assert postconditions after every transition.
                     debug_assert!(
@@ -424,18 +536,18 @@ impl Actor for EntityActor {
                         name
                     );
                     debug_assert!(
-                        state.events.len() == event_count_before + 1,
-                        "POSTCONDITION: event log must grow by exactly 1 (was {}, now {})",
+                        state.total_event_count == event_count_before + 1,
+                        "POSTCONDITION: event count must grow by exactly 1 (was {}, now {})",
                         event_count_before,
-                        state.events.len()
+                        state.total_event_count
                     );
                     debug_assert!(
                         state
                             .events
-                            .last()
+                            .back()
                             .expect("events non-empty after push")
                             .action
-                            == name, // ci-ok: post-assertion, events.len() just checked
+                            == name, // ci-ok: post-assertion, just pushed an event
                         "POSTCONDITION: last event must be the action that just fired"
                     );
 
@@ -443,7 +555,8 @@ impl Actor for EntityActor {
                         entity = %state.entity_id,
                         action = %name,
                         to = %state.status,
-                        events = state.events.len(),
+                        events_total = state.total_event_count,
+                        events_recent = state.events.len(),
                         "transition applied"
                     );
 
@@ -557,7 +670,8 @@ impl Actor for EntityActor {
         tracing::info!(
             entity = %state.entity_id,
             status = %state.status,
-            events = state.events.len(),
+            events_total = state.total_event_count,
+            events_recent = state.events.len(),
             "entity actor stopped"
         );
     }
@@ -566,6 +680,7 @@ impl Actor for EntityActor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
     use std::time::Duration;
     use temper_jit::table::TransitionTable;
     use temper_runtime::ActorSystem;
@@ -835,5 +950,77 @@ mod tests {
         assert_eq!(r1.state.status, "Cancelled");
         assert_eq!(r2.state.status, "Draft");
         assert_eq!(r2.state.item_count, 1);
+    }
+
+    #[test]
+    fn snapshot_serialization_excludes_recent_events() {
+        let mut state = EntityState {
+            entity_type: "Order".to_string(),
+            entity_id: "order-snap".to_string(),
+            status: "Submitted".to_string(),
+            item_count: 1,
+            counters: BTreeMap::from([("items".to_string(), 1)]),
+            booleans: BTreeMap::new(),
+            lists: BTreeMap::new(),
+            fields: serde_json::json!({"Id": "order-snap", "Status": "Submitted"}),
+            events: VecDeque::new(),
+            total_event_count: 2,
+            sequence_nr: 2,
+        };
+        state.push_event_bounded(EntityEvent {
+            action: "SubmitOrder".to_string(),
+            from_status: "Draft".to_string(),
+            to_status: "Submitted".to_string(),
+            timestamp: sim_now(),
+            params: serde_json::json!({}),
+        });
+
+        let bytes = EntityActor::serialize_snapshot_state(&state).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(value.get("events").is_none());
+        assert_eq!(
+            value.get("total_event_count").and_then(|v| v.as_u64()),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn snapshot_restore_rehydrates_state_without_recent_events() {
+        let state = EntityState {
+            entity_type: "Order".to_string(),
+            entity_id: "order-snap".to_string(),
+            status: "Processing".to_string(),
+            item_count: 3,
+            counters: BTreeMap::from([("items".to_string(), 3)]),
+            booleans: BTreeMap::from([("paid".to_string(), true)]),
+            lists: BTreeMap::new(),
+            fields: serde_json::json!({"Id": "order-snap", "Status": "Processing"}),
+            events: VecDeque::new(),
+            total_event_count: 42,
+            sequence_nr: 42,
+        };
+        let bytes = EntityActor::serialize_snapshot_state(&state).unwrap();
+
+        let mut restored = EntityState {
+            entity_type: "Order".to_string(),
+            entity_id: "placeholder".to_string(),
+            status: "Draft".to_string(),
+            item_count: 0,
+            counters: BTreeMap::new(),
+            booleans: BTreeMap::new(),
+            lists: BTreeMap::new(),
+            fields: serde_json::json!({}),
+            events: VecDeque::new(),
+            total_event_count: 0,
+            sequence_nr: 0,
+        };
+
+        let ok = EntityActor::apply_snapshot_bytes(&mut restored, 42, &bytes);
+        assert!(ok);
+        assert_eq!(restored.entity_id, "order-snap");
+        assert_eq!(restored.status, "Processing");
+        assert_eq!(restored.total_event_count, 42);
+        assert!(restored.events.is_empty());
+        assert_eq!(restored.sequence_nr, 42);
     }
 }

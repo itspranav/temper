@@ -149,7 +149,7 @@ pub(crate) async fn handle_get_entity_history(
 fn format_history_response(
     entity_type: &str,
     entity_id: &str,
-    events: &[EntityEvent],
+    events: &std::collections::VecDeque<EntityEvent>,
 ) -> serde_json::Value {
     let formatted: Vec<serde_json::Value> = events
         .iter()

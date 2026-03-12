@@ -4,6 +4,22 @@ use std::collections::BTreeMap;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+const METRICS_LABEL_BUDGET: usize = 10_000;
+
+fn evict_least_incremented(map: &mut BTreeMap<String, u64>) {
+    while map.len() > METRICS_LABEL_BUDGET {
+        let victim = map
+            .iter()
+            .min_by_key(|(k, v)| (**v, *k))
+            .map(|(k, _)| k.clone());
+        if let Some(key) = victim {
+            map.remove(&key);
+        } else {
+            break;
+        }
+    }
+}
+
 /// Lightweight metrics collector for the /observe endpoints.
 ///
 /// Uses atomic counters for totals and a `RwLock<BTreeMap>` for per-label
@@ -57,6 +73,7 @@ impl MetricsCollector {
         };
         if let Ok(mut map) = self.transitions.write() {
             *map.entry(label).or_insert(0) += 1;
+            evict_least_incremented(&mut map);
         }
         self.transitions_total.fetch_add(1, Ordering::Relaxed);
         if !success {
@@ -69,6 +86,7 @@ impl MetricsCollector {
         let key = format!("{tenant}:{entity_type}:{result}");
         if let Ok(mut map) = self.cross_invariant_checks.write() {
             *map.entry(key).or_insert(0) += 1;
+            evict_least_incremented(&mut map);
         }
     }
 
@@ -77,6 +95,7 @@ impl MetricsCollector {
         let key = format!("{tenant}:{invariant}:{kind}");
         if let Ok(mut map) = self.cross_invariant_violations.write() {
             *map.entry(key).or_insert(0) += 1;
+            evict_least_incremented(&mut map);
         }
     }
 
@@ -90,6 +109,7 @@ impl MetricsCollector {
         let key = format!("{tenant}:{entity_type}:{operation}");
         if let Ok(mut map) = self.relation_integrity_violations.write() {
             *map.entry(key).or_insert(0) += 1;
+            evict_least_incremented(&mut map);
         }
     }
 
@@ -103,6 +123,7 @@ impl MetricsCollector {
             .unwrap_or_else(|| "+Inf".to_string());
         if let Ok(mut map) = self.cross_invariant_eval_duration_ms_bucket.write() {
             *map.entry(bucket).or_insert(0) += 1;
+            evict_least_incremented(&mut map);
         }
     }
 

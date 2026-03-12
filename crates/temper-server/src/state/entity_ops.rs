@@ -1,7 +1,7 @@
 //! Entity lifecycle methods for ServerState (spawn, query, delete, index).
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use tracing::instrument;
 
@@ -14,6 +14,17 @@ use super::ServerState;
 use crate::entity_actor::{EntityActor, EntityMsg, EntityResponse};
 use crate::events::EntityStateChange;
 use crate::registry::{VerificationDetail, VerificationStatus};
+
+fn actor_idle_timeout_secs() -> i64 {
+    static ACTOR_IDLE_TIMEOUT: OnceLock<i64> = OnceLock::new();
+    *ACTOR_IDLE_TIMEOUT.get_or_init(|| {
+        std::env::var("TEMPER_ACTOR_IDLE_TIMEOUT") // determinism-ok: read once at startup
+            .ok()
+            .and_then(|v| v.trim().parse::<i64>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(300)
+    })
+}
 
 /// Error returned when the verification gate blocks an operation.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -42,6 +53,48 @@ pub struct FailedLevelInfo {
 }
 
 impl ServerState {
+    fn touch_actor_access(&self, actor_key: &str) {
+        if let Ok(mut last_accessed) = self.last_accessed.write() {
+            last_accessed.insert(actor_key.to_string(), sim_now());
+        }
+    }
+
+    /// Populate `entity_index` from the event store without spawning actors.
+    ///
+    /// This is the memory-safe startup/list path: we discover persisted
+    /// entities while deferring actor allocation until first access.
+    #[instrument(skip_all, fields(otel.name = "entity.populate_index_from_store", tenant = %tenant))]
+    pub async fn populate_index_from_store(&self, tenant: &TenantId) {
+        let Some(store) = self.event_store.as_ref() else {
+            return;
+        };
+
+        match store.list_entity_ids(tenant.as_str()).await {
+            Ok(entities) => {
+                let mut index = self.entity_index.write().unwrap(); // ci-ok: infallible lock
+                for (entity_type, entity_id) in &entities {
+                    let index_key = format!("{tenant}:{entity_type}");
+                    index
+                        .entry(index_key)
+                        .or_default()
+                        .insert(entity_id.clone());
+                }
+                tracing::info!(
+                    tenant = %tenant,
+                    count = entities.len(),
+                    "populated entity index from event store"
+                );
+            }
+            Err(e) => {
+                tracing::error!(
+                    tenant = %tenant,
+                    error = %e,
+                    "failed to populate entity index from event store"
+                );
+            }
+        }
+    }
+
     /// Hydrate actor state from the event store by spawning actors for all
     /// entities that have persisted events in this tenant.
     #[instrument(skip_all, fields(otel.name = "entity.hydrate_from_store", tenant = %tenant))]
@@ -109,6 +162,7 @@ impl ServerState {
         {
             let registry = self.actor_registry.read().unwrap();
             if let Some(actor_ref) = registry.get(&key) {
+                self.touch_actor_access(&key);
                 return Some(actor_ref.clone());
             }
         }
@@ -164,6 +218,7 @@ impl ServerState {
                 .or_default()
                 .insert(entity_id.to_string());
         }
+        self.touch_actor_access(&key);
 
         Some(actor_ref)
     }
@@ -177,6 +232,10 @@ impl ServerState {
         {
             let mut registry = self.actor_registry.write().unwrap();
             registry.remove(&actor_key);
+        }
+        {
+            let mut last_accessed = self.last_accessed.write().unwrap();
+            last_accessed.remove(&actor_key);
         }
 
         // Remove from entity index
@@ -433,28 +492,117 @@ impl ServerState {
             return ids;
         }
 
-        let Some(store) = self.event_store.as_ref() else {
+        if self.event_store.is_none() {
             return ids;
-        };
-
-        if let Ok(all_entities) = store.list_entity_ids(tenant.as_str()).await {
-            for (et, eid) in all_entities {
-                if et == entity_type {
-                    // Best effort: this also backfills entity_index.
-                    let _ = self.get_or_spawn_tenant_actor(tenant, &et, &eid);
-                }
-            }
         }
+        self.populate_index_from_store(tenant).await;
 
         self.list_entity_ids(tenant, entity_type)
     }
 
+    /// Passivate actors that have been idle longer than the configured timeout.
+    ///
+    /// Keeps `entity_index` entries intact so future accesses can lazy-spawn.
+    #[instrument(skip_all, fields(otel.name = "entity.passivate_idle_actors"))]
+    pub async fn passivate_idle_actors(&self) {
+        let timeout_secs = actor_idle_timeout_secs();
+        let cutoff = sim_now() - chrono::Duration::seconds(timeout_secs);
+
+        let candidates: Vec<(String, ActorRef<EntityMsg>)> = {
+            let registry = self.actor_registry.read().unwrap(); // ci-ok: infallible lock
+            let last_accessed = self.last_accessed.read().unwrap(); // ci-ok: infallible lock
+            registry
+                .iter()
+                .filter_map(|(key, actor_ref)| {
+                    let last_seen = last_accessed.get(key)?;
+                    if *last_seen <= cutoff {
+                        Some((key.clone(), actor_ref.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+
+        if candidates.is_empty() {
+            return;
+        }
+
+        let mut passivated = 0usize;
+        for (actor_key, actor_ref) in candidates {
+            if let Some(ref store) = self.event_store
+                && let Ok(response) = actor_ref
+                    .ask::<EntityResponse>(EntityMsg::GetState, self.action_dispatch_timeout)
+                    .await
+                && response.state.sequence_nr > 0
+            {
+                // Snapshot excludes bounded in-memory recent event history.
+                let mut snapshot_value = match serde_json::to_value(&response.state) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::warn!(actor_key = %actor_key, error = %e, "failed to encode snapshot value");
+                        serde_json::Value::Null
+                    }
+                };
+                if let Some(obj) = snapshot_value.as_object_mut() {
+                    obj.remove("events");
+                }
+                if !snapshot_value.is_null()
+                    && let Ok(snapshot_bytes) = serde_json::to_vec(&snapshot_value)
+                    && let Err(e) = store
+                        .save_snapshot(&actor_key, response.state.sequence_nr, &snapshot_bytes)
+                        .await
+                {
+                    tracing::warn!(
+                        actor_key = %actor_key,
+                        seq = response.state.sequence_nr,
+                        error = %e,
+                        "failed to save snapshot during passivation"
+                    );
+                }
+            }
+
+            let _ = actor_ref.stop();
+
+            let removed = {
+                let mut registry = self.actor_registry.write().unwrap(); // ci-ok: infallible lock
+                if registry
+                    .get(&actor_key)
+                    .is_some_and(|current| current.id().uid == actor_ref.id().uid)
+                {
+                    registry.remove(&actor_key);
+                    true
+                } else {
+                    false
+                }
+            };
+
+            if removed {
+                if let Ok(mut last_accessed) = self.last_accessed.write() {
+                    last_accessed.remove(&actor_key);
+                }
+                passivated += 1;
+            }
+        }
+
+        if passivated > 0 {
+            tracing::info!(count = passivated, timeout_secs, "passivated idle actors");
+        }
+    }
+
     /// Update Agent.Hint annotations based on trajectory analysis.
     pub fn enrich_metadata(&self, action_name: &str, hint: &str) {
-        self.agent_hints
-            .write()
-            .unwrap() // ci-ok: infallible lock
-            .insert(action_name.to_string(), hint.to_string());
+        const AGENT_HINTS_BUDGET: usize = 1_000;
+        let mut hints = self.agent_hints.write().unwrap(); // ci-ok: infallible lock
+        hints.insert(action_name.to_string(), hint.to_string());
+        while hints.len() > AGENT_HINTS_BUDGET {
+            let oldest_key = hints.iter().next().map(|(k, _)| k.clone());
+            if let Some(k) = oldest_key {
+                hints.remove(&k);
+            } else {
+                break;
+            }
+        }
     }
 
     /// Check the verification gate for a specific entity type.
@@ -562,12 +710,7 @@ impl ServerState {
             .await
         {
             let status = response.state.status.clone();
-            if let Ok(mut cache) = self.entity_state_cache.write() {
-                cache.insert(
-                    cache_key,
-                    (status.clone(), temper_runtime::scheduler::sim_now()),
-                );
-            }
+            self.cache_entity_status(cache_key, status.clone());
             Some(status)
         } else {
             None

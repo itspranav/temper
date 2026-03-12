@@ -17,6 +17,8 @@ use serde::Serialize;
 
 use crate::records::*;
 
+const RECORD_MAP_BUDGET: usize = 10_000;
+
 /// Save a map of serializable records to a sub-directory as individual JSON files.
 fn save_records_to_subdir<T: Serialize>(
     dir: &Path,
@@ -33,16 +35,33 @@ fn save_records_to_subdir<T: Serialize>(
     Ok(())
 }
 
+fn evict_oldest_if_over_budget<T>(
+    records: &mut BTreeMap<RecordId, T>,
+    timestamp_of: impl Fn(&T) -> i64,
+) {
+    while records.len() > RECORD_MAP_BUDGET {
+        let oldest_id = records
+            .iter()
+            .min_by_key(|(id, record)| (timestamp_of(record), *id))
+            .map(|(id, _)| id.clone());
+        if let Some(id) = oldest_id {
+            records.remove(&id);
+        } else {
+            break;
+        }
+    }
+}
+
 /// Generate insert and get methods for a record type stored in a named field.
 macro_rules! record_accessors {
     ($field:ident, $record_ty:ty, $insert_fn:ident, $insert_doc:literal, $get_fn:ident, $get_doc:literal) => {
         #[doc = $insert_doc]
         pub fn $insert_fn(&self, record: $record_ty) {
-            self.inner
-                .write()
-                .unwrap() // ci-ok: infallible lock
-                .$field
-                .insert(record.header.id.clone(), record);
+            let mut inner = self.inner.write().unwrap(); // ci-ok: infallible lock
+            inner.$field.insert(record.header.id.clone(), record);
+            evict_oldest_if_over_budget(&mut inner.$field, |r: &$record_ty| {
+                r.header.timestamp.timestamp_millis()
+            });
         }
 
         #[doc = $get_doc]
