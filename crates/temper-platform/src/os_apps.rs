@@ -402,12 +402,16 @@ mod tests {
         }
 
         // Restore from Turso (this is what build_registry does on boot).
+        // Fetch async data outside the lock, then assign synchronously to avoid
+        // holding a RwLockWriteGuard across an await point.
         {
-            let mut registry = state2.registry.write().unwrap();
-            let restored = restore_registry_from_turso(&mut registry, &turso2)
+            use temper_server::registry::SpecRegistry;
+            let mut temp_registry = SpecRegistry::new();
+            let restored = restore_registry_from_turso(&mut temp_registry, &turso2)
                 .await
                 .unwrap();
             assert!(restored > 0, "expected restored specs, got 0");
+            *state2.registry.write().unwrap() = temp_registry;
         }
 
         // Verify specs survived the restart.
