@@ -205,6 +205,61 @@ async fn list_entity_ids_returns_distinct_pairs() {
 }
 
 #[tokio::test]
+async fn list_entity_ids_excludes_entities_with_deleted_tombstones() {
+    let store = make_store("entity-list-deleted").await;
+    let tenant = format!("tenant-{}", uuid::Uuid::new_v4());
+
+    let deleted_order = format!("{tenant}:Order:ord-deleted");
+    let active_order = format!("{tenant}:Order:ord-active");
+
+    store
+        .append(
+            &deleted_order,
+            0,
+            &[test_envelope(
+                "Created",
+                serde_json::json!({ "id": "ord-deleted" }),
+            )],
+        )
+        .await
+        .unwrap();
+    store
+        .append(
+            &deleted_order,
+            1,
+            &[test_envelope(
+                "Deleted",
+                serde_json::json!({
+                    "action": "Deleted",
+                    "from_status": "Draft",
+                    "to_status": "Deleted"
+                }),
+            )],
+        )
+        .await
+        .unwrap();
+    store
+        .append(
+            &active_order,
+            0,
+            &[test_envelope(
+                "Created",
+                serde_json::json!({ "id": "ord-active" }),
+            )],
+        )
+        .await
+        .unwrap();
+
+    let mut entities = store.list_entity_ids(&tenant).await.unwrap();
+    entities.sort();
+
+    assert_eq!(
+        entities,
+        vec![("Order".to_string(), "ord-active".to_string())]
+    );
+}
+
+#[tokio::test]
 async fn migrate_is_idempotent() {
     let store = make_store("migrate-idempotent").await;
 

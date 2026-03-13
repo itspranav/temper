@@ -266,7 +266,31 @@ impl EntityActor {
         match store.read_events(persistence_id, from_sequence).await {
             Ok(envelopes) => {
                 for env in &envelopes {
-                    if let Ok(event) = serde_json::from_value::<EntityEvent>(env.payload.clone()) {
+                    let parsed_event = serde_json::from_value::<EntityEvent>(env.payload.clone());
+
+                    // Tombstone is terminal: once deleted, entity must not replay
+                    // into a live state. Stop at the first Deleted event.
+                    if env.event_type == "Deleted" {
+                        let tombstone = parsed_event.unwrap_or_else(|_| EntityEvent {
+                            action: "Deleted".to_string(),
+                            from_status: state.status.clone(),
+                            to_status: "Deleted".to_string(),
+                            timestamp: env.metadata.timestamp,
+                            params: serde_json::json!({}),
+                        });
+                        state.status = tombstone.to_status.clone();
+                        if let Some(obj) = state.fields.as_object_mut() {
+                            obj.insert(
+                                "Status".to_string(),
+                                serde_json::Value::String(state.status.clone()),
+                            );
+                        }
+                        state.push_event_bounded(tombstone);
+                        state.sequence_nr = env.sequence_nr;
+                        break;
+                    }
+
+                    if let Ok(event) = parsed_event {
                         // Re-evaluate through TransitionTable to get effects.
                         // Build the same EvalContext the handler would have used.
                         let eval_ctx = super::effects::build_eval_context(state);
@@ -655,6 +679,39 @@ impl Actor for EntityActor {
                 });
             }
             EntityMsg::Delete => {
+                let deleted = EntityEvent {
+                    action: "Deleted".to_string(),
+                    from_status: state.status.clone(),
+                    to_status: "Deleted".to_string(),
+                    timestamp: sim_now(),
+                    params: serde_json::json!({}),
+                };
+
+                if let Some(ref store) = self.event_store
+                    && let Err(e) =
+                        Self::persist_event(store, &self.persistence_id(), state, &deleted).await
+                {
+                    ctx.reply(EntityResponse {
+                        success: false,
+                        state: state.clone(),
+                        error: Some(format!("persistence failed: {e}")),
+                        custom_effects: vec![],
+                        scheduled_actions: vec![],
+                        spawn_requests: vec![],
+                        spec_governed: true,
+                    });
+                    return Ok(());
+                }
+
+                state.status = deleted.to_status.clone();
+                if let Some(obj) = state.fields.as_object_mut() {
+                    obj.insert(
+                        "Status".to_string(),
+                        serde_json::Value::String(state.status.clone()),
+                    );
+                }
+                state.push_event_bounded(deleted);
+
                 ctx.reply(EntityResponse {
                     success: true,
                     state: state.clone(),
@@ -681,276 +738,5 @@ impl Actor for EntityActor {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::Duration;
-    use temper_jit::table::TransitionTable;
-    use temper_runtime::ActorSystem;
-
-    const ORDER_IOA: &str = include_str!("../../../../test-fixtures/specs/order.ioa.toml");
-
-    fn order_table() -> Arc<RwLock<TransitionTable>> {
-        Arc::new(RwLock::new(TransitionTable::from_ioa_source(ORDER_IOA)))
-    }
-
-    // =============================================
-    // DST-FIRST: Test the actor through the runtime
-    // =============================================
-
-    #[tokio::test]
-    async fn dst_entity_starts_in_initial_state() {
-        let system = ActorSystem::new("dst");
-        let table = order_table();
-        let actor = EntityActor::new("Order", "order-1", table, serde_json::json!({}));
-        let actor_ref = system.spawn(actor, "order-1");
-
-        let response: EntityResponse = actor_ref
-            .ask(EntityMsg::GetState, Duration::from_secs(1))
-            .await
-            .unwrap();
-
-        assert_eq!(response.state.status, "Draft");
-        assert_eq!(response.state.entity_id, "order-1");
-        assert_eq!(response.state.item_count, 0);
-        assert!(response.state.events.is_empty());
-    }
-
-    #[tokio::test]
-    async fn dst_add_item_then_submit() {
-        let system = ActorSystem::new("dst");
-        let table = order_table();
-        let actor = EntityActor::new("Order", "order-2", table, serde_json::json!({}));
-        let actor_ref = system.spawn(actor, "order-2");
-
-        // Add an item (Draft -> Draft, item_count 0 -> 1)
-        let r: EntityResponse = actor_ref
-            .ask(
-                EntityMsg::Action {
-                    name: "AddItem".into(),
-                    params: serde_json::json!({"ProductId": "prod-1"}),
-                    cross_entity_booleans: std::collections::BTreeMap::new(),
-                },
-                Duration::from_secs(1),
-            )
-            .await
-            .unwrap();
-        assert!(r.success);
-        assert_eq!(r.state.status, "Draft");
-        assert_eq!(r.state.item_count, 1);
-
-        // Submit (Draft -> Submitted)
-        let r: EntityResponse = actor_ref
-            .ask(
-                EntityMsg::Action {
-                    name: "SubmitOrder".into(),
-                    params: serde_json::json!({"ShippingAddressId": "addr-1"}),
-                    cross_entity_booleans: std::collections::BTreeMap::new(),
-                },
-                Duration::from_secs(1),
-            )
-            .await
-            .unwrap();
-        assert!(r.success, "submit should succeed, got: {:?}", r.error);
-        assert_eq!(r.state.status, "Submitted");
-        assert_eq!(r.state.events.len(), 2); // AddItem + SubmitOrder
-    }
-
-    #[tokio::test]
-    async fn dst_cannot_submit_without_items() {
-        let system = ActorSystem::new("dst");
-        let table = order_table();
-        let actor = EntityActor::new("Order", "order-3", table, serde_json::json!({}));
-        let actor_ref = system.spawn(actor, "order-3");
-
-        // Try to submit with 0 items -- should fail
-        let r: EntityResponse = actor_ref
-            .ask(
-                EntityMsg::Action {
-                    name: "SubmitOrder".into(),
-                    params: serde_json::json!({}),
-                    cross_entity_booleans: std::collections::BTreeMap::new(),
-                },
-                Duration::from_secs(1),
-            )
-            .await
-            .unwrap();
-        assert!(!r.success);
-        assert_eq!(r.state.status, "Draft"); // Still in Draft
-    }
-
-    #[tokio::test]
-    async fn dst_full_order_lifecycle() {
-        let system = ActorSystem::new("dst");
-        let table = order_table();
-        let actor = EntityActor::new("Order", "order-4", table, serde_json::json!({}));
-        let actor_ref = system.spawn(actor, "order-4");
-
-        // Draft -> AddItem -> SubmitOrder -> ConfirmOrder -> ProcessOrder -> ShipOrder -> DeliverOrder
-        let actions = [
-            ("AddItem", serde_json::json!({})),
-            ("SubmitOrder", serde_json::json!({})),
-            ("ConfirmOrder", serde_json::json!({})),
-            ("ProcessOrder", serde_json::json!({})),
-            ("ShipOrder", serde_json::json!({})),
-            ("DeliverOrder", serde_json::json!({})),
-        ];
-
-        let expected_states = [
-            "Draft",      // after AddItem
-            "Submitted",  // after SubmitOrder
-            "Confirmed",  // after ConfirmOrder
-            "Processing", // after ProcessOrder
-            "Shipped",    // after ShipOrder
-            "Delivered",  // after DeliverOrder
-        ];
-
-        for (i, (action, params)) in actions.into_iter().enumerate() {
-            let r: EntityResponse = actor_ref
-                .ask(
-                    EntityMsg::Action {
-                        name: action.into(),
-                        params,
-                        cross_entity_booleans: std::collections::BTreeMap::new(),
-                    },
-                    Duration::from_secs(1),
-                )
-                .await
-                .unwrap();
-            assert!(r.success, "step {i} ({action}) failed: {:?}", r.error);
-            assert_eq!(
-                r.state.status, expected_states[i],
-                "step {i} ({action}) wrong state"
-            );
-        }
-
-        // Verify full event log
-        let r: EntityResponse = actor_ref
-            .ask(EntityMsg::GetState, Duration::from_secs(1))
-            .await
-            .unwrap();
-        assert_eq!(r.state.events.len(), 6);
-        assert_eq!(r.state.status, "Delivered");
-    }
-
-    #[tokio::test]
-    async fn dst_cancel_from_draft() {
-        let system = ActorSystem::new("dst");
-        let table = order_table();
-        let actor = EntityActor::new("Order", "order-5", table, serde_json::json!({}));
-        let actor_ref = system.spawn(actor, "order-5");
-
-        let r: EntityResponse = actor_ref
-            .ask(
-                EntityMsg::Action {
-                    name: "CancelOrder".into(),
-                    params: serde_json::json!({"Reason": "changed mind"}),
-                    cross_entity_booleans: std::collections::BTreeMap::new(),
-                },
-                Duration::from_secs(1),
-            )
-            .await
-            .unwrap();
-        assert!(r.success);
-        assert_eq!(r.state.status, "Cancelled");
-    }
-
-    #[tokio::test]
-    async fn dst_cannot_cancel_shipped_order() {
-        let system = ActorSystem::new("dst");
-        let table = order_table();
-        let actor = EntityActor::new("Order", "order-6", table, serde_json::json!({}));
-        let actor_ref = system.spawn(actor, "order-6");
-
-        // Drive to Shipped
-        for action in &[
-            "AddItem",
-            "SubmitOrder",
-            "ConfirmOrder",
-            "ProcessOrder",
-            "ShipOrder",
-        ] {
-            let _: EntityResponse = actor_ref
-                .ask(
-                    EntityMsg::Action {
-                        name: action.to_string(),
-                        params: serde_json::json!({}),
-                        cross_entity_booleans: std::collections::BTreeMap::new(),
-                    },
-                    Duration::from_secs(1),
-                )
-                .await
-                .unwrap();
-        }
-
-        // Try to cancel -- should fail
-        let r: EntityResponse = actor_ref
-            .ask(
-                EntityMsg::Action {
-                    name: "CancelOrder".into(),
-                    params: serde_json::json!({}),
-                    cross_entity_booleans: std::collections::BTreeMap::new(),
-                },
-                Duration::from_secs(1),
-            )
-            .await
-            .unwrap();
-        assert!(!r.success);
-        assert_eq!(r.state.status, "Shipped"); // Still Shipped
-        assert!(r.error.unwrap().contains("not valid"));
-    }
-
-    #[tokio::test]
-    async fn dst_multiple_actors_independent() {
-        let system = ActorSystem::new("dst");
-        let table = order_table();
-
-        let a1 = system.spawn(
-            EntityActor::new("Order", "order-A", table.clone(), serde_json::json!({})),
-            "order-A",
-        );
-        let a2 = system.spawn(
-            EntityActor::new("Order", "order-B", table.clone(), serde_json::json!({})),
-            "order-B",
-        );
-
-        // Cancel order A
-        let _: EntityResponse = a1
-            .ask(
-                EntityMsg::Action {
-                    name: "CancelOrder".into(),
-                    params: serde_json::json!({}),
-                    cross_entity_booleans: std::collections::BTreeMap::new(),
-                },
-                Duration::from_secs(1),
-            )
-            .await
-            .unwrap();
-
-        // Add item to order B
-        let _: EntityResponse = a2
-            .ask(
-                EntityMsg::Action {
-                    name: "AddItem".into(),
-                    params: serde_json::json!({}),
-                    cross_entity_booleans: std::collections::BTreeMap::new(),
-                },
-                Duration::from_secs(1),
-            )
-            .await
-            .unwrap();
-
-        // Verify independence
-        let r1: EntityResponse = a1
-            .ask(EntityMsg::GetState, Duration::from_secs(1))
-            .await
-            .unwrap();
-        let r2: EntityResponse = a2
-            .ask(EntityMsg::GetState, Duration::from_secs(1))
-            .await
-            .unwrap();
-
-        assert_eq!(r1.state.status, "Cancelled");
-        assert_eq!(r2.state.status, "Draft");
-        assert_eq!(r2.state.item_count, 1);
-    }
-}
+#[path = "actor_test.rs"]
+mod tests;

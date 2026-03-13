@@ -223,9 +223,17 @@ impl EventStore for TursoEventStore {
         let conn = self.configured_connection().await?;
         let mut rows = conn
             .query(
-                "SELECT DISTINCT entity_type, entity_id
-                 FROM events
-                 WHERE tenant = ?1",
+                "SELECT DISTINCT e.entity_type, e.entity_id
+                 FROM events e
+                 WHERE e.tenant = ?1
+                   AND NOT EXISTS (
+                     SELECT 1
+                     FROM events d
+                     WHERE d.tenant = e.tenant
+                       AND d.entity_type = e.entity_type
+                       AND d.entity_id = e.entity_id
+                       AND d.event_type = 'Deleted'
+                   )",
                 params![tenant],
             )
             .await
