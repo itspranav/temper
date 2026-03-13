@@ -231,7 +231,10 @@ async fn delete_failure_does_not_remove_live_entity_from_index() {
         "delete should fail when tombstone append hits sequence race"
     );
     assert!(
-        response.error.as_deref().is_some_and(|e| e.contains("persistence failed")),
+        response
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("persistence failed")),
         "expected persistence failure error, got: {:?}",
         response.error
     );
