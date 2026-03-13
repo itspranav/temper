@@ -295,13 +295,16 @@ impl EntityActor {
                             state.status = event.to_status.clone();
                         }
 
+                        // Sync action params into fields — mirrors the live
+                        // process_action() path (effects.rs:155) so data fields
+                        // like Title, Description, Priority survive replay.
+                        super::effects::sync_fields(state, &event.params);
+
                         state.push_event_bounded(event);
                     }
                     state.sequence_nr = env.sequence_nr;
                 }
                 if !envelopes.is_empty() {
-                    // Sync all state into fields after full replay
-                    super::effects::sync_fields(state, &serde_json::json!({}));
                     tracing::info!(
                         entity = %state.entity_id,
                         snapshot_loaded = loaded_snapshot,

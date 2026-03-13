@@ -285,3 +285,104 @@ async fn dst_in_memory_entity_unaffected() {
     assert!(r.success);
     assert_eq!(r.state.status, "Submitted");
 }
+
+// =========================================================================
+// Test: Data fields (action params) survive replay
+// =========================================================================
+
+#[tokio::test]
+async fn dst_replay_preserves_data_fields() {
+    for seed in 0..NUM_SEEDS {
+        let (_guard, _clock, _id_gen) = install_deterministic_context(seed);
+        let store = sim_store(seed);
+        let table = order_table();
+        let entity_id = format!("ord-fields-{seed}");
+
+        // Phase 1: Create entity with data fields in action params.
+        let pre_crash_fields = {
+            let system = ActorSystem::new("dst-fields-1");
+            let initial = serde_json::json!({"Title": "Test Order", "CustomerId": "cust-42"});
+            let actor = EntityActor::with_persistence(
+                "Order",
+                &entity_id,
+                table.clone(),
+                initial,
+                store.clone(),
+            )
+            .with_tenant("default");
+            let actor_ref = system.spawn(actor, &entity_id);
+
+            // AddItem with ProductId param — this is a data field.
+            let r = dispatch_action(
+                &actor_ref,
+                "AddItem",
+                serde_json::json!({"ProductId": "prod-99", "Quantity": "3"}),
+            )
+            .await;
+            assert!(r.success, "seed {seed}: AddItem failed: {:?}", r.error);
+
+            // SubmitOrder with more data fields.
+            let r = dispatch_action(
+                &actor_ref,
+                "SubmitOrder",
+                serde_json::json!({"ShippingAddressId": "addr-1", "PaymentMethod": "credit"}),
+            )
+            .await;
+            assert!(r.success, "seed {seed}: SubmitOrder failed: {:?}", r.error);
+
+            let state = get_state(&actor_ref).await;
+            state.state.fields.clone()
+        };
+        // Actor dropped — simulates crash.
+
+        // Phase 2: Respawn with same store, verify data fields survive.
+        let (_guard2, _clock2, _id_gen2) = install_deterministic_context(seed + 2000);
+        let system2 = ActorSystem::new("dst-fields-2");
+        let actor2 = EntityActor::with_persistence(
+            "Order",
+            &entity_id,
+            table.clone(),
+            serde_json::json!({}),
+            store.clone(),
+        )
+        .with_tenant("default");
+        let actor_ref2 = system2.spawn(actor2, format!("{entity_id}-replay"));
+
+        let post = get_state(&actor_ref2).await;
+        let post_fields = &post.state.fields;
+
+        // Verify initial fields from creation survive.
+        assert_eq!(
+            post_fields.get("Title").and_then(|v| v.as_str()),
+            Some("Test Order"),
+            "seed {seed}: Title lost after replay"
+        );
+        assert_eq!(
+            post_fields.get("CustomerId").and_then(|v| v.as_str()),
+            Some("cust-42"),
+            "seed {seed}: CustomerId lost after replay"
+        );
+        // Verify action params survive.
+        assert_eq!(
+            post_fields.get("ProductId").and_then(|v| v.as_str()),
+            Some("prod-99"),
+            "seed {seed}: ProductId lost after replay"
+        );
+        assert_eq!(
+            post_fields.get("ShippingAddressId").and_then(|v| v.as_str()),
+            Some("addr-1"),
+            "seed {seed}: ShippingAddressId lost after replay"
+        );
+        assert_eq!(
+            post_fields.get("PaymentMethod").and_then(|v| v.as_str()),
+            Some("credit"),
+            "seed {seed}: PaymentMethod lost after replay"
+        );
+
+        // Verify all fields match pre-crash state.
+        assert_eq!(
+            pre_crash_fields, post.state.fields,
+            "seed {seed}: fields mismatch after replay"
+        );
+    }
+}
