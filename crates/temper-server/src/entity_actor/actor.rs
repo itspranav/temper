@@ -266,7 +266,31 @@ impl EntityActor {
         match store.read_events(persistence_id, from_sequence).await {
             Ok(envelopes) => {
                 for env in &envelopes {
-                    if let Ok(event) = serde_json::from_value::<EntityEvent>(env.payload.clone()) {
+                    let parsed_event = serde_json::from_value::<EntityEvent>(env.payload.clone());
+
+                    // Tombstone is terminal: once deleted, entity must not replay
+                    // into a live state. Stop at the first Deleted event.
+                    if env.event_type == "Deleted" {
+                        let tombstone = parsed_event.unwrap_or_else(|_| EntityEvent {
+                            action: "Deleted".to_string(),
+                            from_status: state.status.clone(),
+                            to_status: "Deleted".to_string(),
+                            timestamp: env.metadata.timestamp,
+                            params: serde_json::json!({}),
+                        });
+                        state.status = tombstone.to_status.clone();
+                        if let Some(obj) = state.fields.as_object_mut() {
+                            obj.insert(
+                                "Status".to_string(),
+                                serde_json::Value::String(state.status.clone()),
+                            );
+                        }
+                        state.push_event_bounded(tombstone);
+                        state.sequence_nr = env.sequence_nr;
+                        break;
+                    }
+
+                    if let Ok(event) = parsed_event {
                         // Re-evaluate through TransitionTable to get effects.
                         // Build the same EvalContext the handler would have used.
                         let eval_ctx = super::effects::build_eval_context(state);
@@ -655,6 +679,39 @@ impl Actor for EntityActor {
                 });
             }
             EntityMsg::Delete => {
+                let deleted = EntityEvent {
+                    action: "Deleted".to_string(),
+                    from_status: state.status.clone(),
+                    to_status: "Deleted".to_string(),
+                    timestamp: sim_now(),
+                    params: serde_json::json!({}),
+                };
+
+                if let Some(ref store) = self.event_store
+                    && let Err(e) =
+                        Self::persist_event(store, &self.persistence_id(), state, &deleted).await
+                {
+                    ctx.reply(EntityResponse {
+                        success: false,
+                        state: state.clone(),
+                        error: Some(format!("persistence failed: {e}")),
+                        custom_effects: vec![],
+                        scheduled_actions: vec![],
+                        spawn_requests: vec![],
+                        spec_governed: true,
+                    });
+                    return Ok(());
+                }
+
+                state.status = deleted.to_status.clone();
+                if let Some(obj) = state.fields.as_object_mut() {
+                    obj.insert(
+                        "Status".to_string(),
+                        serde_json::Value::String(state.status.clone()),
+                    );
+                }
+                state.push_event_bounded(deleted);
+
                 ctx.reply(EntityResponse {
                     success: true,
                     state: state.clone(),

@@ -6,7 +6,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 use tracing::instrument;
 
 use temper_observe::wide_event;
-use temper_runtime::persistence::EventStore;
+use temper_runtime::persistence::{EventStore, PersistenceEnvelope};
 use temper_runtime::scheduler::sim_now;
 use temper_runtime::tenant::TenantId;
 
@@ -24,6 +24,17 @@ fn actor_idle_timeout_secs() -> i64 {
             .filter(|v| *v > 0)
             .unwrap_or(300)
     })
+}
+
+fn is_deleted_envelope(event: &PersistenceEnvelope) -> bool {
+    if event.event_type == "Deleted" {
+        return true;
+    }
+    event
+        .payload
+        .get("action")
+        .and_then(serde_json::Value::as_str)
+        == Some("Deleted")
 }
 
 /// Error returned when the verification gate blocks an operation.
@@ -102,12 +113,19 @@ impl ServerState {
         if let Some(ref store) = self.event_store {
             match store.list_entity_ids(tenant.as_str()).await {
                 Ok(entities) => {
+                    let mut hydrated = 0usize;
                     for (entity_type, entity_id) in &entities {
-                        self.get_or_spawn_tenant_actor(tenant, entity_type, entity_id);
+                        if self
+                            .ensure_entity_loaded(tenant, entity_type, entity_id)
+                            .await
+                        {
+                            hydrated = hydrated.saturating_add(1);
+                        }
                     }
                     tracing::info!(
                         tenant = %tenant,
-                        count = entities.len(),
+                        count = hydrated,
+                        discovered = entities.len(),
                         "hydrated entities from event store"
                     );
                 }
@@ -463,7 +481,23 @@ impl ServerState {
         entity_type: &str,
         entity_id: &str,
     ) -> bool {
+        let persistence_id = format!("{tenant}:{entity_type}:{entity_id}");
+
         if self.entity_exists(tenant, entity_type, entity_id) {
+            let Some(store) = self.event_store.as_ref() else {
+                return true;
+            };
+
+            let events = match store.read_events(&persistence_id, 0).await {
+                Ok(events) if !events.is_empty() => events,
+                _ => return true,
+            };
+
+            if events.last().is_some_and(is_deleted_envelope) {
+                self.remove_entity(tenant, entity_type, entity_id);
+                return false;
+            }
+
             return true;
         }
 
@@ -471,15 +505,34 @@ impl ServerState {
             return false;
         };
 
-        let persistence_id = format!("{tenant}:{entity_type}:{entity_id}");
-        match store.read_events(&persistence_id, 0).await {
-            Ok(events) if !events.is_empty() => {
-                // Entity is considered loaded only if actor spawn/index backfill
-                // succeeded (e.g. transition table exists).
-                self.get_or_spawn_tenant_actor(tenant, entity_type, entity_id)
-                    .is_some()
+        let events = match store.read_events(&persistence_id, 0).await {
+            Ok(events) if !events.is_empty() => events,
+            _ => return false,
+        };
+
+        if events.last().is_some_and(is_deleted_envelope) {
+            self.remove_entity(tenant, entity_type, entity_id);
+            return false;
+        }
+
+        let Some(actor_ref) = self.get_or_spawn_tenant_actor(tenant, entity_type, entity_id) else {
+            return false;
+        };
+
+        match actor_ref
+            .ask::<EntityResponse>(EntityMsg::GetState, self.action_dispatch_timeout)
+            .await
+        {
+            Ok(response) if response.state.status == "Deleted" => {
+                let _ = actor_ref.stop();
+                self.remove_entity(tenant, entity_type, entity_id);
+                false
             }
-            _ => false,
+            Ok(_) => true,
+            Err(_) => {
+                self.remove_entity(tenant, entity_type, entity_id);
+                false
+            }
         }
     }
 
