@@ -1,6 +1,6 @@
 # ADR-0022: SSE Streaming for Agent CLI
 
-- Status: Accepted
+- Status: Partially Implemented (server-side SSE endpoints + broadcast channels on main; CLI SSE client removed in 84706247; reference impl on agent-runtime-v1 branch)
 - Date: 2026-03-03
 - Deciders: Temper core maintainers
 - Related:

@@ -369,7 +369,9 @@ async fn dst_replay_preserves_data_fields() {
             "seed {seed}: ProductId lost after replay"
         );
         assert_eq!(
-            post_fields.get("ShippingAddressId").and_then(|v| v.as_str()),
+            post_fields
+                .get("ShippingAddressId")
+                .and_then(|v| v.as_str()),
             Some("addr-1"),
             "seed {seed}: ShippingAddressId lost after replay"
         );

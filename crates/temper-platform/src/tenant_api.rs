@@ -103,7 +103,11 @@ async fn create_tenant(
         Ok(_store) => {
             // Bootstrap agent specs for the new tenant.
             // New tenant — no prior verification cache.
-            crate::bootstrap_agent_specs(&state, &req.tenant_id, &std::collections::BTreeMap::new());
+            crate::bootstrap_agent_specs(
+                &state,
+                &req.tenant_id,
+                &std::collections::BTreeMap::new(),
+            );
             (
                 StatusCode::CREATED,
                 Json(serde_json::json!(CreateTenantResponse {

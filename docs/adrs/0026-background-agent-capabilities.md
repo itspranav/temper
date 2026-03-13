@@ -1,6 +1,6 @@
 # ADR-0026: Background Agent Capabilities
 
-- Status: Accepted
+- Status: Superseded (implementation removed from main in 84706247; reference impl on agent-runtime-v1 branch; specs preserved — AgentType, Schedule entities remain bootstrapped)
 - Date: 2026-03-05
 - Deciders: Temper core maintainers
 - Related:

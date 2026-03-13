@@ -1,6 +1,6 @@
 # ADR-0023: Agent Executor Binary
 
-- Status: Accepted
+- Status: Superseded (implementation removed from main in 84706247; reference impl on agent-runtime-v1 branch; to be reimplemented as spec-driven entity with LLM calls as IOA integrations)
 - Date: 2026-03-03
 - Deciders: Temper core maintainers
 - Related:

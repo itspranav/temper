@@ -214,9 +214,7 @@ impl DeployPipeline {
                 registry
                     .get_tenant(&tenant_id)
                     .and_then(|tc| tc.entities.get(&entity.entity_type))
-                    .is_some_and(|spec| {
-                        spec_content_hash(&spec.ioa_source) == content_hash
-                    })
+                    .is_some_and(|spec| spec_content_hash(&spec.ioa_source) == content_hash)
                     && registry
                         .get_tenant(&tenant_id)
                         .and_then(|tc| tc.verification.get(&entity.entity_type))
@@ -233,10 +231,7 @@ impl DeployPipeline {
                     tenant: input.tenant_name.clone(),
                     level: "Hash Check".into(),
                     status: VerifyStepStatus::Passed,
-                    summary: format!(
-                        "Spec {} unchanged, verification cached",
-                        entity.entity_type
-                    ),
+                    summary: format!("Spec {} unchanged, verification cached", entity.entity_type),
                 });
                 // Synthesize a passing result.
                 CascadeResult {

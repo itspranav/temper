@@ -1,6 +1,6 @@
 # ADR-0021: Task/Plan Integration and Sub-Agent Spawning
 
-- Status: Accepted
+- Status: Partially Implemented (IOA specs + cross-entity guards on main; plan-driven agent loop removed in 84706247; reference impl on agent-runtime-v1 branch)
 - Date: 2026-03-03
 - Deciders: Temper core maintainers
 - Related:
