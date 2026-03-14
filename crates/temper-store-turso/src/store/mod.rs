@@ -9,7 +9,6 @@
 //! - [`constraints`]: Tenant-level cross-entity constraints
 //! - [`event_store`]: [`EventStore`] trait implementation
 
-use std::ops::Deref;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -92,13 +91,17 @@ impl InstrumentedConnection {
         record_turso_query_duration(start.elapsed(), "execute", "connection", result.is_ok());
         result
     }
-}
 
-impl Deref for InstrumentedConnection {
-    type Target = libsql::Connection;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
+    /// Start a transaction with the given behavior.
+    ///
+    /// Returns a raw `libsql::Transaction` — callers that need latency
+    /// metrics on transaction-level queries should use
+    /// [`record_turso_query_duration`] manually.
+    pub(crate) async fn transaction_with_behavior(
+        &self,
+        behavior: libsql::TransactionBehavior,
+    ) -> Result<libsql::Transaction, libsql::Error> {
+        self.inner.transaction_with_behavior(behavior).await
     }
 }
 

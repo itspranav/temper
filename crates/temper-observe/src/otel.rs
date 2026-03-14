@@ -135,6 +135,8 @@ where
                 last_err = Some(Box::new(err));
                 if attempt < OTEL_EXPORTER_BUILD_RETRY_ATTEMPTS {
                     let backoff_ms = OTEL_EXPORTER_RETRY_BASE_DELAY_MS * attempt as u64;
+                    // Blocking sleep is intentional: this runs once at startup
+                    // before the async runtime is accepting work.
                     std::thread::sleep(Duration::from_millis(backoff_ms));
                 }
             }

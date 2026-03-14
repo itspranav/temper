@@ -10,7 +10,7 @@ use std::sync::{OnceLock, RwLock};
 
 use cedar_policy::{
     Authorizer, Context, Decision, Entities, Entity, EntityUid, PolicySet, Request,
-    Response as CedarResponse, Schema,
+    Response as CedarResponse,
 };
 use opentelemetry::global;
 use opentelemetry::metrics::Counter;
@@ -46,21 +46,18 @@ impl AuthzDecision {
 /// authorization requests. Supports hot-reload of policies via [`reload_policies`].
 pub struct AuthzEngine {
     policy_set: RwLock<PolicySet>,
-    schema: RwLock<Schema>,
     authorizer: Authorizer,
 }
 
 impl AuthzEngine {
     /// Create a new AuthzEngine from Cedar policy text.
     pub fn new(policy_text: &str) -> Result<Self, AuthzError> {
-        let schema = load_authz_schema()?;
         let policy_set = policy_text
             .parse::<PolicySet>()
             .map_err(|e| AuthzError::PolicyParse(e.to_string()))?;
 
         Ok(Self {
             policy_set: RwLock::new(policy_set),
-            schema: RwLock::new(schema),
             authorizer: Authorizer::new(),
         })
     }
@@ -72,9 +69,6 @@ impl AuthzEngine {
     pub fn empty() -> Self {
         Self {
             policy_set: RwLock::new(PolicySet::new()),
-            schema: RwLock::new(
-                load_authz_schema().expect("embedded authz Cedar schema must parse"),
-            ),
             authorizer: Authorizer::new(),
         }
     }
@@ -88,9 +82,6 @@ impl AuthzEngine {
             PolicySet::from_str("permit(principal, action, resource);").unwrap_or_default();
         Self {
             policy_set: RwLock::new(policy_set),
-            schema: RwLock::new(
-                load_authz_schema().expect("embedded authz Cedar schema must parse"),
-            ),
             authorizer: Authorizer::new(),
         }
     }
@@ -99,7 +90,6 @@ impl AuthzEngine {
     /// then atomically swaps the policy set. If parsing fails, the existing
     /// policies remain in effect and an error is returned.
     pub fn reload_policies(&self, policy_text: &str) -> Result<(), AuthzError> {
-        let new_schema = load_authz_schema()?;
         let new_policy_set = policy_text
             .parse::<PolicySet>()
             .map_err(|e| AuthzError::PolicyParse(e.to_string()))?;
@@ -108,12 +98,7 @@ impl AuthzEngine {
             .policy_set
             .write()
             .map_err(|e| AuthzError::Engine(format!("policy lock poisoned: {e}")))?;
-        let mut schema = self
-            .schema
-            .write()
-            .map_err(|e| AuthzError::Engine(format!("schema lock poisoned: {e}")))?;
         *current = new_policy_set;
-        *schema = new_schema;
         Ok(())
     }
 
@@ -236,22 +221,12 @@ impl AuthzEngine {
             insert_json_as_cedar(&mut principal_attrs, key.clone(), value);
         }
 
-        let schema = match self.schema.read() {
-            Ok(s) => s,
-            Err(e) => {
-                return AuthzDecision::Deny(AuthzDenial::EngineError(format!(
-                    "schema lock poisoned: {e}"
-                )));
-            }
-        };
-        let schema_opt = if security_ctx.principal.attributes.is_empty() {
-            Some(&*schema)
-        } else {
-            None
-        };
+        // Entity schema validation is intentionally None: principal attributes
+        // include tenant-defined custom attrs that can't be predicted by a
+        // static schema. Policy-level type checking suffices.
 
         let entities = match Entity::new(principal_uid.clone(), principal_attrs, HashSet::new()) {
-            Ok(entity) => match Entities::from_entities([entity], schema_opt) {
+            Ok(entity) => match Entities::from_entities([entity], None) {
                 Ok(e) => e,
                 Err(e) => {
                     return AuthzDecision::Deny(AuthzDenial::EngineError(format!(
@@ -271,7 +246,7 @@ impl AuthzEngine {
             action_uid,
             resource_uid,
             context,
-            None, // request validation stays schema-less: actions/resources are tenant-defined
+            None, // schema-less: actions/resources are tenant-defined
         ) {
             Ok(r) => r,
             Err(e) => {
@@ -384,44 +359,6 @@ fn resource_id_from_attrs(attrs: &HashMap<String, serde_json::Value>) -> String 
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string()
-}
-
-const AUTHZ_CEDAR_SCHEMA: &str = r#"
-entity Agent = {
-  id: String,
-  agent_type?: String,
-  role?: String
-};
-
-entity Admin = {
-  id: String,
-  agent_type?: String,
-  role?: String
-};
-
-entity Human = {
-  id: String,
-  agent_type?: String,
-  role?: String
-};
-
-entity Customer = {
-  id: String,
-  agent_type?: String,
-  role?: String
-};
-
-entity System = {
-  id: String,
-  agent_type?: String,
-  role?: String
-};
-"#;
-
-fn load_authz_schema() -> Result<Schema, AuthzError> {
-    let (schema, _warnings) = Schema::from_cedarschema_str(AUTHZ_CEDAR_SCHEMA)
-        .map_err(|e| AuthzError::Engine(format!("failed to parse embedded Cedar schema: {e}")))?;
-    Ok(schema)
 }
 
 #[cfg(test)]
