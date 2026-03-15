@@ -53,7 +53,8 @@ impl ServerState {
             .clamp(1, 86_400);
 
         let state = self.clone();
-        tokio::spawn(async move { // determinism-ok: background metrics export loop
+        tokio::spawn(async move {
+            // determinism-ok: background metrics export loop
             let instruments = RuntimeMetricInstruments::new();
             let mut ticker = tokio::time::interval(Duration::from_secs(interval_secs));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -75,7 +76,7 @@ fn read_process_resident_memory_bytes() -> Option<u64> {
 
     #[cfg(not(target_os = "linux"))]
     {
-        return None;
+        None
     }
 
     #[cfg(target_os = "linux")]

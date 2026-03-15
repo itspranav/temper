@@ -182,9 +182,11 @@ impl crate::state::ServerState {
         // 4. Fire webhooks
         self.fire_webhooks(ctx, &response);
 
-        // 5. WASM integrations
+        // 5. Integrations (WASM + native adapters)
         if !response.custom_effects.is_empty() {
             if ctx.await_integration {
+                let mut inline_response: Option<EntityResponse> = None;
+
                 let req = super::WasmDispatchRequest {
                     tenant: ctx.tenant,
                     entity_type: ctx.entity_type,
@@ -199,6 +201,31 @@ impl crate::state::ServerState {
                 if let Ok(Some(final_response)) =
                     Box::pin(self.dispatch_wasm_integrations_internal(&req)).await
                 {
+                    inline_response = Some(final_response);
+                }
+
+                let adapter_state = inline_response
+                    .as_ref()
+                    .map(|r| &r.state)
+                    .unwrap_or(&response.state);
+                let adapter_req = super::WasmDispatchRequest {
+                    tenant: ctx.tenant,
+                    entity_type: ctx.entity_type,
+                    entity_id: ctx.entity_id,
+                    action: ctx.action,
+                    custom_effects: &response.custom_effects,
+                    entity_state: adapter_state,
+                    agent_ctx: ctx.agent_ctx,
+                    action_params: ctx.action_params,
+                    mode: super::WasmDispatchMode::Inline,
+                };
+                if let Ok(Some(final_response)) =
+                    Box::pin(self.dispatch_adapter_integrations_internal(&adapter_req)).await
+                {
+                    inline_response = Some(final_response);
+                }
+
+                if let Some(final_response) = inline_response {
                     return final_response;
                 }
             } else {
@@ -212,6 +239,16 @@ impl crate::state::ServerState {
                     ctx.agent_ctx,
                     ctx.action_params,
                 );
+                self.dispatch_adapter_integrations(super::adapter::AdapterDispatchInput {
+                    tenant: ctx.tenant,
+                    entity_type: ctx.entity_type,
+                    entity_id: ctx.entity_id,
+                    action: ctx.action,
+                    custom_effects: &response.custom_effects,
+                    entity_state: &response.state,
+                    agent_ctx: ctx.agent_ctx,
+                    action_params: ctx.action_params,
+                });
             }
         }
 
