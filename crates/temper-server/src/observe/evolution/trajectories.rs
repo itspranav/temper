@@ -41,10 +41,9 @@ pub(crate) async fn handle_trajectories(
 
     // Query Turso directly (single source of truth).
     if let Some(turso) = state.persistent_store() {
-        let tenant_str = tenant_scope.as_ref().map(|t| t.as_str().to_string());
+        let _tenant_str = tenant_scope.as_ref().map(|t| t.as_str().to_string());
         match turso
             .query_trajectory_stats(
-                tenant_str.as_deref(),
                 params.entity_type.as_deref(),
                 params.action.as_deref(),
                 success_filter,

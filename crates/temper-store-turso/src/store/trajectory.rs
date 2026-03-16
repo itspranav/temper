@@ -24,8 +24,8 @@ impl TursoEventStore {
             .execute(
             "INSERT INTO trajectories \
              (tenant, entity_type, entity_id, action, success, from_status, to_status, error, \
-              agent_id, session_id, authz_denied, denied_resource, denied_module, source, spec_governed, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+              agent_id, session_id, authz_denied, denied_resource, denied_module, source, spec_governed, created_at, request_body, intent) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 entry.tenant,
                 entry.entity_type,
@@ -42,7 +42,9 @@ impl TursoEventStore {
                 entry.denied_module,
                 entry.source,
                 entry.spec_governed.map(|b| b as i64),
-                entry.created_at
+                entry.created_at,
+                entry.request_body,
+                entry.intent
             ],
         )
         .await
@@ -85,7 +87,7 @@ impl TursoEventStore {
         let mut rows = conn
             .query(
                 "SELECT tenant, entity_type, entity_id, action, success, from_status, to_status, error, \
-                        agent_id, session_id, authz_denied, denied_resource, denied_module, source, spec_governed, created_at \
+                        agent_id, session_id, authz_denied, denied_resource, denied_module, source, spec_governed, created_at, request_body, intent \
                  FROM trajectories \
                  ORDER BY created_at DESC \
                  LIMIT ?1",
@@ -235,6 +237,8 @@ impl TursoEventStore {
                 .map_err(storage_error)?
                 .map(|v| v != 0),
             created_at: row.get::<String>(15).map_err(storage_error)?,
+            request_body: row.get::<Option<String>>(16).map_err(storage_error)?,
+            intent: row.get::<Option<String>>(17).map_err(storage_error)?,
         })
     }
 
@@ -304,7 +308,7 @@ impl TursoEventStore {
         let mut rows = conn
             .query(
                 "SELECT tenant, entity_type, entity_id, action, success, from_status, to_status, error, \
-                        agent_id, session_id, authz_denied, denied_resource, denied_module, source, spec_governed, created_at \
+                        agent_id, session_id, authz_denied, denied_resource, denied_module, source, spec_governed, created_at, request_body, intent \
                  FROM trajectories \
                  WHERE success = 0 \
                  ORDER BY created_at DESC \
@@ -358,7 +362,7 @@ impl TursoEventStore {
         let mut rows = conn
             .query(
                 "SELECT tenant, entity_type, entity_id, action, success, from_status, to_status, error, \
-                        agent_id, session_id, authz_denied, denied_resource, denied_module, source, spec_governed, created_at \
+                        agent_id, session_id, authz_denied, denied_resource, denied_module, source, spec_governed, created_at, request_body, intent \
                  FROM trajectories \
                  WHERE agent_id = ?1 \
                    AND (?2 IS NULL OR tenant = ?2) \

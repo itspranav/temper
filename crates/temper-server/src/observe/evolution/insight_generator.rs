@@ -569,6 +569,8 @@ pub(crate) fn generate_unmet_intents_from_aggregated(
             count: 0,
             first_seen: row.first_seen.clone(),
             last_seen: row.last_seen.clone(),
+            sample_body: None,
+            sample_intent: None,
         });
         accum.count += row.count;
         if row.first_seen < accum.first_seen {
@@ -611,6 +613,8 @@ pub(crate) fn generate_unmet_intents_from_aggregated(
                 },
                 resolved_by,
                 recommendation,
+                sample_body: accum.sample_body,
+                sample_intent: accum.sample_intent,
             }
         })
         .collect()

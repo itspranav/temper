@@ -342,7 +342,7 @@ impl EntityActor {
                                 error = %e,
                                 "skipping event with incompatible schema during replay"
                             );
-                            crate::runtime_metrics::record_replay_error(tenant, &state.entity_type);
+                            tracing::warn!(tenant = %tenant, entity_type = %state.entity_type, "event replay error");
                         }
                     }
                     state.sequence_nr = env.sequence_nr;
