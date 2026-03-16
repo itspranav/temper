@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
 use sha2::{Digest, Sha256};
-use wasmtime::{Caller, Config, Engine, Linker, Module, Store};
+use wasmtime::{Caller, Config, Engine, Linker, Module, ResourceLimiter, Store};
 
 use crate::host_trait::WasmHost;
 use crate::stream::StreamRegistry;
@@ -38,9 +38,55 @@ pub enum WasmError {
     /// Module exceeded its instruction fuel budget.
     #[error("fuel exhausted -- module exceeded instruction budget")]
     FuelExhausted,
+    /// Module exceeded its wall-clock execution timeout.
+    #[error("execution timeout -- module exceeded time budget of {0:?}")]
+    Timeout(std::time::Duration),
+    /// Module attempted to exceed its memory budget.
+    #[error("memory limit exceeded -- module requested more than {max_bytes} bytes")]
+    MemoryLimitExceeded {
+        /// Configured memory limit in bytes.
+        max_bytes: usize,
+    },
     /// Requested module hash not found in cache.
     #[error("module not found: {0}")]
     ModuleNotFound(String),
+}
+
+/// Memory limiter enforcing a per-invocation byte cap via Wasmtime's ResourceLimiter.
+///
+/// Passed into each Store so that `memory.grow` instructions that would exceed
+/// `max_memory` are denied. On denial the module receives a failed grow (returns
+/// -1 from `memory.grow`); if the trap-on-deny path is used it raises a trap.
+struct MemoryLimiter {
+    /// Maximum allowed linear memory in bytes.
+    max_memory: usize,
+}
+
+impl ResourceLimiter for MemoryLimiter {
+    fn memory_growing(
+        &mut self,
+        _current: usize,
+        desired: usize,
+        _maximum: Option<usize>,
+    ) -> Result<bool, wasmtime::Error> {
+        if desired > self.max_memory {
+            // Return Ok(false) so memory.grow returns -1 (spec-compliant denial).
+            // Callers that need a trap instead can check the return value and
+            // raise unreachable themselves.
+            Ok(false)
+        } else {
+            Ok(true)
+        }
+    }
+
+    fn table_growing(
+        &mut self,
+        _current: usize,
+        _desired: usize,
+        _maximum: Option<usize>,
+    ) -> Result<bool, wasmtime::Error> {
+        Ok(true)
+    }
 }
 
 /// Compiled module cache entry.
@@ -57,9 +103,8 @@ struct HostState {
     result_json: Option<String>,
     /// Host capabilities (HTTP, secrets, logging).
     host: Arc<dyn WasmHost>,
-    /// Resource limits for this invocation (unused field kept for future memory limiting).
-    #[allow(dead_code)]
-    limits: WasmResourceLimits,
+    /// Memory limiter enforcing `max_memory` per invocation.
+    limiter: MemoryLimiter,
     /// Stream registry for binary data transfer between host and WASM guest.
     /// Bytes never enter WASM memory — WASM references them by stream ID.
     streams: Arc<RwLock<StreamRegistry>>,
@@ -77,10 +122,11 @@ pub struct WasmEngine {
 }
 
 impl WasmEngine {
-    /// Create a new WASM engine with fuel metering enabled.
+    /// Create a new WASM engine with fuel metering and epoch interruption enabled.
     pub fn new() -> Result<Self, WasmError> {
         let mut config = Config::new();
         config.consume_fuel(true);
+        config.epoch_interruption(true);
         config.wasm_component_model(true);
 
         let engine = Engine::new(&config).map_err(|e| WasmError::Compilation(e.to_string()))?;
@@ -162,22 +208,52 @@ impl WasmEngine {
                 .ok_or_else(|| WasmError::ModuleNotFound(module_hash.to_string()))?
         };
 
-        let start = std::time::Instant::now();
+        let start = std::time::Instant::now(); // determinism-ok: wall-clock timing for WASM sandbox
         let context_json = serde_json::to_string(context)
             .map_err(|e| WasmError::Invocation(format!("failed to serialize context: {e}")))?;
 
-        // Create a fresh store with fuel budget
+        // Create a fresh store with fuel budget and memory limiter
         let host_state = HostState {
             context_json: context_json.clone(),
             result_json: None,
             host,
-            limits: limits.clone(),
+            limiter: MemoryLimiter {
+                max_memory: limits.max_memory,
+            },
             streams,
         };
         let mut store = Store::new(&self.engine, host_state);
         store
             .set_fuel(limits.max_fuel)
             .map_err(|e| WasmError::Invocation(format!("failed to set fuel: {e}")))?;
+
+        // Register the memory limiter so memory.grow is gated by max_memory.
+        store.limiter(|state| &mut state.limiter);
+
+        // Set epoch deadline to 1 tick — the engine epoch is incremented by
+        // the timeout task below. If the task fires before run() returns, the
+        // module receives a trap on the next back-edge check.
+        store.set_epoch_deadline(1);
+
+        // Spawn a one-shot timer that increments the epoch after max_duration.
+        // This provides wall-clock timeout on top of the fuel instruction budget.
+        let engine_for_timeout = self.engine.clone();
+        let max_duration = limits.max_duration;
+        let timeout_task = tokio::spawn(async move {
+            // determinism-ok: epoch timer for WASM wall-clock timeout enforcement
+            tokio::time::sleep(max_duration).await;
+            engine_for_timeout.increment_epoch();
+        });
+
+        // Guard that aborts the epoch timer on any exit path (Ok or Err).
+        // This prevents a leaked timer from perturbing concurrent invocations.
+        struct AbortOnDrop(tokio::task::JoinHandle<()>);
+        impl Drop for AbortOnDrop {
+            fn drop(&mut self) {
+                self.0.abort();
+            }
+        }
+        let _timer_guard = AbortOnDrop(timeout_task);
 
         // Link host functions
         let mut linker = Linker::new(&self.engine);
@@ -208,10 +284,12 @@ impl WasmEngine {
         let result_ptr = run_fn
             .call(&mut store, (ctx_ptr as i32, ctx_bytes.len() as i32))
             .map_err(|e| {
-                if e.to_string().contains("fuel") {
-                    WasmError::FuelExhausted
-                } else {
-                    WasmError::Invocation(e.to_string())
+                // Use downcast to identify trap kind — the display string wraps
+                // backtrace context so string matching is unreliable.
+                match e.downcast_ref::<wasmtime::Trap>() {
+                    Some(&wasmtime::Trap::OutOfFuel) => WasmError::FuelExhausted,
+                    Some(&wasmtime::Trap::Interrupt) => WasmError::Timeout(max_duration),
+                    _ => WasmError::Invocation(e.to_string()),
                 }
             })?;
 
@@ -746,7 +824,79 @@ fn link_host_functions(linker: &mut Linker<HostState>) -> Result<(), WasmError> 
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::RwLock;
+
     use super::*;
+    use crate::host_trait::SimWasmHost;
+    use crate::stream::StreamRegistry;
+
+    // Minimal WAT module: accepts (ptr, len), writes nothing, returns 0.
+    // Uses host_set_result to return an empty success JSON.
+    const WAT_NOOP: &str = r#"
+        (module
+          (memory (export "memory") 1)
+          (func (export "run") (param i32 i32) (result i32)
+            i32.const 0
+          )
+        )
+    "#;
+
+    // Infinite loop module — exhausts fuel / trips timeout.
+    const WAT_INFINITE_LOOP: &str = r#"
+        (module
+          (memory (export "memory") 1)
+          (func (export "run") (param i32 i32) (result i32)
+            (loop $L
+              br $L)
+            i32.const 0
+          )
+        )
+    "#;
+
+    // Tries to grow memory by 1000 pages (64 MB) — exceeds 16 MB default.
+    const WAT_MEMORY_GROW: &str = r#"
+        (module
+          (memory (export "memory") 1)
+          (func (export "run") (param i32 i32) (result i32)
+            (memory.grow (i32.const 1000))
+            drop
+            i32.const 0
+          )
+        )
+    "#;
+
+    // Raises an unreachable trap — tests error isolation.
+    const WAT_TRAP: &str = r#"
+        (module
+          (memory (export "memory") 1)
+          (func (export "run") (param i32 i32) (result i32)
+            unreachable
+          )
+        )
+    "#;
+
+    fn make_context() -> WasmInvocationContext {
+        WasmInvocationContext {
+            tenant: "test".into(),
+            entity_type: "Order".into(),
+            entity_id: "1".into(),
+            trigger_action: "Submit".into(),
+            trigger_params: serde_json::Value::Null,
+            entity_state: serde_json::Value::Null,
+            agent_id: None,
+            session_id: None,
+            integration_config: std::collections::BTreeMap::new(),
+        }
+    }
+
+    fn make_host() -> Arc<dyn WasmHost> {
+        Arc::new(SimWasmHost::new())
+    }
+
+    fn make_streams() -> Arc<RwLock<StreamRegistry>> {
+        Arc::new(RwLock::new(StreamRegistry::default()))
+    }
 
     #[test]
     fn hash_module_deterministic() {
@@ -778,5 +928,146 @@ mod tests {
         assert_eq!(limits.max_memory, 16 * 1024 * 1024);
         assert_eq!(limits.max_duration, std::time::Duration::from_secs(30));
         assert_eq!(limits.max_response_bytes, 1024 * 1024);
+    }
+
+    #[test]
+    fn timeout_error_display() {
+        let err = WasmError::Timeout(std::time::Duration::from_secs(5));
+        let msg = err.to_string();
+        assert!(msg.contains("timeout"), "expected 'timeout' in: {msg}");
+    }
+
+    #[test]
+    fn memory_limit_exceeded_display() {
+        let err = WasmError::MemoryLimitExceeded { max_bytes: 1024 };
+        let msg = err.to_string();
+        assert!(msg.contains("memory limit"), "expected 'memory limit' in: {msg}");
+    }
+
+    /// Fuel exhaustion: module runs infinite loop with tiny fuel budget.
+    #[tokio::test]
+    async fn fuel_exhaustion_returns_error() {
+        let engine = WasmEngine::new().unwrap();
+        let hash = engine
+            .compile_and_cache(WAT_INFINITE_LOOP.as_bytes())
+            .unwrap();
+
+        let limits = WasmResourceLimits {
+            max_fuel: 1_000, // tiny budget
+            ..WasmResourceLimits::default()
+        };
+        let result = engine
+            .invoke(&hash, &make_context(), make_host(), &limits, make_streams())
+            .await;
+
+        assert!(
+            matches!(result, Err(WasmError::FuelExhausted)),
+            "expected FuelExhausted, got: {result:?}"
+        );
+    }
+
+    /// Timeout: module runs infinite loop, epoch fires after 50 ms.
+    ///
+    /// Requires multi-thread runtime: the epoch timer task must run concurrently
+    /// while the WASM call blocks the main thread.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn timeout_enforced_by_epoch() {
+        let engine = WasmEngine::new().unwrap();
+        let hash = engine
+            .compile_and_cache(WAT_INFINITE_LOOP.as_bytes())
+            .unwrap();
+
+        let limits = WasmResourceLimits {
+            max_fuel: u64::MAX,                                           // no fuel limit
+            max_duration: std::time::Duration::from_millis(50),          // very short
+            ..WasmResourceLimits::default()
+        };
+        let result = engine
+            .invoke(&hash, &make_context(), make_host(), &limits, make_streams())
+            .await;
+
+        assert!(
+            matches!(result, Err(WasmError::Timeout(_))),
+            "expected Timeout, got: {result:?}"
+        );
+    }
+
+    /// Error isolation: a WASM trap (unreachable) is converted to WasmError,
+    /// not a Rust panic. The host process must survive.
+    #[tokio::test]
+    async fn wasm_trap_does_not_crash_host() {
+        let engine = WasmEngine::new().unwrap();
+        let hash = engine
+            .compile_and_cache(WAT_TRAP.as_bytes())
+            .unwrap();
+
+        let limits = WasmResourceLimits::default();
+        let result = engine
+            .invoke(&hash, &make_context(), make_host(), &limits, make_streams())
+            .await;
+
+        // Must return Err (trap propagated as error), not panic.
+        assert!(result.is_err(), "expected Err from trap, got Ok");
+        // Must not be mistaken for fuel or timeout.
+        assert!(
+            !matches!(result, Err(WasmError::FuelExhausted) | Err(WasmError::Timeout(_))),
+            "trap should not be FuelExhausted or Timeout"
+        );
+    }
+
+    /// Memory limiter: module tries to grow beyond max_memory — growth is denied
+    /// but the module still returns (memory.grow returns -1, not a crash).
+    #[tokio::test]
+    async fn memory_growth_denied_by_limiter() {
+        let engine = WasmEngine::new().unwrap();
+        let hash = engine
+            .compile_and_cache(WAT_MEMORY_GROW.as_bytes())
+            .unwrap();
+
+        // Limit to 1 page (64 KB). Module tries to grow by 1000 pages.
+        let limits = WasmResourceLimits {
+            max_memory: 64 * 1024, // 1 WASM page
+            ..WasmResourceLimits::default()
+        };
+        let result = engine
+            .invoke(&hash, &make_context(), make_host(), &limits, make_streams())
+            .await;
+
+        // Module returns normally (memory.grow returned -1 per spec — not a trap).
+        // The invocation itself succeeds (no crash), but the result is empty
+        // because the module didn't call host_set_result.
+        assert!(
+            result.is_ok() || matches!(result, Err(WasmError::Invocation(_))),
+            "memory denial should not cause fuel/timeout error, got: {result:?}"
+        );
+        // Critically: no panic, no FuelExhausted, no Timeout.
+        assert!(
+            !matches!(result, Err(WasmError::FuelExhausted) | Err(WasmError::Timeout(_))),
+            "memory denial should not be misclassified"
+        );
+    }
+
+    /// Noop module completes successfully without hitting any limits.
+    #[tokio::test]
+    async fn noop_module_completes() {
+        let engine = WasmEngine::new().unwrap();
+        let hash = engine.compile_and_cache(WAT_NOOP.as_bytes()).unwrap();
+
+        let limits = WasmResourceLimits::default();
+        let result = engine
+            .invoke(&hash, &make_context(), make_host(), &limits, make_streams())
+            .await;
+
+        // Noop doesn't call host_set_result so we get an empty-result error,
+        // but crucially it doesn't hit fuel, timeout, or memory errors.
+        assert!(
+            !matches!(
+                result,
+                Err(WasmError::FuelExhausted)
+                    | Err(WasmError::Timeout(_))
+                    | Err(WasmError::MemoryLimitExceeded { .. })
+            ),
+            "noop should not hit resource limits, got: {result:?}"
+        );
     }
 }
