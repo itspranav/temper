@@ -104,8 +104,7 @@ static OS_APP_CATALOG: &[OsAppEntry] = &[
     },
     OsAppEntry {
         name: "temper-agent",
-        description:
-            "Spec-driven agent with LLM loop, sandbox tools, and TemperFS conversation storage",
+        description: "Spec-driven agent with LLM loop, sandbox tools, and TemperFS conversation storage",
         entity_types: &["TemperAgent"],
         version: "0.1.0",
     },
