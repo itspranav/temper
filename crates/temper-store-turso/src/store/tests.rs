@@ -276,7 +276,9 @@ async fn migrate_is_idempotent() {
 #[tokio::test]
 async fn append_is_durable_before_return() {
     let url = sqlite_test_url("persist-before-return");
-    let store1 = TursoEventStore::new(&url, None).await.expect("create store1");
+    let store1 = TursoEventStore::new(&url, None)
+        .await
+        .expect("create store1");
 
     let persistence_id = "tenant-x:Widget:w-1";
     let new_seq = store1
@@ -292,7 +294,9 @@ async fn append_is_durable_before_return() {
 
     // Open a new independent connection to the same DB — simulates a second
     // reader or a process restart. The event must already be visible.
-    let store2 = TursoEventStore::new(&url, None).await.expect("create store2");
+    let store2 = TursoEventStore::new(&url, None)
+        .await
+        .expect("create store2");
     let events = store2
         .read_events(persistence_id, 0)
         .await
