@@ -33,6 +33,13 @@ const FS_CSDL: &str = include_str!("../../../os-apps/temper-fs/specs/model.csdl.
 const FS_CEDAR_FILE: &str = include_str!("../../../os-apps/temper-fs/policies/file.cedar");
 const FS_CEDAR_WORKSPACE: &str =
     include_str!("../../../os-apps/temper-fs/policies/workspace.cedar");
+
+// ── Temper Agent OS App ──────────────────────────────────────────────
+
+const AGENT_IOA: &str =
+    include_str!("../../../os-apps/temper-agent/specs/temper_agent.ioa.toml");
+const AGENT_CSDL: &str = include_str!("../../../os-apps/temper-agent/specs/model.csdl.xml");
+const AGENT_CEDAR: &str = include_str!("../../../os-apps/temper-agent/policies/agent.cedar");
 /// Metadata for an OS app in the catalog.
 #[derive(Debug, Clone, Serialize)]
 pub struct OsAppEntry {
@@ -73,6 +80,9 @@ const FS_SPECS: &[(&str, &str)] = &[
     ("Workspace", FS_WORKSPACE_IOA),
 ];
 
+/// Temper Agent app specs.
+const AGENT_SPECS: &[(&str, &str)] = &[("TemperAgent", AGENT_IOA)];
+
 /// All available OS apps.
 static OS_APP_CATALOG: &[OsAppEntry] = &[
     OsAppEntry {
@@ -85,6 +95,12 @@ static OS_APP_CATALOG: &[OsAppEntry] = &[
         name: "temper-fs",
         description: "Governed filesystem with workspaces, directories, files, and versioning",
         entity_types: &["File", "Directory", "FileVersion", "Workspace"],
+        version: "0.1.0",
+    },
+    OsAppEntry {
+        name: "temper-agent",
+        description: "Spec-driven agent with LLM loop, sandbox tools, and TemperFS conversation storage",
+        entity_types: &["TemperAgent"],
         version: "0.1.0",
     },
 ];
@@ -106,6 +122,11 @@ pub fn get_os_app(name: &str) -> Option<OsAppBundle> {
             specs: FS_SPECS,
             csdl: FS_CSDL,
             cedar_policies: &[FS_CEDAR_FILE, FS_CEDAR_WORKSPACE],
+        }),
+        "temper-agent" => Some(OsAppBundle {
+            specs: AGENT_SPECS,
+            csdl: AGENT_CSDL,
+            cedar_policies: &[AGENT_CEDAR],
         }),
         _ => None,
     }
@@ -277,11 +298,13 @@ mod tests {
     #[test]
     fn test_list_os_apps_returns_catalog() {
         let apps = list_os_apps();
-        assert_eq!(apps.len(), 2);
+        assert_eq!(apps.len(), 3);
         assert_eq!(apps[0].name, "project-management");
         assert_eq!(apps[0].entity_types.len(), 5);
         assert_eq!(apps[1].name, "temper-fs");
         assert_eq!(apps[1].entity_types.len(), 4);
+        assert_eq!(apps[2].name, "temper-agent");
+        assert_eq!(apps[2].entity_types.len(), 1);
     }
 
     #[test]
@@ -290,6 +313,66 @@ mod tests {
         assert!(bundle.is_some());
         let bundle = bundle.unwrap();
         assert_eq!(bundle.specs.len(), 5);
+        assert!(!bundle.csdl.is_empty());
+        assert_eq!(bundle.cedar_policies.len(), 1);
+    }
+
+    #[test]
+    fn test_agent_specs_parse() {
+        for (entity_type, ioa_source) in AGENT_SPECS {
+            let result = automaton::parse_automaton(ioa_source);
+            assert!(
+                result.is_ok(),
+                "Agent spec {} failed to parse: {:?}",
+                entity_type,
+                result.err()
+            );
+        }
+    }
+
+    #[test]
+    fn test_agent_csdl_parses() {
+        let result = parse_csdl(AGENT_CSDL);
+        assert!(
+            result.is_ok(),
+            "Agent CSDL failed to parse: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_agent_spec_entity_names() {
+        for (entity_type, ioa_source) in AGENT_SPECS {
+            let a = automaton::parse_automaton(ioa_source).unwrap();
+            assert_eq!(
+                a.automaton.name, *entity_type,
+                "Agent spec name mismatch: expected {entity_type}, got {}",
+                a.automaton.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_agent_specs_verify() {
+        for (entity_type, ioa_source) in AGENT_SPECS {
+            let cascade = VerificationCascade::from_ioa(ioa_source)
+                .with_sim_seeds(3)
+                .with_prop_test_cases(50);
+            let result = cascade.run();
+            assert!(
+                result.all_passed,
+                "Agent spec {} failed verification",
+                entity_type
+            );
+        }
+    }
+
+    #[test]
+    fn test_get_os_app_temper_agent() {
+        let bundle = get_os_app("temper-agent");
+        assert!(bundle.is_some());
+        let bundle = bundle.unwrap();
+        assert_eq!(bundle.specs.len(), 1);
         assert!(!bundle.csdl.is_empty());
         assert_eq!(bundle.cedar_policies.len(), 1);
     }
