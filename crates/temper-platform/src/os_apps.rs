@@ -36,8 +36,7 @@ const FS_CEDAR_WORKSPACE: &str =
 
 // ── Temper Agent OS App ──────────────────────────────────────────────
 
-const AGENT_IOA: &str =
-    include_str!("../../../os-apps/temper-agent/specs/temper_agent.ioa.toml");
+const AGENT_IOA: &str = include_str!("../../../os-apps/temper-agent/specs/temper_agent.ioa.toml");
 const AGENT_CSDL: &str = include_str!("../../../os-apps/temper-agent/specs/model.csdl.xml");
 const AGENT_CEDAR: &str = include_str!("../../../os-apps/temper-agent/policies/agent.cedar");
 /// Metadata for an OS app in the catalog.
