@@ -941,7 +941,10 @@ mod tests {
     fn memory_limit_exceeded_display() {
         let err = WasmError::MemoryLimitExceeded { max_bytes: 1024 };
         let msg = err.to_string();
-        assert!(msg.contains("memory limit"), "expected 'memory limit' in: {msg}");
+        assert!(
+            msg.contains("memory limit"),
+            "expected 'memory limit' in: {msg}"
+        );
     }
 
     /// Fuel exhaustion: module runs infinite loop with tiny fuel budget.
@@ -978,8 +981,8 @@ mod tests {
             .unwrap();
 
         let limits = WasmResourceLimits {
-            max_fuel: u64::MAX,                                           // no fuel limit
-            max_duration: std::time::Duration::from_millis(50),          // very short
+            max_fuel: u64::MAX,                                 // no fuel limit
+            max_duration: std::time::Duration::from_millis(50), // very short
             ..WasmResourceLimits::default()
         };
         let result = engine
@@ -997,9 +1000,7 @@ mod tests {
     #[tokio::test]
     async fn wasm_trap_does_not_crash_host() {
         let engine = WasmEngine::new().unwrap();
-        let hash = engine
-            .compile_and_cache(WAT_TRAP.as_bytes())
-            .unwrap();
+        let hash = engine.compile_and_cache(WAT_TRAP.as_bytes()).unwrap();
 
         let limits = WasmResourceLimits::default();
         let result = engine
@@ -1010,7 +1011,10 @@ mod tests {
         assert!(result.is_err(), "expected Err from trap, got Ok");
         // Must not be mistaken for fuel or timeout.
         assert!(
-            !matches!(result, Err(WasmError::FuelExhausted) | Err(WasmError::Timeout(_))),
+            !matches!(
+                result,
+                Err(WasmError::FuelExhausted) | Err(WasmError::Timeout(_))
+            ),
             "trap should not be FuelExhausted or Timeout"
         );
     }
@@ -1042,7 +1046,10 @@ mod tests {
         );
         // Critically: no panic, no FuelExhausted, no Timeout.
         assert!(
-            !matches!(result, Err(WasmError::FuelExhausted) | Err(WasmError::Timeout(_))),
+            !matches!(
+                result,
+                Err(WasmError::FuelExhausted) | Err(WasmError::Timeout(_))
+            ),
             "memory denial should not be misclassified"
         );
     }
