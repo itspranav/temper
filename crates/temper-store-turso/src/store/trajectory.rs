@@ -6,6 +6,7 @@ use tracing::instrument;
 
 use super::{ActionStats, AgentSummary, TrajectoryStats, TursoEventStore, TursoTrajectoryRow};
 use crate::TursoTrajectoryInsert;
+use crate::metrics::TursoQueryTimer;
 
 impl TursoEventStore {
     /// Persist a trajectory entry (all columns including agent/authz fields).
@@ -14,6 +15,7 @@ impl TursoEventStore {
         &self,
         entry: TursoTrajectoryInsert<'_>,
     ) -> Result<(), PersistenceError> {
+        let _query_timer = TursoQueryTimer::start("turso.persist_trajectory");
         let conn = self.configured_connection().await?;
         let execute_res = conn
             .execute(
@@ -75,6 +77,7 @@ impl TursoEventStore {
         &self,
         limit: i64,
     ) -> Result<Vec<TursoTrajectoryRow>, PersistenceError> {
+        let _query_timer = TursoQueryTimer::start("turso.load_recent_trajectories");
         let conn = self.configured_connection().await?;
         let mut rows = conn
             .query(
@@ -137,6 +140,7 @@ impl TursoEventStore {
         success_filter: Option<bool>,
         failed_limit: i64,
     ) -> Result<TrajectoryStats, PersistenceError> {
+        let _query_timer = TursoQueryTimer::start("turso.query_trajectory_stats");
         let conn = self.configured_connection().await?;
 
         // Total + success count.
@@ -242,6 +246,7 @@ impl TursoEventStore {
         entity_type: Option<&str>,
         limit: i64,
     ) -> Result<Vec<TursoTrajectoryRow>, PersistenceError> {
+        let _query_timer = TursoQueryTimer::start("turso.query_trajectories_by_agent");
         let conn = self.configured_connection().await?;
         let mut rows = conn
             .query(
@@ -279,6 +284,7 @@ impl TursoEventStore {
         &self,
         tenant: Option<&str>,
     ) -> Result<Vec<AgentSummary>, PersistenceError> {
+        let _query_timer = TursoQueryTimer::start("turso.query_agent_summaries");
         let conn = self.configured_connection().await?;
         let mut rows = conn
             .query(

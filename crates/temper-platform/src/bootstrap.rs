@@ -11,7 +11,7 @@ use temper_runtime::tenant::TenantId;
 use temper_server::registry::{EntityLevelSummary, EntityVerificationResult, VerificationStatus};
 use temper_spec::automaton;
 use temper_spec::csdl::parse_csdl;
-use temper_store_turso::spec_content_hash;
+use temper_store_turso::{TursoEventStore, TursoSpecVerificationUpdate, spec_content_hash};
 use temper_verify::cascade::VerificationCascade;
 
 use crate::state::PlatformState;
@@ -78,15 +78,19 @@ const AGENT_SPECS: &[(&str, &str)] = &[
 /// This prevents the expensive Z3 + Stateright + proptest cascade from
 /// running on every boot (which caused OOM on Railway's 512 MB containers).
 ///
+/// Returns a list of `(entity_type, content_hash)` for all bootstrapped specs
+/// so the caller can persist them to the backing store.
+///
 /// Panics if any spec fails to parse or verify (fatal startup error).
 pub(crate) fn bootstrap_tenant_specs(
     state: &PlatformState,
     tenant: &str,
     csdl_source: &str,
     specs: &[(&str, &str)],
+    merge: bool,
     label: &str,
     verified_cache: &BTreeMap<String, (String, bool)>,
-) {
+) -> Vec<(String, String)> {
     tracing::info!(
         "Bootstrapping {label} specs for tenant '{tenant}' with {} entities",
         specs.len()
@@ -100,6 +104,7 @@ pub(crate) fn bootstrap_tenant_specs(
 
     // Hash-gated verification: only run the cascade for specs whose
     // content has changed since the last successful verification.
+    let mut spec_hashes = Vec::with_capacity(specs.len());
     for (entity_type, ioa_source) in specs {
         let hash = spec_content_hash(ioa_source);
         let already_verified = verified_cache
@@ -125,6 +130,7 @@ pub(crate) fn bootstrap_tenant_specs(
                 "{label} spec {entity_type} failed verification cascade"
             );
         }
+        spec_hashes.push((entity_type.to_string(), hash));
     }
 
     // Parse CSDL schema.
@@ -135,7 +141,17 @@ pub(crate) fn bootstrap_tenant_specs(
     let tenant_id = TenantId::new(tenant);
     {
         let mut registry = state.registry.write().unwrap(); // ci-ok: infallible lock
-        registry.register_tenant(tenant_id.clone(), csdl, csdl_source.to_string(), specs);
+        registry
+            .try_register_tenant_with_reactions_and_constraints(
+                tenant_id.clone(),
+                csdl,
+                csdl_source.to_string(),
+                specs,
+                Vec::new(),
+                None,
+                merge,
+            )
+            .unwrap_or_else(|e| panic!("failed to register {label} specs for '{tenant}': {e}"));
         let now = temper_runtime::scheduler::sim_now().to_rfc3339();
         for (entity_type, _) in specs {
             registry.set_verification_status(
@@ -159,43 +175,117 @@ pub(crate) fn bootstrap_tenant_specs(
         "{label} specs bootstrapped for tenant '{tenant}': {:?}",
         specs.iter().map(|(t, _)| *t).collect::<Vec<_>>()
     );
+
+    spec_hashes
 }
 
 /// Bootstrap the system tenant.
 ///
 /// Validates, verifies, and registers all temper-system entity specs.
+/// Returns `(entity_type, content_hash)` pairs for persistence.
 /// Panics if system specs fail to parse or verify (fatal startup error).
 pub fn bootstrap_system_tenant(
     state: &PlatformState,
     verified_cache: &BTreeMap<String, (String, bool)>,
-) {
+) -> Vec<(String, String)> {
     bootstrap_tenant_specs(
         state,
         SYSTEM_TENANT,
         SYSTEM_CSDL,
         SYSTEM_SPECS,
+        false,
         "System",
         verified_cache,
-    );
+    )
 }
 
 /// Bootstrap agent entity specs (Agent, Plan, Task, ToolCall) for a tenant.
 ///
 /// Parses and verifies the agent IOA specs, then registers them under the
-/// given tenant. Panics if agent specs fail to parse or verify.
+/// given tenant. Returns `(entity_type, content_hash)` pairs for persistence.
+/// Panics if agent specs fail to parse or verify.
 pub fn bootstrap_agent_specs(
     state: &PlatformState,
     tenant: &str,
     verified_cache: &BTreeMap<String, (String, bool)>,
-) {
+) -> Vec<(String, String)> {
     bootstrap_tenant_specs(
         state,
         tenant,
         AGENT_CSDL,
         AGENT_SPECS,
+        false,
         "Agent",
         verified_cache,
-    );
+    )
+}
+
+/// Persist built-in spec hashes and verification status to Turso.
+///
+/// After bootstrap verifies specs (or skips via cache), this writes each
+/// spec into the `specs` table with its content hash and marks it verified.
+/// On subsequent boots, `load_verification_cache` finds these rows and
+/// the cascade is skipped — preventing OOM on memory-constrained hosts.
+///
+/// Note: the upsert + mark-verified is two statements, not atomic.  If
+/// the process crashes between them the spec row will have `verified=0`
+/// and the cascade will re-run on next boot — safe, just slower.
+pub(crate) async fn persist_bootstrap_verification(
+    turso: &TursoEventStore,
+    tenant: &str,
+    specs: &[(&str, &str)],
+    csdl_source: &str,
+    hashes: &[(String, String)],
+) {
+    for (entity_type, content_hash) in hashes {
+        // Find the IOA source for this entity type.
+        let ioa_source = specs
+            .iter()
+            .find(|(et, _)| *et == entity_type)
+            .map(|(_, src)| *src)
+            .expect("hash returned for unknown entity type");
+
+        // Upsert the spec row (preserves verification if hash unchanged).
+        if let Err(e) = turso
+            .upsert_spec(tenant, entity_type, ioa_source, csdl_source, content_hash)
+            .await
+        {
+            tracing::warn!("Failed to persist bootstrap spec {tenant}/{entity_type}: {e}");
+            continue;
+        }
+
+        // Mark as verified (bootstrap panics on failure, so all specs here passed).
+        if let Err(e) = turso
+            .persist_spec_verification(
+                tenant,
+                entity_type,
+                TursoSpecVerificationUpdate {
+                    status: "completed",
+                    verified: true,
+                    levels_passed: None,
+                    levels_total: None,
+                    verification_result_json: None,
+                },
+            )
+            .await
+        {
+            tracing::warn!("Failed to persist verification status for {tenant}/{entity_type}: {e}");
+        }
+    }
+}
+
+/// Persist system tenant spec verification to Turso.
+pub async fn persist_system_verification(turso: &TursoEventStore, hashes: &[(String, String)]) {
+    persist_bootstrap_verification(turso, SYSTEM_TENANT, SYSTEM_SPECS, SYSTEM_CSDL, hashes).await;
+}
+
+/// Persist agent spec verification to Turso.
+pub async fn persist_agent_verification(
+    turso: &TursoEventStore,
+    tenant: &str,
+    hashes: &[(String, String)],
+) {
+    persist_bootstrap_verification(turso, tenant, AGENT_SPECS, AGENT_CSDL, hashes).await;
 }
 
 #[cfg(test)]
