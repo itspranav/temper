@@ -47,6 +47,12 @@ pub struct IdentityResolver {
     cache: Arc<RwLock<BTreeMap<String, CacheEntry>>>,
 }
 
+impl Default for IdentityResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IdentityResolver {
     /// Create a new identity resolver.
     pub fn new() -> Self {
