@@ -60,6 +60,8 @@
         <Parameter Name="bindingParameter" Type="Temper.Agent.TemperAgent"/>
         <Parameter Name="pending_tool_calls" Type="Edm.String" Nullable="false"/>
         <Parameter Name="conversation" Type="Edm.String" Nullable="true"/>
+        <Parameter Name="input_tokens" Type="Edm.Int64" Nullable="true"/>
+        <Parameter Name="output_tokens" Type="Edm.Int64" Nullable="true"/>
         <ReturnType Type="Temper.Agent.TemperAgent"/>
       </Action>
 
@@ -70,18 +72,12 @@
         <ReturnType Type="Temper.Agent.TemperAgent"/>
       </Action>
 
-      <Action Name="RecordTokenUsage" IsBound="true">
-        <Parameter Name="bindingParameter" Type="Temper.Agent.TemperAgent"/>
-        <Parameter Name="input_tokens" Type="Edm.Int64" Nullable="false"/>
-        <Parameter Name="output_tokens" Type="Edm.Int64" Nullable="false"/>
-        <Parameter Name="cost_cents" Type="Edm.String" Nullable="false"/>
-        <ReturnType Type="Temper.Agent.TemperAgent"/>
-      </Action>
-
       <Action Name="RecordResult" IsBound="true">
         <Parameter Name="bindingParameter" Type="Temper.Agent.TemperAgent"/>
         <Parameter Name="result" Type="Edm.String" Nullable="false"/>
         <Parameter Name="conversation" Type="Edm.String" Nullable="true"/>
+        <Parameter Name="input_tokens" Type="Edm.Int64" Nullable="true"/>
+        <Parameter Name="output_tokens" Type="Edm.Int64" Nullable="true"/>
         <ReturnType Type="Temper.Agent.TemperAgent"/>
       </Action>
 

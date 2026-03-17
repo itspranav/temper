@@ -38,7 +38,6 @@ permit(
     Action::"SandboxReady",
     Action::"ProcessToolCalls",
     Action::"HandleToolResults",
-    Action::"RecordTokenUsage",
     Action::"RecordResult"
   ],
   resource is TemperAgent

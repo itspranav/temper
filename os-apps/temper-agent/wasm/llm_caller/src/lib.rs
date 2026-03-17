@@ -174,6 +174,8 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
                 let tool_calls_json = serde_json::to_string(&tool_calls).unwrap_or_default();
                 let mut params = json!({
                     "pending_tool_calls": tool_calls_json,
+                    "input_tokens": response.input_tokens,
+                    "output_tokens": response.output_tokens,
                 });
                 if let Some(ref conv) = conv_param {
                     params["conversation"] = json!(conv);
@@ -197,7 +199,11 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
                     .collect::<Vec<_>>()
                     .join("\n");
 
-                let mut params = json!({ "result": result_text });
+                let mut params = json!({
+                    "result": result_text,
+                    "input_tokens": response.input_tokens,
+                    "output_tokens": response.output_tokens,
+                });
                 if let Some(ref conv) = conv_param {
                     params["conversation"] = json!(conv);
                 }
@@ -224,6 +230,8 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
 struct LlmResponse {
     content: Value,
     stop_reason: String,
+    input_tokens: i64,
+    output_tokens: i64,
 }
 
 /// Call Anthropic Messages API.
@@ -333,9 +341,27 @@ fn call_anthropic(
 
     let content = parsed.get("content").cloned().unwrap_or(json!([]));
 
+    // Extract token usage from Anthropic response
+    let usage = parsed.get("usage").cloned().unwrap_or(json!({}));
+    let input_tokens = usage
+        .get("input_tokens")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let output_tokens = usage
+        .get("output_tokens")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+
+    ctx.log(
+        "info",
+        &format!("llm_caller: usage: input={input_tokens}, output={output_tokens}"),
+    );
+
     Ok(LlmResponse {
         content,
         stop_reason,
+        input_tokens,
+        output_tokens,
     })
 }
 

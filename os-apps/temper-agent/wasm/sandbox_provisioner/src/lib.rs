@@ -1,8 +1,13 @@
 //! Sandbox Provisioner — WASM module for provisioning sandboxes.
 //!
-//! Provisions a sandbox (static URL from config, or Modal API) and returns
+//! Provisions a sandbox (static URL from config, or E2B REST API) and returns
 //! the sandbox connection details. Also creates a TemperFS Workspace and File
 //! for conversation storage (content-addressable, versioned, Cedar-governed).
+//!
+//! Priority order:
+//! 1. sandbox_url from entity state (set via Configure — for local dev)
+//! 2. sandbox_url from integration config (default local sandbox)
+//! 3. E2B REST API (for deployed/Railway — requires e2b_api_key secret)
 //!
 //! Build: `cargo build --target wasm32-unknown-unknown --release`
 
@@ -96,9 +101,8 @@ struct SandboxResult {
 }
 
 /// Provision a sandbox. Priority order:
-/// 1. sandbox_url from entity state (set via Configure action)
-/// 2. sandbox_url from integration config
-/// 3. Modal API broker
+/// 1. sandbox_url from entity state (set via Configure action) or integration config
+/// 2. E2B REST API (requires e2b_api_key in integration config)
 fn provision_sandbox(ctx: &Context) -> Result<SandboxResult, String> {
     let fields = ctx
         .entity_state
@@ -106,13 +110,18 @@ fn provision_sandbox(ctx: &Context) -> Result<SandboxResult, String> {
         .cloned()
         .unwrap_or(json!({}));
 
-    // Priority 1: sandbox_url from entity state (set at Configure time).
+    // Priority 1: sandbox_url from entity state (set at Configure time) or config.
     let static_url = fields
         .get("sandbox_url")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
-        .or_else(|| ctx.config.get("sandbox_url").cloned())
+        .or_else(|| {
+            ctx.config
+                .get("sandbox_url")
+                .filter(|s| !s.is_empty())
+                .cloned()
+        })
         .or_else(|| {
             ctx.trigger_params
                 .get("sandbox_url")
@@ -127,60 +136,92 @@ fn provision_sandbox(ctx: &Context) -> Result<SandboxResult, String> {
         });
     }
 
-    // Priority 2: Modal API (requires modal_api_token secret).
-    // Note: Modal uses a Python SDK, not a REST API. This path requires
-    // a pre-deployed broker endpoint that wraps the SDK.
-    let modal_token = ctx
-        .get_secret("modal_api_token")
+    // Priority 2: E2B REST API (requires e2b_api_key).
+    let e2b_api_key = ctx
+        .config
+        .get("e2b_api_key")
+        .cloned()
         .unwrap_or_default();
 
-    if modal_token.is_empty() {
-        return Err("no sandbox_url in config and no modal_api_token secret".to_string());
+    if e2b_api_key.is_empty() || e2b_api_key.contains("{secret:") {
+        return Err(
+            "no sandbox_url configured and no e2b_api_key available — \
+             set sandbox_url via Configure or store e2b_api_key secret"
+                .to_string(),
+        );
     }
 
-    let modal_broker_url = ctx
-        .config
-        .get("modal_broker_url")
-        .cloned()
-        .unwrap_or_else(|| "http://localhost:8888/create-sandbox".to_string());
+    ctx.log("info", "sandbox_provisioner: provisioning via E2B API");
 
+    let e2b_api_url = ctx
+        .config
+        .get("e2b_api_url")
+        .cloned()
+        .unwrap_or_else(|| "https://api.e2b.dev".to_string());
+
+    let template_id = ctx
+        .config
+        .get("e2b_template_id")
+        .cloned()
+        .unwrap_or_else(|| "base".to_string());
+
+    // Create sandbox via E2B REST API
+    let create_url = format!("{e2b_api_url}/sandboxes");
     let headers = vec![
-        ("authorization".to_string(), format!("Bearer {modal_token}")),
+        ("x-api-key".to_string(), e2b_api_key.clone()),
         ("content-type".to_string(), "application/json".to_string()),
     ];
 
     let body = json!({
+        "templateID": template_id,
         "timeout": 600,
     });
 
-    let resp = ctx.http_call("POST", &modal_broker_url, &headers, &body.to_string())?;
+    let resp = ctx.http_call("POST", &create_url, &headers, &body.to_string())?;
 
     if resp.status < 200 || resp.status >= 300 {
         return Err(format!(
-            "sandbox broker failed (HTTP {}): {}",
+            "E2B sandbox creation failed (HTTP {}): {}",
             resp.status,
             &resp.body[..resp.body.len().min(500)]
         ));
     }
 
     let parsed: Value = serde_json::from_str(&resp.body)
-        .map_err(|e| format!("failed to parse broker response: {e}"))?;
+        .map_err(|e| format!("failed to parse E2B response: {e}"))?;
 
     let sandbox_id = parsed
-        .get("sandbox_id")
+        .get("sandboxID")
+        .or_else(|| parsed.get("sandbox_id"))
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string();
 
-    let sandbox_url = parsed
-        .get("sandbox_url")
+    let client_id = parsed
+        .get("clientID")
+        .or_else(|| parsed.get("client_id"))
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
 
-    if sandbox_url.is_empty() {
-        return Err("broker response missing sandbox_url".to_string());
-    }
+    // E2B sandbox URL: envd daemon on port 49983 at domain e2b.app.
+    // URL format: https://{port}-{sandbox_id}.{domain} (port comes FIRST).
+    // File ops (read/write) are plain HTTP on this endpoint.
+    let sandbox_url = parsed
+        .get("sandbox_url")
+        .or_else(|| parsed.get("url"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            format!("https://49983-{sandbox_id}.e2b.app")
+        });
+
+    ctx.log(
+        "info",
+        &format!(
+            "sandbox_provisioner: E2B sandbox created: id={sandbox_id}, client={client_id}, url={sandbox_url}"
+        ),
+    );
 
     Ok(SandboxResult {
         sandbox_url,
