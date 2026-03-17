@@ -160,7 +160,7 @@ fn install_non_wasm_policy(state: &ServerState) {
 /// 3. A WASM invocation entry recording the failed invocation
 async fn assert_wasm_authz_denial_artifacts(state: &ServerState, entity_id: &str) {
     let turso = state
-        .persistent_store()
+        .platform_persistent_store()
         .expect("Turso backend required for authz denial artifact verification");
 
     // 1. Verify PendingDecision was persisted.

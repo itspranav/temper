@@ -28,7 +28,7 @@ async fn persist_evolution_record(
     derived_from: Option<&str>,
     data_json: &str,
 ) -> Result<(), String> {
-    let Some(turso) = state.persistent_store() else {
+    let Some(turso) = state.platform_persistent_store() else {
         tracing::debug!(
             record_id,
             record_type,
@@ -348,7 +348,7 @@ pub(crate) async fn handle_feature_requests(
 
     // Query Turso directly (single source of truth).
     let system_tenant = TenantId::new("temper-system");
-    if let Some(turso) = state.persistent_store() {
+    if let Some(turso) = state.platform_persistent_store() {
         // First, generate and upsert fresh feature requests from trajectory data.
         let generated = insight_generator::generate_feature_requests(&trajectory_entries);
         for fr in &generated {
@@ -469,7 +469,7 @@ pub(crate) async fn handle_update_feature_request(
         }
     }
 
-    let Some(turso) = state.persistent_store() else {
+    let Some(turso) = state.platform_persistent_store() else {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     };
 

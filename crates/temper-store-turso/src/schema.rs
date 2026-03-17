@@ -301,6 +301,22 @@ pub const CREATE_TENANT_USERS_USER_INDEX: &str = "\
 CREATE INDEX IF NOT EXISTS idx_tenant_users_user
     ON tenant_users(user_id);";
 
+/// Per-tenant encrypted secret storage.
+///
+/// Mirrors the Postgres `tenant_secrets` table. Ciphertext and nonce are stored
+/// as BLOBs (AES-256-GCM encrypted by [`SecretsVault`]).  Secrets are always
+/// stored in the per-tenant database for proper isolation.
+pub const CREATE_TENANT_SECRETS_TABLE: &str = "\
+CREATE TABLE IF NOT EXISTS tenant_secrets (
+    tenant TEXT NOT NULL,
+    key_name TEXT NOT NULL,
+    ciphertext BLOB NOT NULL,
+    nonce BLOB NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY(tenant, key_name)
+);";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,6 +346,7 @@ mod tests {
         assert!(CREATE_EVOLUTION_RECORDS_STATUS_INDEX.contains("IF NOT EXISTS"));
         assert!(CREATE_DESIGN_TIME_EVENTS_TABLE.contains("IF NOT EXISTS"));
         assert!(CREATE_DESIGN_TIME_EVENTS_TENANT_INDEX.contains("IF NOT EXISTS"));
+        assert!(CREATE_TENANT_SECRETS_TABLE.contains("IF NOT EXISTS"));
     }
 
     #[test]
