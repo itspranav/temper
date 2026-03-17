@@ -155,6 +155,23 @@ CREATE TABLE IF NOT EXISTS tenant_policies (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );";
 
+/// Granular Cedar policy storage with per-policy tracking and hash-based change detection.
+///
+/// Replaces the flat `tenant_policies` table for new write paths.
+/// Multiple policy entries per tenant are supported (e.g. one per approved decision
+/// or one manually-managed "primary" entry).  At boot, all rows for a tenant are
+/// concatenated to reconstruct the effective policy set.
+pub const CREATE_POLICIES_TABLE: &str = "\
+CREATE TABLE IF NOT EXISTS policies (
+    tenant TEXT NOT NULL,
+    policy_id TEXT NOT NULL,
+    cedar_text TEXT NOT NULL,
+    policy_hash TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_by TEXT NOT NULL DEFAULT 'system',
+    PRIMARY KEY(tenant, policy_id)
+);";
+
 /// Tracks which OS apps are installed per tenant (workspace).
 ///
 /// On boot, `restore_registry_from_turso()` reads the `specs` table to reload
