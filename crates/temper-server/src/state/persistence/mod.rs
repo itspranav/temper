@@ -7,17 +7,6 @@ use temper_store_turso::{TursoEventStore, TursoWasmInvocationInsert};
 use super::ServerState;
 use super::wasm_invocation_log::WasmInvocationEntry;
 
-/// Borrowed metadata backend for platform-scoped operations.
-///
-/// Used only for system-wide data that stays in the platform DB
-/// (evolution records, feature requests). For tenant-scoped data,
-/// use [`TenantMetadataBackend`] via [`ServerState::metadata_backend_for_tenant`].
-enum MetadataBackend<'a> {
-    Postgres(&'a PgPool),
-    Turso(&'a TursoEventStore),
-    Redis,
-}
-
 /// Owned metadata backend for tenant-scoped operations.
 ///
 /// `turso_for_tenant()` returns an owned `TursoEventStore` (Arc-based,
@@ -36,25 +25,6 @@ impl ServerState {
         format!(
             "{operation} is not supported on redis backend (explicit ephemeral mode: metadata is in-memory only)"
         )
-    }
-
-    /// Return the platform-scoped metadata backend.
-    ///
-    /// Only use for system-wide data (evolution records, feature requests).
-    /// For tenant-scoped data, use [`metadata_backend_for_tenant`].
-    fn platform_metadata_backend(&self) -> Option<MetadataBackend<'_>> {
-        let store = self.event_store.as_ref()?;
-        if let Some(pool) = store.postgres_pool() {
-            return Some(MetadataBackend::Postgres(pool));
-        }
-        if let Some(turso) = store.platform_turso_store() {
-            return Some(MetadataBackend::Turso(turso));
-        }
-        if store.redis_store().is_some() {
-            Some(MetadataBackend::Redis)
-        } else {
-            None
-        }
     }
 
     /// Return a tenant-scoped metadata backend.

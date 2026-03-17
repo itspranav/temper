@@ -196,6 +196,7 @@ pub(crate) async fn handle_get_agent_history(
         state.collect_all_turso_stores().await
     };
 
+    let mut all_history: Vec<AgentHistoryEntry> = Vec::new();
     for turso in &stores {
         match turso
             .query_trajectories_by_agent(
@@ -207,40 +208,33 @@ pub(crate) async fn handle_get_agent_history(
             .await
         {
             Ok(rows) => {
-                let history: Vec<AgentHistoryEntry> = rows
-                    .into_iter()
-                    .map(|r| AgentHistoryEntry {
-                        timestamp: r.created_at,
-                        tenant: r.tenant,
-                        entity_type: r.entity_type,
-                        entity_id: r.entity_id,
-                        action: r.action,
-                        success: r.success,
-                        from_status: r.from_status,
-                        to_status: r.to_status,
-                        error: r.error,
-                        authz_denied: r.authz_denied.unwrap_or(false),
-                        denied_resource: r.denied_resource,
-                    })
-                    .collect();
-                let total = history.len();
-                return Ok(Json(serde_json::json!({
-                    "agent_id": agent_id,
-                    "history": history,
-                    "total": total,
-                })));
+                all_history.extend(rows.into_iter().map(|r| AgentHistoryEntry {
+                    timestamp: r.created_at,
+                    tenant: r.tenant,
+                    entity_type: r.entity_type,
+                    entity_id: r.entity_id,
+                    action: r.action,
+                    success: r.success,
+                    from_status: r.from_status,
+                    to_status: r.to_status,
+                    error: r.error,
+                    authz_denied: r.authz_denied.unwrap_or(false),
+                    denied_resource: r.denied_resource,
+                }));
             }
             Err(e) => {
                 tracing::warn!(error = %e, "failed to query agent history from Turso");
-                return Err(StatusCode::SERVICE_UNAVAILABLE);
             }
         }
     }
 
-    // No persistent store configured — return empty.
+    // Sort by timestamp descending and truncate to limit.
+    all_history.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    all_history.truncate(limit as usize);
+    let total = all_history.len();
     Ok(Json(serde_json::json!({
         "agent_id": agent_id,
-        "history": [],
-        "total": 0,
+        "history": all_history,
+        "total": total,
     })))
 }
