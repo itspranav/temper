@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use temper_platform::bootstrap::{bootstrap_agent_specs, bootstrap_system_tenant};
 use temper_platform::state::PlatformState;
 use temper_runtime::tenant::TenantId;
-use temper_server::identity::{hash_token, IdentityResolver};
+use temper_server::identity::{IdentityResolver, hash_token};
 use temper_server::request_context::AgentContext;
 use tower::ServiceExt;
 
@@ -91,7 +91,14 @@ async fn e2e_agent_type_lifecycle() {
     );
 
     // Deprecate
-    let r = dispatch(&state, "AgentType", "at-1", "Deprecate", serde_json::json!({})).await;
+    let r = dispatch(
+        &state,
+        "AgentType",
+        "at-1",
+        "Deprecate",
+        serde_json::json!({}),
+    )
+    .await;
     assert!(r.success, "Deprecate: {:?}", r.error);
     assert_eq!(r.state.status, "Deprecated");
 
@@ -283,7 +290,12 @@ async fn e2e_identity_resolution_rotated_credential() {
 
     // Verify it resolves before rotation
     let resolver = IdentityResolver::new();
-    assert!(resolver.resolve(&state.server, &tenant, plaintext).await.is_some());
+    assert!(
+        resolver
+            .resolve(&state.server, &tenant, plaintext)
+            .await
+            .is_some()
+    );
 
     // Rotate the credential
     dispatch(
@@ -302,10 +314,7 @@ async fn e2e_identity_resolution_rotated_credential() {
     // Should no longer resolve (status is Rotated, not Active)
     let resolver2 = IdentityResolver::new();
     let result = resolver2.resolve(&state.server, &tenant, plaintext).await;
-    assert!(
-        result.is_none(),
-        "rotated credential should not resolve"
-    );
+    assert!(result.is_none(), "rotated credential should not resolve");
 }
 
 /// Identity resolver: deprecated AgentType → None.
@@ -354,7 +363,12 @@ async fn e2e_identity_resolution_deprecated_agent_type() {
 
     // Resolves before deprecation
     let resolver = IdentityResolver::new();
-    assert!(resolver.resolve(&state.server, &tenant, plaintext).await.is_some());
+    assert!(
+        resolver
+            .resolve(&state.server, &tenant, plaintext)
+            .await
+            .is_some()
+    );
 
     // Deprecate the AgentType
     dispatch(
@@ -397,9 +411,7 @@ async fn e2e_http_identity_resolve_exempt_from_auth() {
             Request::post("/api/identity/resolve")
                 .header("Content-Type", "application/json")
                 .header("X-Tenant-Id", TEST_TENANT)
-                .body(Body::from(
-                    r#"{"bearer_token": "nonexistent-token"}"#,
-                ))
+                .body(Body::from(r#"{"bearer_token": "nonexistent-token"}"#))
                 .unwrap(),
         )
         .await
@@ -520,9 +532,7 @@ async fn e2e_http_agent_credential_auth() {
             Request::post("/api/identity/resolve")
                 .header("Content-Type", "application/json")
                 .header("X-Tenant-Id", TEST_TENANT)
-                .body(Body::from(format!(
-                    r#"{{"bearer_token": "{agent_key}"}}"#
-                )))
+                .body(Body::from(format!(r#"{{"bearer_token": "{agent_key}"}}"#)))
                 .unwrap(),
         )
         .await
