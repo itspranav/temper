@@ -36,9 +36,7 @@ pub async fn bearer_auth_check(
 
     // Allow identity resolution endpoint without auth — the token in the
     // request body IS the credential being resolved (self-resolving).
-    if req.method() == axum::http::Method::POST
-        && req.uri().path() == "/api/identity/resolve"
-    {
+    if req.method() == axum::http::Method::POST && req.uri().path() == "/api/identity/resolve" {
         return Ok(next.run(req).await);
     }
 
