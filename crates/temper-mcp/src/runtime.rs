@@ -15,14 +15,13 @@ pub(crate) struct ClientInfo {
 }
 
 /// Response from `POST /api/identity/resolve`.
+///
+/// Only the fields needed by the MCP runtime are declared; extra fields
+/// from the server response are silently ignored by serde.
 #[derive(serde::Deserialize)]
 struct ResolvedIdentityResponse {
     agent_instance_id: String,
-    #[allow(dead_code)]
-    agent_type_id: String,
     agent_type_name: String,
-    #[allow(dead_code)]
-    verified: bool,
 }
 
 /// Thin-client runtime context for the MCP server.
