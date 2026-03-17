@@ -8,6 +8,9 @@ use temper_runtime::persistence::{PersistenceError, storage_error};
 use tracing::instrument;
 
 use super::TursoEventStore;
+
+/// A single encrypted secret row: `(key_name, ciphertext, nonce)`.
+pub type SecretRow = (String, Vec<u8>, Vec<u8>);
 use crate::metrics::TursoQueryTimer;
 
 impl TursoEventStore {
@@ -68,7 +71,7 @@ impl TursoEventStore {
     pub async fn load_secrets_for_tenant(
         &self,
         tenant: &str,
-    ) -> Result<Vec<(String, Vec<u8>, Vec<u8>)>, PersistenceError> {
+    ) -> Result<Vec<SecretRow>, PersistenceError> {
         let _query_timer = TursoQueryTimer::start("turso.load_secrets_for_tenant");
         let conn = self.configured_connection().await?;
         let mut rows = conn
