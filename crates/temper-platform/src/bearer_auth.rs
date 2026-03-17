@@ -34,6 +34,14 @@ pub async fn bearer_auth_check(
         return Ok(next.run(req).await);
     }
 
+    // Allow identity resolution endpoint without auth — the token in the
+    // request body IS the credential being resolved (self-resolving).
+    if req.method() == axum::http::Method::POST
+        && req.uri().path() == "/api/identity/resolve"
+    {
+        return Ok(next.run(req).await);
+    }
+
     let Some(ref _expected) = state.api_token else {
         // No API key configured — passthrough (local dev mode).
         return Ok(next.run(req).await);
