@@ -5581,6 +5581,7 @@ dependencies = [
  "temper-spec",
  "temper-store-turso",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -5725,6 +5726,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "temper-authz",
  "temper-evolution",

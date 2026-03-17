@@ -58,6 +58,7 @@ const TASK_IOA: &str = include_str!("specs/task.ioa.toml");
 const TOOL_CALL_IOA: &str = include_str!("specs/tool_call.ioa.toml");
 const SCHEDULE_IOA: &str = include_str!("specs/schedule.ioa.toml");
 const POLICY_IOA: &str = include_str!("specs/policy.ioa.toml");
+const AGENT_CREDENTIAL_IOA: &str = include_str!("specs/agent_credential.ioa.toml");
 const AGENT_CSDL: &str = include_str!("specs/agent_model.csdl.xml");
 
 /// Agent entity specs as (entity_type, ioa_source) pairs.
@@ -69,6 +70,7 @@ const AGENT_SPECS: &[(&str, &str)] = &[
     ("ToolCall", TOOL_CALL_IOA),
     ("Schedule", SCHEDULE_IOA),
     ("Policy", POLICY_IOA),
+    ("AgentCredential", AGENT_CREDENTIAL_IOA),
 ];
 
 /// Verify, parse, and register a set of IOA specs under a tenant.
@@ -513,6 +515,6 @@ mod tests {
 
     #[test]
     fn test_agent_specs_count() {
-        assert_eq!(AGENT_SPECS.len(), 7);
+        assert_eq!(AGENT_SPECS.len(), 8);
     }
 }

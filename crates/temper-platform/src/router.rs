@@ -43,8 +43,15 @@ pub fn build_platform_router(state: PlatformState) -> Router {
             routing::delete(crate::tenant_api::delete_tenant),
         );
 
+    // Identity resolution endpoint — used by MCP server at startup.
+    let identity_api = Router::new().route(
+        "/api/identity/resolve",
+        routing::post(temper_server::identity::endpoint::handle_identity_resolve),
+    );
+
     temper_server::build_router(state.server.clone())
         .merge(health)
+        .merge(identity_api.with_state(state.server.clone()))
         .merge(platform_observe.with_state(state.clone()))
         .nest("/api", tenant_api.with_state(state.clone()))
         .layer(middleware::from_fn_with_state(

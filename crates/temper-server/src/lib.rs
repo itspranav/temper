@@ -9,6 +9,7 @@ pub mod adapters;
 mod api;
 pub mod authz;
 pub mod entity_actor;
+pub mod identity;
 pub mod event_store;
 pub mod events;
 pub mod eventual_invariants;
