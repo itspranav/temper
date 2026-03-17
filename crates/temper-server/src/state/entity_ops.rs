@@ -368,7 +368,7 @@ impl ServerState {
         let authz_start = sim_now();
         let decision = self
             .authz
-            .authorize_or_bypass(security_ctx, action, resource_type, &attrs);
+            .authorize_for_tenant_or_bypass(tenant, security_ctx, action, resource_type, &attrs);
         let duration_ns = (sim_now() - authz_start)
             .num_nanoseconds()
             .unwrap_or(0)

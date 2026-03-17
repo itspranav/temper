@@ -170,21 +170,20 @@ pub async fn run(
 }
 
 fn seed_cedar_policies(state: &PlatformState, tenant_policy_seed: BTreeMap<String, String>) {
-    let combined = {
-        let mut policies = state.server.tenant_policies.write().unwrap(); // ci-ok: infallible lock
-        for (tenant, policy_text) in tenant_policy_seed {
-            policies.insert(tenant, policy_text);
+    for (tenant, policy_text) in &tenant_policy_seed {
+        if let Err(e) = state
+            .server
+            .authz
+            .reload_tenant_policies(tenant, policy_text)
+        {
+            eprintln!("  Warning: failed to load Cedar policies for tenant '{tenant}': {e}");
+            continue;
         }
-        let mut combined = String::new();
-        for text in policies.values() {
-            combined.push_str(text);
-            combined.push('\n');
-        }
-        combined
-    };
-
-    if let Err(e) = state.server.authz.reload_policies(&combined) {
-        eprintln!("  Warning: failed to load Cedar policies from app specs: {e}");
+    }
+    // Update in-memory text cache.
+    let mut policies = state.server.tenant_policies.write().unwrap(); // ci-ok: infallible lock
+    for (tenant, policy_text) in tenant_policy_seed {
+        policies.insert(tenant, policy_text);
     }
 }
 

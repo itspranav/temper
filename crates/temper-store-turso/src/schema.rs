@@ -159,8 +159,8 @@ CREATE TABLE IF NOT EXISTS tenant_policies (
 ///
 /// Replaces the flat `tenant_policies` table for new write paths.
 /// Multiple policy entries per tenant are supported (e.g. one per approved decision
-/// or one manually-managed "primary" entry).  At boot, all rows for a tenant are
-/// concatenated to reconstruct the effective policy set.
+/// or one manually-managed "primary" entry).  At boot, all enabled rows for a tenant
+/// are concatenated to reconstruct the effective policy set.
 pub const CREATE_POLICIES_TABLE: &str = "\
 CREATE TABLE IF NOT EXISTS policies (
     tenant TEXT NOT NULL,
@@ -169,8 +169,14 @@ CREATE TABLE IF NOT EXISTS policies (
     policy_hash TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     created_by TEXT NOT NULL DEFAULT 'system',
+    enabled INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY(tenant, policy_id)
 );";
+
+/// Migration: add `enabled` column to existing `policies` tables.
+/// SQLite returns an error if the column already exists — callers should ignore failures.
+pub const ALTER_POLICIES_ADD_ENABLED: &str =
+    "ALTER TABLE policies ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1";
 
 /// Tracks which OS apps are installed per tenant (workspace).
 ///

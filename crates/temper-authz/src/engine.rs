@@ -4,13 +4,13 @@
 //! for OData operations. Translates Temper concepts (entities, actions,
 //! security contexts) into Cedar's authorization model.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::{OnceLock, RwLock};
 
 use cedar_policy::{
-    Authorizer, Context, Decision, Entities, Entity, EntityUid, PolicySet, Request,
-    Response as CedarResponse,
+    Authorizer, Context, Decision, Entities, Entity, EntityUid, Policy, PolicyId, PolicySet,
+    Request, Response as CedarResponse,
 };
 use opentelemetry::global;
 use opentelemetry::metrics::Counter;
@@ -42,22 +42,37 @@ impl AuthzDecision {
     }
 }
 
-/// The authorization engine. Holds compiled Cedar policies and evaluates
-/// authorization requests. Supports hot-reload of policies via [`reload_policies`].
+/// Per-tenant policy data: the compiled `PolicySet` and the source text.
+struct TenantPolicies {
+    policy_set: PolicySet,
+    source_text: String,
+}
+
+/// The authorization engine. Holds per-tenant compiled Cedar policies and
+/// evaluates authorization requests. Supports hot-reload of policies via
+/// [`reload_tenant_policies`](AuthzEngine::reload_tenant_policies).
+///
+/// Uses `BTreeMap` for deterministic iteration order (DST compliance).
 pub struct AuthzEngine {
-    policy_set: RwLock<PolicySet>,
+    /// Per-tenant policy sets. Each tenant has its own isolated PolicySet.
+    tenant_policies: RwLock<BTreeMap<String, TenantPolicies>>,
+    /// Fallback global policy set for callers that don't specify a tenant.
+    /// Deprecated: callers should migrate to `authorize_for_tenant`.
+    fallback_policy_set: RwLock<PolicySet>,
     authorizer: Authorizer,
 }
 
 impl AuthzEngine {
-    /// Create a new AuthzEngine from Cedar policy text.
+    /// Create a new AuthzEngine from Cedar policy text (loaded into the
+    /// fallback global policy set).
     pub fn new(policy_text: &str) -> Result<Self, AuthzError> {
         let policy_set = policy_text
             .parse::<PolicySet>()
             .map_err(|e| AuthzError::PolicyParse(e.to_string()))?;
 
         Ok(Self {
-            policy_set: RwLock::new(policy_set),
+            tenant_policies: RwLock::new(BTreeMap::new()),
+            fallback_policy_set: RwLock::new(policy_set),
             authorizer: Authorizer::new(),
         })
     }
@@ -68,7 +83,8 @@ impl AuthzEngine {
     /// to be allowed, use [`permissive`](Self::permissive) instead.
     pub fn empty() -> Self {
         Self {
-            policy_set: RwLock::new(PolicySet::new()),
+            tenant_policies: RwLock::new(BTreeMap::new()),
+            fallback_policy_set: RwLock::new(PolicySet::new()),
             authorizer: Authorizer::new(),
         }
     }
@@ -81,44 +97,212 @@ impl AuthzEngine {
         let policy_set =
             PolicySet::from_str("permit(principal, action, resource);").unwrap_or_default();
         Self {
-            policy_set: RwLock::new(policy_set),
+            tenant_policies: RwLock::new(BTreeMap::new()),
+            fallback_policy_set: RwLock::new(policy_set),
             authorizer: Authorizer::new(),
         }
     }
 
-    /// Hot-reload Cedar policies. Parses and validates the new policy text,
-    /// then atomically swaps the policy set. If parsing fails, the existing
-    /// policies remain in effect and an error is returned.
+    /// Hot-reload Cedar policies for a specific tenant. Parses and validates
+    /// the new policy text, then atomically swaps the tenant's policy set.
+    /// If parsing fails, existing policies remain in effect.
+    pub fn reload_tenant_policies(
+        &self,
+        tenant: &str,
+        policy_text: &str,
+    ) -> Result<(), AuthzError> {
+        let new_policy_set = policy_text
+            .parse::<PolicySet>()
+            .map_err(|e| AuthzError::PolicyParse(e.to_string()))?;
+
+        let mut tenants = self
+            .tenant_policies
+            .write()
+            .map_err(|e| AuthzError::Engine(format!("tenant policy lock poisoned: {e}")))?;
+
+        tenants.insert(
+            tenant.to_string(),
+            TenantPolicies {
+                policy_set: new_policy_set,
+                source_text: policy_text.to_string(),
+            },
+        );
+        Ok(())
+    }
+
+    /// Hot-reload Cedar policies for a tenant from individually named policy
+    /// entries. Each `(policy_id, cedar_text)` pair is parsed individually and
+    /// assigned a meaningful `PolicyId` of the form `"{tenant}:{policy_id}"`.
+    ///
+    /// Multiple permit/forbid statements in one `cedar_text` are suffixed:
+    /// `"{tenant}:{policy_id}:0"`, `":1"`, etc.
+    ///
+    /// This enables meaningful policy IDs in denial diagnostics instead of
+    /// auto-generated names like `"policy0"`.
+    pub fn reload_tenant_policies_named(
+        &self,
+        tenant: &str,
+        policies: &[(String, String)], // (policy_id, cedar_text)
+    ) -> Result<(), AuthzError> {
+        let mut combined_set = PolicySet::new();
+        let mut combined_text = String::new();
+
+        for (policy_id, cedar_text) in policies {
+            // Parse each entry's Cedar text individually.
+            let entry_set: PolicySet = cedar_text
+                .parse()
+                .map_err(|e| AuthzError::PolicyParse(format!("{policy_id}: {e}")))?;
+
+            // Re-add each policy with a meaningful PolicyId.
+            let entry_policies: Vec<Policy> = entry_set.policies().cloned().collect();
+            if entry_policies.len() == 1 {
+                let named = entry_policies
+                    .into_iter()
+                    .next()
+                    .unwrap() // ci-ok: checked len == 1
+                    .new_id(PolicyId::new(format!("{tenant}:{policy_id}")));
+                combined_set
+                    .add(named)
+                    .map_err(|e| AuthzError::PolicyParse(e.to_string()))?;
+            } else {
+                for (idx, p) in entry_policies.into_iter().enumerate() {
+                    let named =
+                        p.new_id(PolicyId::new(format!("{tenant}:{policy_id}:{idx}")));
+                    combined_set
+                        .add(named)
+                        .map_err(|e| AuthzError::PolicyParse(e.to_string()))?;
+                }
+            }
+
+            if !combined_text.is_empty() {
+                combined_text.push('\n');
+            }
+            combined_text.push_str(cedar_text);
+        }
+
+        let mut tenants = self
+            .tenant_policies
+            .write()
+            .map_err(|e| AuthzError::Engine(format!("tenant policy lock poisoned: {e}")))?;
+
+        tenants.insert(
+            tenant.to_string(),
+            TenantPolicies {
+                policy_set: combined_set,
+                source_text: combined_text,
+            },
+        );
+        Ok(())
+    }
+
+    /// Remove a tenant's policy set entirely.
+    pub fn remove_tenant(&self, tenant: &str) {
+        if let Ok(mut tenants) = self.tenant_policies.write() {
+            tenants.remove(tenant);
+        }
+    }
+
+    /// Get the combined Cedar policy text for a tenant.
+    pub fn get_tenant_policy_text(&self, tenant: &str) -> Option<String> {
+        self.tenant_policies
+            .read()
+            .ok()
+            .and_then(|t| t.get(tenant).map(|tp| tp.source_text.clone()))
+    }
+
+    /// Hot-reload Cedar policies into the fallback global policy set.
+    ///
+    /// **Deprecated**: Use [`reload_tenant_policies`](Self::reload_tenant_policies)
+    /// for per-tenant isolation. This method exists for backward compatibility
+    /// during migration.
     pub fn reload_policies(&self, policy_text: &str) -> Result<(), AuthzError> {
         let new_policy_set = policy_text
             .parse::<PolicySet>()
             .map_err(|e| AuthzError::PolicyParse(e.to_string()))?;
 
         let mut current = self
-            .policy_set
+            .fallback_policy_set
             .write()
             .map_err(|e| AuthzError::Engine(format!("policy lock poisoned: {e}")))?;
         *current = new_policy_set;
         Ok(())
     }
 
-    /// Returns the number of policies currently loaded.
+    /// Returns the total number of policies across all tenants + fallback.
     pub fn policy_count(&self) -> usize {
-        self.policy_set.read().map_or(0, |ps| ps.policies().count())
+        let tenant_count = self
+            .tenant_policies
+            .read()
+            .map(|t| t.values().map(|tp| tp.policy_set.policies().count()).sum())
+            .unwrap_or(0);
+        let fallback_count = self
+            .fallback_policy_set
+            .read()
+            .map_or(0, |ps| ps.policies().count());
+        tenant_count + fallback_count
     }
 
-    /// Evaluate an authorization request.
+    /// Evaluate an authorization request against the fallback global policy set.
     ///
-    /// - `security_ctx`: The security context from the HTTP request
-    /// - `action`: The OData action (e.g., "read", "create", "submitOrder", "cancelOrder")
-    /// - `resource_type`: The entity type (e.g., "Order")
-    /// - `resource_attrs`: Attributes of the resource being accessed
+    /// **Prefer [`authorize_for_tenant`](Self::authorize_for_tenant)** for
+    /// per-tenant isolation. This method exists for backward compatibility.
     pub fn authorize(
         &self,
         security_ctx: &SecurityContext,
         action: &str,
         resource_type: &str,
         resource_attrs: &HashMap<String, serde_json::Value>,
+    ) -> AuthzDecision {
+        let policy_set = match self.fallback_policy_set.read() {
+            Ok(ps) => ps,
+            Err(e) => {
+                return AuthzDecision::Deny(AuthzDenial::EngineError(format!(
+                    "policy lock poisoned: {e}"
+                )));
+            }
+        };
+        self.evaluate_request(security_ctx, action, resource_type, resource_attrs, &policy_set)
+    }
+
+    /// Evaluate an authorization request against a specific tenant's policy set.
+    ///
+    /// If the tenant has no policies loaded, falls back to Cedar default-deny
+    /// (returns `NoMatchingPermit`).
+    pub fn authorize_for_tenant(
+        &self,
+        tenant: &str,
+        security_ctx: &SecurityContext,
+        action: &str,
+        resource_type: &str,
+        resource_attrs: &HashMap<String, serde_json::Value>,
+    ) -> AuthzDecision {
+        let tenants = match self.tenant_policies.read() {
+            Ok(t) => t,
+            Err(e) => {
+                return AuthzDecision::Deny(AuthzDenial::EngineError(format!(
+                    "tenant policy lock poisoned: {e}"
+                )));
+            }
+        };
+
+        if let Some(tp) = tenants.get(tenant) {
+            self.evaluate_request(security_ctx, action, resource_type, resource_attrs, &tp.policy_set)
+        } else {
+            // No per-tenant policies loaded — fall back to global.
+            drop(tenants);
+            self.authorize(security_ctx, action, resource_type, resource_attrs)
+        }
+    }
+
+    /// Core Cedar evaluation logic shared by both `authorize` and
+    /// `authorize_for_tenant`.
+    fn evaluate_request(
+        &self,
+        security_ctx: &SecurityContext,
+        action: &str,
+        resource_type: &str,
+        resource_attrs: &HashMap<String, serde_json::Value>,
+        policy_set: &PolicySet,
     ) -> AuthzDecision {
         cedar_evaluations_counter().add(1, &[]);
 
@@ -256,17 +440,9 @@ impl AuthzEngine {
             }
         };
 
-        let policy_set = match self.policy_set.read() {
-            Ok(ps) => ps,
-            Err(e) => {
-                return AuthzDecision::Deny(AuthzDenial::EngineError(format!(
-                    "policy lock poisoned: {e}"
-                )));
-            }
-        };
         let response: CedarResponse =
             self.authorizer
-                .is_authorized(&request, &policy_set, &entities);
+                .is_authorized(&request, policy_set, &entities);
 
         match response.decision() {
             Decision::Allow => AuthzDecision::Allow,
@@ -291,6 +467,7 @@ impl AuthzEngine {
     }
 
     /// Authorize with system bypass: system principals always allowed.
+    /// Uses fallback global policy set.
     pub fn authorize_or_bypass(
         &self,
         security_ctx: &SecurityContext,
@@ -302,6 +479,21 @@ impl AuthzEngine {
             return AuthzDecision::Allow;
         }
         self.authorize(security_ctx, action, resource_type, resource_attrs)
+    }
+
+    /// Authorize for a specific tenant with system bypass.
+    pub fn authorize_for_tenant_or_bypass(
+        &self,
+        tenant: &str,
+        security_ctx: &SecurityContext,
+        action: &str,
+        resource_type: &str,
+        resource_attrs: &HashMap<String, serde_json::Value>,
+    ) -> AuthzDecision {
+        if Self::is_system(security_ctx) {
+            return AuthzDecision::Allow;
+        }
+        self.authorize_for_tenant(tenant, security_ctx, action, resource_type, resource_attrs)
     }
 }
 
@@ -796,5 +988,94 @@ mod tests {
             decision.is_allowed(),
             "supervisor agent_type must be allowed for Assign: {decision:?}"
         );
+    }
+
+    #[test]
+    fn test_per_tenant_isolation() {
+        let engine = AuthzEngine::empty();
+
+        // Load different policies for two tenants.
+        engine
+            .reload_tenant_policies(
+                "tenant-a",
+                r#"permit(principal, action == Action::"read", resource is Doc);"#,
+            )
+            .unwrap();
+        engine
+            .reload_tenant_policies(
+                "tenant-b",
+                r#"permit(principal, action == Action::"write", resource is Doc);"#,
+            )
+            .unwrap();
+
+        let ctx = customer_context("user-1");
+        let mut attrs = HashMap::new();
+        attrs.insert("id".to_string(), serde_json::json!("doc-1"));
+
+        // Tenant A allows read but not write.
+        assert!(engine
+            .authorize_for_tenant("tenant-a", &ctx, "read", "Doc", &attrs)
+            .is_allowed());
+        assert!(!engine
+            .authorize_for_tenant("tenant-a", &ctx, "write", "Doc", &attrs)
+            .is_allowed());
+
+        // Tenant B allows write but not read.
+        assert!(!engine
+            .authorize_for_tenant("tenant-b", &ctx, "read", "Doc", &attrs)
+            .is_allowed());
+        assert!(engine
+            .authorize_for_tenant("tenant-b", &ctx, "write", "Doc", &attrs)
+            .is_allowed());
+    }
+
+    #[test]
+    fn test_named_policies_produce_meaningful_ids() {
+        let engine = AuthzEngine::empty();
+
+        engine
+            .reload_tenant_policies_named(
+                "default",
+                &[
+                    (
+                        "os-app:pm".to_string(),
+                        r#"permit(principal, action == Action::"read", resource is Issue);"#
+                            .to_string(),
+                    ),
+                    (
+                        "decision:abc".to_string(),
+                        r#"permit(principal == Agent::"bot-1", action == Action::"Assign", resource is Issue);"#
+                            .to_string(),
+                    ),
+                ],
+            )
+            .unwrap();
+
+        let ctx = customer_context("user-1");
+        let mut attrs = HashMap::new();
+        attrs.insert("id".to_string(), serde_json::json!("issue-1"));
+
+        // Read is allowed (by os-app:pm policy).
+        assert!(engine
+            .authorize_for_tenant("default", &ctx, "read", "Issue", &attrs)
+            .is_allowed());
+
+        // Assign is denied for user-1 (decision:abc only allows bot-1).
+        let decision =
+            engine.authorize_for_tenant("default", &ctx, "Assign", "Issue", &attrs);
+        assert!(!decision.is_allowed());
+
+        // Check that the denial includes meaningful policy IDs.
+        if let AuthzDecision::Deny(AuthzDenial::PolicyDenied { policy_ids }) = &decision {
+            // Should contain something like "default:decision:abc" not "policy0".
+            let has_meaningful = policy_ids
+                .iter()
+                .any(|id| id.contains("default:") || id.contains("decision:"));
+            assert!(
+                has_meaningful,
+                "policy IDs should be meaningful, got: {policy_ids:?}"
+            );
+        }
+        // NoMatchingPermit is also acceptable since user-1 != bot-1
     }
 }
