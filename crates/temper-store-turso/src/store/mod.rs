@@ -20,6 +20,7 @@ mod authz;
 mod constraints;
 mod event_store;
 mod instrumentation;
+mod policy;
 mod specs;
 mod trajectory;
 mod wasm;
@@ -160,6 +161,9 @@ impl TursoEventStore {
         conn.execute(schema::CREATE_TENANT_POLICIES_TABLE, ())
             .await
             .map_err(storage_error)?;
+        conn.execute(schema::CREATE_POLICIES_TABLE, ())
+            .await
+            .map_err(storage_error)?;
         conn.execute(schema::CREATE_TENANT_INSTALLED_APPS_TABLE, ())
             .await
             .map_err(storage_error)?;
@@ -229,6 +233,8 @@ impl TursoEventStore {
 // ---------------------------------------------------------------------------
 // Row / result types
 // ---------------------------------------------------------------------------
+
+pub use policy::PolicyRow;
 
 /// Row returned by [`TursoEventStore::load_specs()`].
 #[derive(Debug, Clone)]

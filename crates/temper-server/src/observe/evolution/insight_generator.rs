@@ -6,6 +6,8 @@
 
 use std::collections::BTreeMap;
 
+use tracing::instrument;
+
 use temper_evolution::insight::{classify_insight, compute_priority_score};
 use temper_evolution::records::{
     FeatureRequestDisposition, FeatureRequestRecord, InsightRecord, InsightSignal,
@@ -49,6 +51,7 @@ struct TrajectorySignal {
 /// classification and priority, and returns `InsightRecord`s. Also correlates
 /// EntitySetNotFound 404 trajectories with SubmitSpec events to detect
 /// resolved vs open unmet intents.
+#[instrument(skip_all, fields(entry_count = entries.len(), insight_count = tracing::field::Empty))]
 pub(crate) fn generate_insights(entries: &[crate::state::TrajectoryEntry]) -> Vec<InsightRecord> {
     if entries.is_empty() {
         tracing::debug!("evolution.insight");
@@ -157,6 +160,14 @@ pub(crate) fn generate_insights(entries: &[crate::state::TrajectoryEntry]) -> Ve
             } else {
                 compute_priority_score(&insight_signal).max(0.5)
             };
+            let severity = if priority >= 0.7 {
+                "high"
+            } else if priority >= 0.4 {
+                "medium"
+            } else {
+                "low"
+            };
+            let category = classify_insight(&insight_signal);
             if resolved {
                 tracing::info!(
                     entity_type = %signal.entity_type,
@@ -165,6 +176,9 @@ pub(crate) fn generate_insights(entries: &[crate::state::TrajectoryEntry]) -> Ve
                     success_rate,
                     resolved,
                     priority_score = priority,
+                    category = ?category,
+                    severity,
+                    recommendation = %recommendation,
                     "evolution.pattern"
                 );
             } else {
@@ -175,6 +189,9 @@ pub(crate) fn generate_insights(entries: &[crate::state::TrajectoryEntry]) -> Ve
                     success_rate,
                     resolved,
                     priority_score = priority,
+                    category = ?category,
+                    severity,
+                    recommendation = %recommendation,
                     "evolution.pattern"
                 );
             }
@@ -205,12 +222,24 @@ pub(crate) fn generate_insights(entries: &[crate::state::TrajectoryEntry]) -> Ve
                 growth_rate: None,
             };
 
+            let authz_priority = compute_priority_score(&insight_signal);
+            let authz_category = classify_insight(&insight_signal);
+            let authz_severity = if authz_priority >= 0.7 {
+                "high"
+            } else if authz_priority >= 0.4 {
+                "medium"
+            } else {
+                "low"
+            };
             tracing::warn!(
                 entity_type = %signal.entity_type,
                 action = %signal.action,
                 total = signal.total,
                 authz_denials = signal.authz_denials,
                 success_rate,
+                category = ?authz_category,
+                severity = authz_severity,
+                recommendation = %recommendation,
                 "evolution.pattern"
             );
             insights.push(build_insight(insight_signal, recommendation, None));
@@ -233,15 +262,6 @@ pub(crate) fn generate_insights(entries: &[crate::state::TrajectoryEntry]) -> Ve
         }
 
         let category = classify_insight(&insight_signal);
-        tracing::info!(
-            entity_type = %signal.entity_type,
-            action = %signal.action,
-            total = signal.total,
-            success_rate,
-            priority_score = priority,
-            category = ?category,
-            "evolution.pattern"
-        );
         let recommendation = match category {
             temper_evolution::records::InsightCategory::UnmetIntent => {
                 format!(
@@ -275,6 +295,25 @@ pub(crate) fn generate_insights(entries: &[crate::state::TrajectoryEntry]) -> Ve
             }
         };
 
+        let severity = if priority >= 0.7 {
+            "high"
+        } else if priority >= 0.4 {
+            "medium"
+        } else {
+            "low"
+        };
+        tracing::info!(
+            entity_type = %signal.entity_type,
+            action = %signal.action,
+            total = signal.total,
+            success_rate,
+            priority_score = priority,
+            category = ?category,
+            severity,
+            recommendation = %recommendation,
+            "evolution.pattern"
+        );
+
         insights.push(build_insight(
             insight_signal,
             recommendation,
@@ -288,6 +327,7 @@ pub(crate) fn generate_insights(entries: &[crate::state::TrajectoryEntry]) -> Ve
             .partial_cmp(&a.priority_score)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+    tracing::Span::current().record("insight_count", insights.len());
     tracing::info!(insight_count = insights.len(), "evolution.insight");
     insights
 }
@@ -342,6 +382,7 @@ struct UnmetIntentAccum {
 /// (SQL GROUP BY). Retained for unit tests that exercise the aggregation logic
 /// against in-memory trajectory slices.
 #[cfg_attr(not(test), allow(dead_code))]
+#[instrument(skip_all, fields(entry_count = entries.len(), intent_count = tracing::field::Empty))]
 pub(crate) fn generate_unmet_intents(
     entries: &[crate::state::TrajectoryEntry],
 ) -> Vec<UnmetIntent> {
@@ -428,6 +469,7 @@ pub(crate) fn generate_unmet_intents(
         .collect();
     let open_count = intents.iter().filter(|i| i.status == "open").count();
     let resolved_count = intents.iter().filter(|i| i.status == "resolved").count();
+    tracing::Span::current().record("intent_count", intents.len());
     if open_count > 0 {
         tracing::warn!(
             entry_count = entries.len(),
@@ -548,6 +590,7 @@ struct PlatformGapAccum {
 ///
 /// Multiple SQL rows that map to the same (entity_type, error_pattern) after
 /// [`categorize_error`] are merged by summing counts and taking extreme timestamps.
+#[instrument(skip_all, fields(failure_row_count = failures.len(), intent_count = tracing::field::Empty))]
 pub(crate) fn generate_unmet_intents_from_aggregated(
     failures: &[temper_store_turso::UnmetIntentAggRow],
     submitted_specs: &std::collections::BTreeMap<String, String>,
@@ -581,7 +624,7 @@ pub(crate) fn generate_unmet_intents_from_aggregated(
         }
     }
 
-    groups
+    let intents: Vec<UnmetIntent> = groups
         .into_values()
         .map(|accum| {
             let resolved = submitted_specs.contains_key(&accum.entity_type);
@@ -617,7 +660,9 @@ pub(crate) fn generate_unmet_intents_from_aggregated(
                 sample_intent: accum.sample_intent,
             }
         })
-        .collect()
+        .collect();
+    tracing::Span::current().record("intent_count", intents.len());
+    intents
 }
 
 fn categorize_error(error: Option<&str>) -> String {
