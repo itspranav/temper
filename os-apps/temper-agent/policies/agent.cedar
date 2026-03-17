@@ -39,8 +39,7 @@ permit(
     Action::"ProcessToolCalls",
     Action::"HandleToolResults",
     Action::"RecordTokenUsage",
-    Action::"RecordResult",
-    Action::"Complete"
+    Action::"RecordResult"
   ],
   resource is TemperAgent
 ) when {
