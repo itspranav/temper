@@ -26,13 +26,13 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
             .cloned()
             .unwrap_or(json!({}));
 
-        let prompt = fields
-            .get("prompt")
+        let user_message = fields
+            .get("user_message")
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        if prompt.is_empty() {
-            return Err("agent not configured — prompt is empty".to_string());
+        if user_message.is_empty() {
+            return Err("agent not configured — user_message is empty".to_string());
         }
 
         // Provision sandbox

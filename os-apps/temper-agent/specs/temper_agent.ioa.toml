@@ -17,11 +17,6 @@ initial = "Created"
 # --- State Variables ---
 
 [[state]]
-name = "prompt"
-type = "string"
-initial = ""
-
-[[state]]
 name = "model"
 type = "string"
 initial = "claude-sonnet-4-20250514"
@@ -112,6 +107,11 @@ type = "string"
 initial = ""
 
 [[state]]
+name = "user_message"
+type = "string"
+initial = ""
+
+[[state]]
 name = "conversation"
 type = "string"
 initial = ""
@@ -122,8 +122,8 @@ initial = ""
 name = "Configure"
 kind = "input"
 from = ["Created"]
-params = ["prompt", "model", "provider", "max_turns", "tools_enabled", "system_prompt", "workdir", "sandbox_url"]
-hint = "Configure agent with task prompt, model, tool settings, and optional sandbox URL."
+params = ["system_prompt", "user_message", "model", "provider", "max_turns", "tools_enabled", "workdir", "sandbox_url"]
+hint = "Configure agent with system prompt, user message (task), model, tool settings, and optional sandbox URL."
 
 [[action]]
 name = "Provision"
@@ -234,7 +234,6 @@ on_failure = "Fail"
 
 [integration.config]
 temper_api_url = "http://localhost:3000"
-sandbox_url = "http://localhost:9999"
 e2b_api_key = "{secret:e2b_api_key}"
 
 [[integration]]

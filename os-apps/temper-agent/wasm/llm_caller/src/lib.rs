@@ -58,19 +58,12 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
             .get("tools_enabled")
             .and_then(|v| v.as_str())
             .unwrap_or("read,write,edit,bash");
-        // `prompt` is the system instruction (agent persona/behavior).
+        // `system_prompt` is the Anthropic API system parameter (agent persona/behavior).
         // `user_message` is the actual user task from the Provision action.
-        // If `system_prompt` is set explicitly, it overrides `prompt` for the
-        // Anthropic system parameter; otherwise `prompt` serves as the system prompt.
-        let prompt = fields
-            .get("prompt")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
         let system_prompt = fields
             .get("system_prompt")
             .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .unwrap_or(prompt);
+            .unwrap_or("");
         let user_message = fields
             .get("user_message")
             .and_then(|v| v.as_str())
@@ -108,8 +101,12 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
         let tenant = &ctx.tenant;
 
         // Read conversation — from TemperFS if file_id set, else inline state.
-        // First turn uses `user_message` (the actual task). `prompt` is the system prompt.
-        let first_turn_content = if user_message.is_empty() { prompt } else { user_message };
+        // First turn uses `user_message` (the actual user task from Provision).
+        // `system_prompt` is always sent as the Anthropic system parameter, never as a message.
+        if user_message.is_empty() {
+            return Err("user_message is empty — nothing to send to the LLM".to_string());
+        }
+        let first_turn_content = user_message;
         let mut messages: Vec<Value> = if !conversation_file_id.is_empty() {
             read_conversation_from_temperfs(&ctx, &temper_api_url, tenant, conversation_file_id, first_turn_content)?
         } else {
@@ -449,7 +446,7 @@ fn read_conversation_from_temperfs(
     temper_api_url: &str,
     tenant: &str,
     file_id: &str,
-    prompt: &str,
+    user_message: &str,
 ) -> Result<Vec<Value>, String> {
     let url = format!("{temper_api_url}/tdata/Files('{file_id}')/$value");
     let headers = vec![
@@ -468,8 +465,8 @@ fn read_conversation_from_temperfs(
                 .cloned()
                 .unwrap_or_default();
             if messages.is_empty() {
-                // First turn — initialize with user prompt
-                Ok(vec![json!({ "role": "user", "content": prompt })])
+                // First turn — initialize with user message
+                Ok(vec![json!({ "role": "user", "content": user_message })])
             } else {
                 Ok(messages)
             }
@@ -477,15 +474,15 @@ fn read_conversation_from_temperfs(
         Ok(resp) if resp.status == 404 => {
             // File has no content yet — first turn
             ctx.log("info", "llm_caller: TemperFS file has no content, initializing");
-            Ok(vec![json!({ "role": "user", "content": prompt })])
+            Ok(vec![json!({ "role": "user", "content": user_message })])
         }
         Ok(resp) => {
             ctx.log("warn", &format!("llm_caller: TemperFS read failed (HTTP {}), falling back to inline", resp.status));
-            Ok(vec![json!({ "role": "user", "content": prompt })])
+            Ok(vec![json!({ "role": "user", "content": user_message })])
         }
         Err(e) => {
             ctx.log("warn", &format!("llm_caller: TemperFS read error: {e}, falling back to inline"));
-            Ok(vec![json!({ "role": "user", "content": prompt })])
+            Ok(vec![json!({ "role": "user", "content": user_message })])
         }
     }
 }

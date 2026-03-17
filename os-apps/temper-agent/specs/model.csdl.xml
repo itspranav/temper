@@ -7,7 +7,6 @@
         <Key><PropertyRef Name="Id"/></Key>
         <Property Name="Id" Type="Edm.String" Nullable="false"/>
         <Property Name="Status" Type="Edm.String"/>
-        <Property Name="Prompt" Type="Edm.String"/>
         <Property Name="Model" Type="Edm.String"/>
         <Property Name="Provider" Type="Edm.String"/>
         <Property Name="ConversationFileId" Type="Edm.String"/>
@@ -26,17 +25,18 @@
         <Property Name="Workdir" Type="Edm.String"/>
         <Property Name="ToolsEnabled" Type="Edm.String"/>
         <Property Name="SystemPrompt" Type="Edm.String"/>
+        <Property Name="UserMessage" Type="Edm.String"/>
         <Property Name="Conversation" Type="Edm.String"/>
       </EntityType>
 
       <Action Name="Configure" IsBound="true">
         <Parameter Name="bindingParameter" Type="Temper.Agent.TemperAgent"/>
-        <Parameter Name="prompt" Type="Edm.String" Nullable="false"/>
+        <Parameter Name="system_prompt" Type="Edm.String" Nullable="false"/>
+        <Parameter Name="user_message" Type="Edm.String" Nullable="false"/>
         <Parameter Name="model" Type="Edm.String" Nullable="true"/>
         <Parameter Name="provider" Type="Edm.String" Nullable="true"/>
         <Parameter Name="max_turns" Type="Edm.String" Nullable="true"/>
         <Parameter Name="tools_enabled" Type="Edm.String" Nullable="true"/>
-        <Parameter Name="system_prompt" Type="Edm.String" Nullable="true"/>
         <Parameter Name="workdir" Type="Edm.String" Nullable="true"/>
         <Parameter Name="sandbox_url" Type="Edm.String" Nullable="true"/>
         <ReturnType Type="Temper.Agent.TemperAgent"/>
