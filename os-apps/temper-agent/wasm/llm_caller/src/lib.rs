@@ -1,13 +1,12 @@
 //! LLM Caller — WASM module for calling the Anthropic Messages API.
 //!
-//! Reads conversation from entity state, calls the LLM, appends the response,
-//! and returns a dynamic callback action based on the LLM's response:
+//! Reads conversation from TemperFS File entity (via $value endpoint) when
+//! `conversation_file_id` is set, otherwise falls back to inline entity state.
+//! Calls the LLM, appends the response, writes back to TemperFS, and returns
+//! a dynamic callback action based on the LLM's response:
 //! - `ProcessToolCalls` if the response contains tool_use blocks
 //! - `RecordResult` if the response is an end_turn
 //! - `Fail` if the turn budget is exceeded
-//!
-//! Phase 0: conversation stored inline in entity state `conversation` field.
-//! Phase 1: conversation stored in TemperFS File entity.
 //!
 //! Build: `cargo build --target wasm32-unknown-unknown --release`
 
@@ -87,18 +86,32 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
             return Err("missing api_key in integration config".to_string());
         }
 
-        // Read conversation from entity state
-        let conversation_json = fields
-            .get("conversation")
+        // TemperFS conversation storage
+        let conversation_file_id = fields
+            .get("conversation_file_id")
             .and_then(|v| v.as_str())
             .unwrap_or("");
+        let temper_api_url = ctx
+            .config
+            .get("temper_api_url")
+            .cloned()
+            .unwrap_or_else(|| "http://localhost:3210".to_string());
+        let tenant = &ctx.tenant;
 
-        let mut messages: Vec<Value> = if conversation_json.is_empty() {
-            // First turn — initialize with user prompt
-            vec![json!({ "role": "user", "content": prompt })]
+        // Read conversation — from TemperFS if file_id set, else inline state
+        let mut messages: Vec<Value> = if !conversation_file_id.is_empty() {
+            read_conversation_from_temperfs(&ctx, &temper_api_url, tenant, conversation_file_id, prompt)?
         } else {
-            serde_json::from_str(conversation_json)
-                .unwrap_or_else(|_| vec![json!({ "role": "user", "content": prompt })])
+            let conversation_json = fields
+                .get("conversation")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if conversation_json.is_empty() {
+                vec![json!({ "role": "user", "content": prompt })]
+            } else {
+                serde_json::from_str(conversation_json)
+                    .unwrap_or_else(|_| vec![json!({ "role": "user", "content": prompt })])
+            }
         };
 
         // Build tool definitions based on tools_enabled
@@ -123,8 +136,25 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
             "content": response.content,
         }));
 
-        // Serialize updated conversation
+        // Write updated conversation to TemperFS (if file_id set) or pass inline
         let updated_conversation = serde_json::to_string(&messages).unwrap_or_default();
+
+        if !conversation_file_id.is_empty() {
+            write_conversation_to_temperfs(
+                &ctx,
+                &temper_api_url,
+                tenant,
+                conversation_file_id,
+                &updated_conversation,
+            )?;
+        }
+
+        // For TemperFS mode, don't pass conversation inline (it's in the File)
+        let conv_param = if conversation_file_id.is_empty() {
+            Some(updated_conversation.clone())
+        } else {
+            None
+        };
 
         // Route based on stop_reason
         match response.stop_reason.as_str() {
@@ -142,13 +172,13 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
                     .collect();
 
                 let tool_calls_json = serde_json::to_string(&tool_calls).unwrap_or_default();
-                set_success_result(
-                    "ProcessToolCalls",
-                    &json!({
-                        "pending_tool_calls": tool_calls_json,
-                        "conversation": updated_conversation,
-                    }),
-                );
+                let mut params = json!({
+                    "pending_tool_calls": tool_calls_json,
+                });
+                if let Some(ref conv) = conv_param {
+                    params["conversation"] = json!(conv);
+                }
+                set_success_result("ProcessToolCalls", &params);
             }
             "end_turn" | "stop" => {
                 // Extract text result
@@ -167,10 +197,11 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
                     .collect::<Vec<_>>()
                     .join("\n");
 
-                set_success_result("RecordResult", &json!({
-                    "result": result_text,
-                    "conversation": updated_conversation,
-                }));
+                let mut params = json!({ "result": result_text });
+                if let Some(ref conv) = conv_param {
+                    params["conversation"] = json!(conv);
+                }
+                set_success_result("RecordResult", &params);
             }
             other => {
                 set_success_result(
@@ -373,4 +404,78 @@ fn build_tool_definitions(tools_enabled: &str, sandbox_url: &str, workdir: &str)
     }
 
     tools
+}
+
+/// Read conversation messages from TemperFS File entity via $value endpoint.
+fn read_conversation_from_temperfs(
+    ctx: &Context,
+    temper_api_url: &str,
+    tenant: &str,
+    file_id: &str,
+    prompt: &str,
+) -> Result<Vec<Value>, String> {
+    let url = format!("{temper_api_url}/tdata/Files('{file_id}')/$value");
+    let headers = vec![
+        ("x-tenant-id".to_string(), tenant.to_string()),
+        ("x-temper-principal-kind".to_string(), "system".to_string()),
+        ("accept".to_string(), "application/json".to_string()),
+    ];
+
+    match ctx.http_call("GET", &url, &headers, "") {
+        Ok(resp) if resp.status == 200 => {
+            let parsed: Value = serde_json::from_str(&resp.body)
+                .unwrap_or(json!({"messages": []}));
+            let messages = parsed
+                .get("messages")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            if messages.is_empty() {
+                // First turn — initialize with user prompt
+                Ok(vec![json!({ "role": "user", "content": prompt })])
+            } else {
+                Ok(messages)
+            }
+        }
+        Ok(resp) if resp.status == 404 => {
+            // File has no content yet — first turn
+            ctx.log("info", "llm_caller: TemperFS file has no content, initializing");
+            Ok(vec![json!({ "role": "user", "content": prompt })])
+        }
+        Ok(resp) => {
+            ctx.log("warn", &format!("llm_caller: TemperFS read failed (HTTP {}), falling back to inline", resp.status));
+            Ok(vec![json!({ "role": "user", "content": prompt })])
+        }
+        Err(e) => {
+            ctx.log("warn", &format!("llm_caller: TemperFS read error: {e}, falling back to inline"));
+            Ok(vec![json!({ "role": "user", "content": prompt })])
+        }
+    }
+}
+
+/// Write conversation messages to TemperFS File entity via $value endpoint.
+fn write_conversation_to_temperfs(
+    ctx: &Context,
+    temper_api_url: &str,
+    tenant: &str,
+    file_id: &str,
+    conversation_json: &str,
+) -> Result<(), String> {
+    let url = format!("{temper_api_url}/tdata/Files('{file_id}')/$value");
+    let headers = vec![
+        ("content-type".to_string(), "application/json".to_string()),
+        ("x-tenant-id".to_string(), tenant.to_string()),
+        ("x-temper-principal-kind".to_string(), "system".to_string()),
+    ];
+
+    // Wrap messages array in the TemperFS conversation format
+    let body = format!("{{\"messages\":{conversation_json}}}");
+
+    let resp = ctx.http_call("PUT", &url, &headers, &body)?;
+    if resp.status >= 200 && resp.status < 300 {
+        ctx.log("info", &format!("llm_caller: wrote conversation to TemperFS ({} bytes)", body.len()));
+        Ok(())
+    } else {
+        Err(format!("TemperFS $value write failed (HTTP {}): {}", resp.status, &resp.body[..resp.body.len().min(200)]))
+    }
 }

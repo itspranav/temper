@@ -37,6 +37,8 @@ const FS_CSDL: &str = include_str!("../../../../os-apps/temper-fs/specs/model.cs
 const FS_CEDAR_FILE: &str = include_str!("../../../../os-apps/temper-fs/policies/file.cedar");
 const FS_CEDAR_WORKSPACE: &str =
     include_str!("../../../../os-apps/temper-fs/policies/workspace.cedar");
+const FS_CEDAR_WASM: &str =
+    include_str!("../../../../os-apps/temper-fs/policies/wasm.cedar");
 
 // ── Temper Agent OS App ──────────────────────────────────────────────
 
@@ -126,7 +128,7 @@ pub fn get_os_app(name: &str) -> Option<OsAppBundle> {
         "temper-fs" => Some(OsAppBundle {
             specs: FS_SPECS,
             csdl: FS_CSDL,
-            cedar_policies: &[FS_CEDAR_FILE, FS_CEDAR_WORKSPACE],
+            cedar_policies: &[FS_CEDAR_FILE, FS_CEDAR_WORKSPACE, FS_CEDAR_WASM],
         }),
         "temper-agent" => Some(OsAppBundle {
             specs: AGENT_SPECS,

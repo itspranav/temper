@@ -83,13 +83,29 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
             }));
         }
 
-        // Read current conversation from entity state and append tool results
-        let conversation_json = fields
-            .get("conversation")
+        // TemperFS conversation storage
+        let conversation_file_id = fields
+            .get("conversation_file_id")
             .and_then(|v| v.as_str())
-            .unwrap_or("[]");
-        let mut messages: Vec<Value> = serde_json::from_str(conversation_json)
-            .unwrap_or_default();
+            .unwrap_or("");
+        // Temper API URL: read from integration config, default to localhost
+        let temper_api_url = ctx
+            .config
+            .get("temper_api_url")
+            .cloned()
+            .unwrap_or_else(|| "http://localhost:3210".to_string());
+        let tenant = &ctx.tenant;
+
+        // Read current conversation and append tool results
+        let mut messages: Vec<Value> = if !conversation_file_id.is_empty() {
+            read_conversation_from_temperfs(&ctx, &temper_api_url, tenant, conversation_file_id)
+        } else {
+            let conversation_json = fields
+                .get("conversation")
+                .and_then(|v| v.as_str())
+                .unwrap_or("[]");
+            serde_json::from_str(conversation_json).unwrap_or_default()
+        };
 
         // Append tool results as a user message (Anthropic API format)
         messages.push(json!({
@@ -97,15 +113,29 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
             "content": tool_results,
         }));
 
+        // Write back to TemperFS or pass inline
         let updated_conversation = serde_json::to_string(&messages).unwrap_or_default();
+        if !conversation_file_id.is_empty() {
+            let body = format!("{{\"messages\":{updated_conversation}}}");
+            let url = format!("{temper_api_url}/tdata/Files('{conversation_file_id}')/$value");
+            let headers = vec![
+                ("content-type".to_string(), "application/json".to_string()),
+                ("x-tenant-id".to_string(), tenant.to_string()),
+                ("x-temper-principal-kind".to_string(), "system".to_string()),
+            ];
+            if let Err(e) = ctx.http_call("PUT", &url, &headers, &body) {
+                ctx.log("warn", &format!("tool_runner: TemperFS write failed: {e}"));
+            }
+        }
+
         let results_json = serde_json::to_string(&tool_results).unwrap_or_default();
-        set_success_result(
-            "HandleToolResults",
-            &json!({
-                "pending_tool_calls": results_json,
-                "conversation": updated_conversation,
-            }),
-        );
+        let mut params = json!({
+            "pending_tool_calls": results_json,
+        });
+        if conversation_file_id.is_empty() {
+            params["conversation"] = json!(updated_conversation);
+        }
+        set_success_result("HandleToolResults", &params);
 
         Ok(())
     })();
@@ -284,6 +314,36 @@ fn execute_tool(
             }
         }
         unknown => Err(format!("unknown tool: {unknown}")),
+    }
+}
+
+/// Read conversation from TemperFS File entity.
+fn read_conversation_from_temperfs(
+    ctx: &Context,
+    temper_api_url: &str,
+    tenant: &str,
+    file_id: &str,
+) -> Vec<Value> {
+    let url = format!("{temper_api_url}/tdata/Files('{file_id}')/$value");
+    let headers = vec![
+        ("x-tenant-id".to_string(), tenant.to_string()),
+        ("x-temper-principal-kind".to_string(), "system".to_string()),
+        ("accept".to_string(), "application/json".to_string()),
+    ];
+
+    match ctx.http_call("GET", &url, &headers, "") {
+        Ok(resp) if resp.status == 200 => {
+            let parsed: Value = serde_json::from_str(&resp.body).unwrap_or(json!({"messages": []}));
+            parsed
+                .get("messages")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default()
+        }
+        _ => {
+            ctx.log("warn", "tool_runner: failed to read conversation from TemperFS");
+            Vec::new()
+        }
     }
 }
 

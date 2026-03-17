@@ -51,6 +51,8 @@
         <Parameter Name="bindingParameter" Type="Temper.Agent.TemperAgent"/>
         <Parameter Name="sandbox_url" Type="Edm.String" Nullable="false"/>
         <Parameter Name="sandbox_id" Type="Edm.String" Nullable="false"/>
+        <Parameter Name="workspace_id" Type="Edm.String" Nullable="true"/>
+        <Parameter Name="conversation_file_id" Type="Edm.String" Nullable="true"/>
         <ReturnType Type="Temper.Agent.TemperAgent"/>
       </Action>
 

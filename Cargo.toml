@@ -6,6 +6,7 @@ exclude = [
     "os-apps/temper-agent/wasm/llm_caller",
     "os-apps/temper-agent/wasm/tool_runner",
     "os-apps/temper-agent/wasm/sandbox_provisioner",
+    "os-apps/temper-fs/wasm/blob_adapter",
 ]
 members = [
     "crates/temper-macros",

@@ -138,8 +138,8 @@ name = "SandboxReady"
 kind = "input"
 from = ["Provisioning"]
 to = "Thinking"
-params = ["sandbox_url", "sandbox_id"]
-hint = "Callback from sandbox provisioner. Sets sandbox connection and starts think loop."
+params = ["sandbox_url", "sandbox_id", "workspace_id", "conversation_file_id"]
+hint = "Callback from sandbox provisioner. Sets sandbox connection, TemperFS workspace/file, and starts think loop."
 effect = [{ type = "trigger", name = "call_llm" }]
 
 [[action]]
@@ -253,3 +253,6 @@ trigger = "run_tools"
 type = "wasm"
 module = "tool_runner"
 on_failure = "Fail"
+
+[integration.config]
+temper_api_url = "http://localhost:3210"

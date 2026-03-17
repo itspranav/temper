@@ -1,8 +1,8 @@
 //! Sandbox Provisioner — WASM module for provisioning sandboxes.
 //!
 //! Provisions a sandbox (static URL from config, or Modal API) and returns
-//! the sandbox connection details. Conversation is stored inline in entity
-//! state (Phase 0); TemperFS integration deferred to Phase 1.
+//! the sandbox connection details. Also creates a TemperFS Workspace and File
+//! for conversation storage (content-addressable, versioned, Cedar-governed).
 //!
 //! Build: `cargo build --target wasm32-unknown-unknown --release`
 
@@ -40,12 +40,44 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
             ),
         );
 
-        // Return sandbox details to the state machine
+        // Create TemperFS Workspace + File for conversation storage
+        let temper_api_url = ctx
+            .config
+            .get("temper_api_url")
+            .cloned()
+            .unwrap_or_else(|| "http://localhost:3210".to_string());
+
+        let entity_id = ctx
+            .entity_state
+            .get("entity_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+
+        let tenant = &ctx.tenant;
+
+        let fs_result = create_conversation_storage(
+            &ctx,
+            &temper_api_url,
+            tenant,
+            entity_id,
+        );
+
+        let (workspace_id, conversation_file_id) = match fs_result {
+            Ok((ws, f)) => (ws, f),
+            Err(e) => {
+                ctx.log("warn", &format!("sandbox_provisioner: TemperFS setup failed: {e}, falling back to inline"));
+                (String::new(), String::new())
+            }
+        };
+
+        // Return sandbox + TemperFS details to the state machine
         set_success_result(
             "SandboxReady",
             &json!({
                 "sandbox_url": sandbox_result.sandbox_url,
                 "sandbox_id": sandbox_result.sandbox_id,
+                "workspace_id": workspace_id,
+                "conversation_file_id": conversation_file_id,
             }),
         );
 
@@ -154,4 +186,86 @@ fn provision_sandbox(ctx: &Context) -> Result<SandboxResult, String> {
         sandbox_url,
         sandbox_id,
     })
+}
+
+/// Create a TemperFS Workspace and File for conversation storage.
+/// Returns (workspace_entity_id, file_entity_id).
+fn create_conversation_storage(
+    ctx: &Context,
+    temper_api_url: &str,
+    tenant: &str,
+    agent_id: &str,
+) -> Result<(String, String), String> {
+    let headers = vec![
+        ("content-type".to_string(), "application/json".to_string()),
+        ("x-tenant-id".to_string(), tenant.to_string()),
+        ("x-temper-principal-kind".to_string(), "system".to_string()),
+    ];
+
+    // 1. Create Workspace
+    let ws_body = json!({
+        "WorkspaceId": format!("agent-{agent_id}"),
+        "name": format!("Agent {agent_id} Workspace"),
+        "owner_id": agent_id,
+        "quota_bytes": "104857600"
+    });
+
+    let ws_url = format!("{temper_api_url}/tdata/Workspaces");
+    let ws_resp = ctx.http_call("POST", &ws_url, &headers, &ws_body.to_string())?;
+
+    if ws_resp.status < 200 || ws_resp.status >= 300 {
+        return Err(format!("Workspace creation failed (HTTP {}): {}", ws_resp.status, &ws_resp.body[..ws_resp.body.len().min(300)]));
+    }
+
+    let ws_parsed: Value = serde_json::from_str(&ws_resp.body)
+        .map_err(|e| format!("parse workspace response: {e}"))?;
+    let workspace_id = ws_parsed
+        .get("entity_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    ctx.log("info", &format!("sandbox_provisioner: created workspace {workspace_id}"));
+
+    // 2. Create File for conversation
+    let file_body = json!({
+        "FileId": format!("conv-{agent_id}"),
+        "workspace_id": workspace_id,
+        "name": "conversation.json",
+        "mime_type": "application/json",
+        "path": "/conversation.json"
+    });
+
+    let file_url = format!("{temper_api_url}/tdata/Files");
+    let file_resp = ctx.http_call("POST", &file_url, &headers, &file_body.to_string())?;
+
+    if file_resp.status < 200 || file_resp.status >= 300 {
+        return Err(format!("File creation failed (HTTP {}): {}", file_resp.status, &file_resp.body[..file_resp.body.len().min(300)]));
+    }
+
+    let file_parsed: Value = serde_json::from_str(&file_resp.body)
+        .map_err(|e| format!("parse file response: {e}"))?;
+    let file_id = file_parsed
+        .get("entity_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    ctx.log("info", &format!("sandbox_provisioner: created conversation file {file_id}"));
+
+    // 3. Write initial empty conversation
+    let init_conv = json!({"messages": []}).to_string();
+    let value_url = format!("{temper_api_url}/tdata/Files('{file_id}')/$value");
+    let value_headers = vec![
+        ("content-type".to_string(), "application/json".to_string()),
+        ("x-tenant-id".to_string(), tenant.to_string()),
+        ("x-temper-principal-kind".to_string(), "system".to_string()),
+    ];
+    let value_resp = ctx.http_call("PUT", &value_url, &value_headers, &init_conv)?;
+
+    if value_resp.status < 200 || value_resp.status >= 300 {
+        ctx.log("warn", &format!("sandbox_provisioner: initial $value write failed (HTTP {})", value_resp.status));
+    }
+
+    Ok((workspace_id, file_id))
 }
