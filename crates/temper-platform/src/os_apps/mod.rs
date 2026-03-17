@@ -204,7 +204,7 @@ pub async fn install_os_app(
     } else {
         std::collections::BTreeMap::new()
     };
-    bootstrap::bootstrap_tenant_specs(
+    bootstrap::bootstrap_tenant_specs_merge(
         state,
         tenant,
         bundle.csdl,

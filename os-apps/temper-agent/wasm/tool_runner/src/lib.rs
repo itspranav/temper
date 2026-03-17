@@ -83,12 +83,28 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
             }));
         }
 
-        // Return tool results as the pending_tool_calls param
-        // The HandleToolResults action will append these to conversation
+        // Read current conversation from entity state and append tool results
+        let conversation_json = fields
+            .get("conversation")
+            .and_then(|v| v.as_str())
+            .unwrap_or("[]");
+        let mut messages: Vec<Value> = serde_json::from_str(conversation_json)
+            .unwrap_or_default();
+
+        // Append tool results as a user message (Anthropic API format)
+        messages.push(json!({
+            "role": "user",
+            "content": tool_results,
+        }));
+
+        let updated_conversation = serde_json::to_string(&messages).unwrap_or_default();
         let results_json = serde_json::to_string(&tool_results).unwrap_or_default();
         set_success_result(
             "HandleToolResults",
-            &json!({ "pending_tool_calls": results_json }),
+            &json!({
+                "pending_tool_calls": results_json,
+                "conversation": updated_conversation,
+            }),
         );
 
         Ok(())

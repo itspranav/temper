@@ -253,6 +253,22 @@ CREATE INDEX IF NOT EXISTS idx_design_time_events_tenant
     ON design_time_events(tenant, entity_type);";
 
 // ---------------------------------------------------------------------------
+// Tenant secrets (encrypted at rest, per-tenant scoping)
+// ---------------------------------------------------------------------------
+
+/// Encrypted secret storage per tenant, mirroring the Postgres `tenant_secrets` table.
+pub const CREATE_TENANT_SECRETS_TABLE: &str = "\
+CREATE TABLE IF NOT EXISTS tenant_secrets (
+    tenant      TEXT NOT NULL,
+    key_name    TEXT NOT NULL,
+    ciphertext  BLOB NOT NULL,
+    nonce       BLOB NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (tenant, key_name)
+);";
+
+// ---------------------------------------------------------------------------
 // Platform DB tables (tenant registry + user access)
 // ---------------------------------------------------------------------------
 
@@ -310,6 +326,7 @@ mod tests {
         assert!(CREATE_EVOLUTION_RECORDS_STATUS_INDEX.contains("IF NOT EXISTS"));
         assert!(CREATE_DESIGN_TIME_EVENTS_TABLE.contains("IF NOT EXISTS"));
         assert!(CREATE_DESIGN_TIME_EVENTS_TENANT_INDEX.contains("IF NOT EXISTS"));
+        assert!(CREATE_TENANT_SECRETS_TABLE.contains("IF NOT EXISTS"));
     }
 
     #[test]

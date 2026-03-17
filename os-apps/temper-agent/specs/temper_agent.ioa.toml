@@ -111,6 +111,11 @@ name = "system_prompt"
 type = "string"
 initial = ""
 
+[[state]]
+name = "conversation"
+type = "string"
+initial = ""
+
 # --- Actions ---
 
 [[action]]
@@ -133,7 +138,7 @@ name = "SandboxReady"
 kind = "input"
 from = ["Provisioning"]
 to = "Thinking"
-params = ["sandbox_url", "sandbox_id", "workspace_id", "conversation_file_id"]
+params = ["sandbox_url", "sandbox_id"]
 hint = "Callback from sandbox provisioner. Sets sandbox connection and starts think loop."
 effect = [{ type = "trigger", name = "call_llm" }]
 
@@ -142,7 +147,7 @@ name = "ProcessToolCalls"
 kind = "input"
 from = ["Thinking"]
 to = "Executing"
-params = ["pending_tool_calls"]
+params = ["pending_tool_calls", "conversation"]
 hint = "LLM returned tool_use blocks. Transition to Executing and run tools."
 effect = [{ type = "trigger", name = "run_tools" }]
 
@@ -151,8 +156,8 @@ name = "HandleToolResults"
 kind = "input"
 from = ["Executing"]
 to = "Thinking"
-params = ["pending_tool_calls"]
-hint = "Tool results received. Increment turn, transition to Thinking, and call LLM again. Budget enforcement (turn_count vs max_turns) is checked by the llm_caller WASM module."
+params = ["pending_tool_calls", "conversation"]
+hint = "Tool results received. Increment turn, transition to Thinking, and call LLM again."
 effect = [
   { type = "increment", var = "turn_count" },
   { type = "trigger", name = "call_llm" }
@@ -169,17 +174,10 @@ hint = "Record token consumption and cost for the current turn."
 name = "RecordResult"
 kind = "input"
 from = ["Thinking"]
-params = ["result"]
-hint = "LLM returned end_turn. Record the result."
-effect = [{ type = "set_bool", var = "has_result", value = "true" }]
-
-[[action]]
-name = "Complete"
-kind = "input"
-from = ["Thinking"]
 to = "Completed"
-guard = "is_true has_result"
-hint = "Complete the agent run after result has been recorded."
+params = ["result", "conversation"]
+hint = "LLM returned end_turn. Record the result and complete."
+effect = [{ type = "set_bool", var = "has_result", value = "true" }]
 
 [[action]]
 name = "Fail"
@@ -232,6 +230,10 @@ type = "wasm"
 module = "sandbox_provisioner"
 on_failure = "Fail"
 
+[integration.config]
+temper_api_url = "http://localhost:3210"
+sandbox_url = "http://localhost:9999"
+
 [[integration]]
 name = "call_llm"
 trigger = "call_llm"
@@ -241,6 +243,9 @@ on_failure = "Fail"
 
 [integration.config]
 api_key = "{secret:anthropic_api_key}"
+temper_api_url = "http://localhost:3210"
+timeout_secs = "120"
+max_response_bytes = "4194304"
 
 [[integration]]
 name = "run_tools"

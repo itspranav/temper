@@ -24,11 +24,11 @@ use crate::schema;
 mod authz;
 mod constraints;
 mod event_store;
+mod evolution;
+mod secrets;
 mod specs;
 mod trajectory;
 mod wasm;
-
-mod evolution;
 
 #[cfg(test)]
 mod tests;
@@ -255,6 +255,10 @@ impl TursoEventStore {
             .await
             .map_err(storage_error)?;
         conn.execute(schema::CREATE_DESIGN_TIME_EVENTS_TENANT_INDEX, ())
+            .await
+            .map_err(storage_error)?;
+
+        conn.execute(schema::CREATE_TENANT_SECRETS_TABLE, ())
             .await
             .map_err(storage_error)?;
 

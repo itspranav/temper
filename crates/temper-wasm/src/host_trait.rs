@@ -51,12 +51,17 @@ pub struct ProductionWasmHost {
 }
 
 impl ProductionWasmHost {
-    /// Create with pre-loaded secrets.
+    /// Create with pre-loaded secrets and default HTTP timeout.
     pub fn new(secrets: BTreeMap<String, String>) -> Self {
+        Self::with_timeout(secrets, std::time::Duration::from_secs(30))
+    }
+
+    /// Create with pre-loaded secrets and a custom HTTP request timeout.
+    pub fn with_timeout(secrets: BTreeMap<String, String>, timeout: std::time::Duration) -> Self {
         Self {
             client: reqwest::Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(10))
-                .timeout(std::time::Duration::from_secs(15))
+                .timeout(timeout)
                 .build()
                 .unwrap_or_default(),
             secrets,

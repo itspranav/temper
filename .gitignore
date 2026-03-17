@@ -64,3 +64,4 @@ scripts/generate-graph-json.js
 .vercel
 .desloppify/
 scorecard.png
+temper-e2e-test.db

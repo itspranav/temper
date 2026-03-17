@@ -87,6 +87,32 @@ pub(crate) fn bootstrap_tenant_specs(
     label: &str,
     verified_cache: &BTreeMap<String, (String, bool)>,
 ) {
+    bootstrap_tenant_specs_inner(state, tenant, csdl_source, specs, label, verified_cache, false);
+}
+
+/// Like [`bootstrap_tenant_specs`] but merges into an existing tenant config
+/// instead of replacing it. Used by OS app installation so multiple apps can
+/// coexist in the same tenant.
+pub(crate) fn bootstrap_tenant_specs_merge(
+    state: &PlatformState,
+    tenant: &str,
+    csdl_source: &str,
+    specs: &[(&str, &str)],
+    label: &str,
+    verified_cache: &BTreeMap<String, (String, bool)>,
+) {
+    bootstrap_tenant_specs_inner(state, tenant, csdl_source, specs, label, verified_cache, true);
+}
+
+fn bootstrap_tenant_specs_inner(
+    state: &PlatformState,
+    tenant: &str,
+    csdl_source: &str,
+    specs: &[(&str, &str)],
+    label: &str,
+    verified_cache: &BTreeMap<String, (String, bool)>,
+    merge: bool,
+) {
     tracing::info!(
         "Bootstrapping {label} specs for tenant '{tenant}' with {} entities",
         specs.len()
@@ -135,7 +161,17 @@ pub(crate) fn bootstrap_tenant_specs(
     let tenant_id = TenantId::new(tenant);
     {
         let mut registry = state.registry.write().unwrap(); // ci-ok: infallible lock
-        registry.register_tenant(tenant_id.clone(), csdl, csdl_source.to_string(), specs);
+        registry
+            .try_register_tenant_with_reactions_and_constraints(
+                tenant_id.clone(),
+                csdl,
+                csdl_source.to_string(),
+                specs,
+                Vec::new(),
+                None,
+                merge,
+            )
+            .unwrap_or_else(|e| panic!("{label} failed to register tenant: {e}"));
         let now = temper_runtime::scheduler::sim_now().to_rfc3339();
         for (entity_type, _) in specs {
             registry.set_verification_status(

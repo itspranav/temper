@@ -152,9 +152,25 @@ impl crate::state::ServerState {
         ));
         let tenant_secrets =
             self.get_authorized_wasm_secrets(ctx.entity_ref.tenant, &*gate, &authz_ctx);
-        let inner: Arc<dyn WasmHost> = Arc::new(ProductionWasmHost::new(tenant_secrets));
+        // Use integration config timeout for both WASM execution and HTTP client.
+        let http_timeout = integration
+            .config
+            .get("timeout_secs")
+            .and_then(|s| s.parse::<u64>().ok())
+            .map(std::time::Duration::from_secs)
+            .unwrap_or(std::time::Duration::from_secs(30));
+        let inner: Arc<dyn WasmHost> =
+            Arc::new(ProductionWasmHost::with_timeout(tenant_secrets, http_timeout));
         let host: Arc<dyn WasmHost> = Arc::new(AuthorizedWasmHost::new(inner, gate, authz_ctx));
-        let limits = WasmResourceLimits::default();
+        let mut limits = WasmResourceLimits::default();
+        // Allow integration config to override WASM execution timeout.
+        limits.max_duration = http_timeout;
+        // Allow larger HTTP response bodies for LLM responses.
+        if let Some(max_resp) = integration.config.get("max_response_bytes") {
+            if let Ok(bytes) = max_resp.parse::<usize>() {
+                limits.max_response_bytes = bytes;
+            }
+        }
 
         tracing::info!(
             tenant = %ctx.entity_ref.tenant,
@@ -265,18 +281,26 @@ impl crate::state::ServerState {
                 )
                 .await;
 
-                if let Some(ref cb) = integration.on_success
-                    && let Some(resp) = self
+                // Determine callback action: prefer static on_success from spec,
+                // fall back to dynamic callback_action from WASM result.
+                let callback_action = integration
+                    .on_success
+                    .as_deref()
+                    .unwrap_or(&result.callback_action);
+
+                if !callback_action.is_empty() {
+                    if let Some(resp) = self
                         .dispatch_wasm_callback(
                             ctx.entity_ref,
-                            cb,
+                            callback_action,
                             result.callback_params,
                             ctx.agent_ctx,
                             ctx.mode,
                         )
                         .await?
-                {
-                    return Ok(Some(resp));
+                    {
+                        return Ok(Some(resp));
+                    }
                 }
                 Ok(None)
             }
@@ -399,7 +423,8 @@ impl crate::state::ServerState {
 
         if let Some(cb) = on_failure {
             let mut params = serde_json::json!({
-                "error": error_str,
+                "error": error_str.clone(),
+                "error_message": error_str,
                 "integration": integration_name,
             });
             if let Some(ref did) = decision_id {

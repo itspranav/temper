@@ -134,8 +134,12 @@ impl ServerState {
                 .map_err(|e| format!("failed to upsert secret {tenant}/{key_name}: {e}"))?;
                 Ok(())
             }
-            MetadataBackend::Turso(_) => {
-                Err("secret persistence is not supported on turso backend yet".to_string())
+            MetadataBackend::Turso(turso) => {
+                turso
+                    .upsert_secret(tenant, key_name, ciphertext, nonce)
+                    .await
+                    .map_err(|e| format!("failed to upsert secret {tenant}/{key_name}: {e}"))?;
+                Ok(())
             }
             MetadataBackend::Redis => Err(Self::redis_ephemeral_error("Secret persistence")),
         }
@@ -158,8 +162,11 @@ impl ServerState {
                         .map_err(|e| format!("failed to delete secret {tenant}/{key_name}: {e}"))?;
                 Ok(result.rows_affected() > 0)
             }
-            MetadataBackend::Turso(_) => {
-                Err("secret deletion is not supported on turso backend yet".to_string())
+            MetadataBackend::Turso(turso) => {
+                turso
+                    .delete_secret(tenant, key_name)
+                    .await
+                    .map_err(|e| format!("failed to delete secret {tenant}/{key_name}: {e}"))
             }
             MetadataBackend::Redis => Err(Self::redis_ephemeral_error("Secret deletion")),
         }
@@ -174,43 +181,45 @@ impl ServerState {
             return Ok(0);
         };
 
-        match backend {
+        let rows: Vec<(String, Vec<u8>, Vec<u8>)> = match backend {
             MetadataBackend::Postgres(pool) => {
-                let rows: Vec<(String, Vec<u8>, Vec<u8>)> = sqlx::query_as(
+                sqlx::query_as(
                     "SELECT key_name, ciphertext, nonce FROM tenant_secrets WHERE tenant = $1",
                 )
                 .bind(tenant)
                 .fetch_all(pool)
                 .await
-                .map_err(|e| format!("failed to load secrets for tenant {tenant}: {e}"))?;
+                .map_err(|e| format!("failed to load secrets for tenant {tenant}: {e}"))?
+            }
+            MetadataBackend::Turso(turso) => {
+                turso
+                    .load_tenant_secrets(tenant)
+                    .await
+                    .map_err(|e| format!("failed to load secrets for tenant {tenant}: {e}"))?
+            }
+            MetadataBackend::Redis => return Err(Self::redis_ephemeral_error("Secret loading")),
+        };
 
-                let mut count = 0;
-                for (key_name, ciphertext, nonce) in &rows {
-                    match vault.decrypt(ciphertext, nonce) {
-                        Ok(plaintext) => {
-                            let value = String::from_utf8(plaintext).map_err(|e| {
-                                format!("secret {key_name} is not valid UTF-8: {e}")
-                            })?;
-                            vault.cache_secret(tenant, key_name, value)?;
-                            count += 1;
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                tenant,
-                                key_name,
-                                error = %e,
-                                "failed to decrypt secret, skipping"
-                            );
-                        }
-                    }
+        let mut count = 0;
+        for (key_name, ciphertext, nonce) in &rows {
+            match vault.decrypt(ciphertext, nonce) {
+                Ok(plaintext) => {
+                    let value = String::from_utf8(plaintext)
+                        .map_err(|e| format!("secret {key_name} is not valid UTF-8: {e}"))?;
+                    vault.cache_secret(tenant, key_name, value)?;
+                    count += 1;
                 }
-                Ok(count)
+                Err(e) => {
+                    tracing::warn!(
+                        tenant,
+                        key_name,
+                        error = %e,
+                        "failed to decrypt secret, skipping"
+                    );
+                }
             }
-            MetadataBackend::Turso(_) => {
-                Err("secret loading is not supported on turso backend yet".to_string())
-            }
-            MetadataBackend::Redis => Err(Self::redis_ephemeral_error("Secret loading")),
         }
+        Ok(count)
     }
 }
 
@@ -233,7 +242,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn turso_secret_operations_are_explicitly_unsupported() {
+    async fn turso_secret_round_trip() {
         let db_path =
             std::env::temp_dir().join(format!("temper-secrets-{}.db", uuid::Uuid::new_v4())); // determinism-ok: test-only temp file
         let db_url = format!("file:{}", db_path.display());
@@ -247,23 +256,36 @@ mod tests {
         let vault = state.secrets_vault.as_ref().expect("vault configured");
         let (ciphertext, nonce) = vault.encrypt(b"secret-value").expect("encrypt");
 
-        let put_err = state
+        // Upsert should succeed.
+        state
             .upsert_secret("tenant-a", "API_KEY", &ciphertext, &nonce)
             .await
-            .expect_err("turso secret upsert should fail");
-        assert!(put_err.contains("not supported"));
+            .expect("turso secret upsert should succeed");
 
-        let del_err = state
-            .delete_secret("tenant-a", "API_KEY")
-            .await
-            .expect_err("turso secret delete should fail");
-        assert!(del_err.contains("not supported"));
-
-        let load_err = state
+        // Load should decrypt and cache.
+        let count = state
             .load_tenant_secrets("tenant-a")
             .await
-            .expect_err("turso secret load should fail");
-        assert!(load_err.contains("not supported"));
+            .expect("turso secret load should succeed");
+        assert_eq!(count, 1);
+
+        // Verify the cached value.
+        let cached = vault.get_secret("tenant-a", "API_KEY");
+        assert_eq!(cached.as_deref(), Some("secret-value"));
+
+        // Delete should succeed.
+        let deleted = state
+            .delete_secret("tenant-a", "API_KEY")
+            .await
+            .expect("turso secret delete should succeed");
+        assert!(deleted, "should have deleted one row");
+
+        // Delete again returns false.
+        let deleted_again = state
+            .delete_secret("tenant-a", "API_KEY")
+            .await
+            .expect("turso secret delete should succeed");
+        assert!(!deleted_again, "no row to delete");
 
         let _ = std::fs::remove_file(db_path); // determinism-ok: test-only cleanup
     }

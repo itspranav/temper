@@ -4,7 +4,13 @@
 // Callback actions (SandboxReady, ProcessToolCalls, HandleToolResults, RecordResult)
 // are permitted for system agents to enable the dispatch pipeline loop.
 
-// --- Creation and Configuration: supervisors and humans only ---
+// --- Creation and Configuration: admins, supervisors and humans ---
+
+permit(
+  principal is Admin,
+  action,
+  resource is TemperAgent
+);
 
 permit(
   principal,
@@ -39,6 +45,25 @@ permit(
   resource is TemperAgent
 ) when {
   principal.agent_type == "system"
+};
+
+// --- WASM module HTTP call authorization ---
+// Allow agent WASM modules to call the Anthropic API
+permit(
+  principal is Agent,
+  action == Action::"http_call",
+  resource is HttpEndpoint
+) when {
+  ["sandbox_provisioner", "llm_caller", "tool_runner"].contains(context.module)
+};
+
+// Allow agent WASM modules to access secrets
+permit(
+  principal is Agent,
+  action == Action::"access_secret",
+  resource is Secret
+) when {
+  ["sandbox_provisioner", "llm_caller", "tool_runner"].contains(context.module)
 };
 
 // --- Failure and cancellation: supervisors, humans, and system ---

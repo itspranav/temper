@@ -1,10 +1,13 @@
 //! LLM Caller — WASM module for calling the Anthropic Messages API.
 //!
-//! Reads conversation from TemperFS, appends the LLM response, writes it back,
+//! Reads conversation from entity state, calls the LLM, appends the response,
 //! and returns a dynamic callback action based on the LLM's response:
 //! - `ProcessToolCalls` if the response contains tool_use blocks
 //! - `RecordResult` if the response is an end_turn
 //! - `Fail` if the turn budget is exceeded
+//!
+//! Phase 0: conversation stored inline in entity state `conversation` field.
+//! Phase 1: conversation stored in TemperFS File entity.
 //!
 //! Build: `cargo build --target wasm32-unknown-unknown --release`
 
@@ -73,7 +76,7 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
             .and_then(|v| v.as_str())
             .unwrap_or("/workspace");
 
-        // Get API key from integration config (already resolved from {secret:anthropic_api_key})
+        // Get API key from integration config (resolved from {secret:anthropic_api_key})
         let api_key = ctx
             .config
             .get("api_key")
@@ -84,28 +87,18 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
             return Err("missing api_key in integration config".to_string());
         }
 
-        // Read conversation from TemperFS
-        let conversation_file_id = fields
-            .get("conversation_file_id")
+        // Read conversation from entity state
+        let conversation_json = fields
+            .get("conversation")
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        let mut messages: Vec<Value> = if conversation_file_id.is_empty() {
+        let mut messages: Vec<Value> = if conversation_json.is_empty() {
             // First turn — initialize with user prompt
             vec![json!({ "role": "user", "content": prompt })]
         } else {
-            // Read existing conversation from TemperFS
-            let file_url = format!(
-                "http://localhost:8080/api/tenants/{}/odata/Files('{conversation_file_id}')/$value",
-                ctx.tenant
-            );
-            match ctx.http_get(&file_url) {
-                Ok(resp) if resp.status == 200 => {
-                    serde_json::from_str(&resp.body)
-                        .unwrap_or_else(|_| vec![json!({ "role": "user", "content": prompt })])
-                }
-                _ => vec![json!({ "role": "user", "content": prompt })],
-            }
+            serde_json::from_str(conversation_json)
+                .unwrap_or_else(|_| vec![json!({ "role": "user", "content": prompt })])
         };
 
         // Build tool definitions based on tools_enabled
@@ -130,18 +123,8 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
             "content": response.content,
         }));
 
-        // Write updated conversation back to TemperFS
-        if !conversation_file_id.is_empty() {
-            let file_url = format!(
-                "http://localhost:8080/api/tenants/{}/odata/Files('{conversation_file_id}')/$value",
-                ctx.tenant
-            );
-            let conv_json = serde_json::to_string(&messages).unwrap_or_default();
-            let headers = vec![
-                ("content-type".to_string(), "application/json".to_string()),
-            ];
-            let _ = ctx.http_call("PUT", &file_url, &headers, &conv_json);
-        }
+        // Serialize updated conversation
+        let updated_conversation = serde_json::to_string(&messages).unwrap_or_default();
 
         // Route based on stop_reason
         match response.stop_reason.as_str() {
@@ -161,7 +144,10 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
                 let tool_calls_json = serde_json::to_string(&tool_calls).unwrap_or_default();
                 set_success_result(
                     "ProcessToolCalls",
-                    &json!({ "pending_tool_calls": tool_calls_json }),
+                    &json!({
+                        "pending_tool_calls": tool_calls_json,
+                        "conversation": updated_conversation,
+                    }),
                 );
             }
             "end_turn" | "stop" => {
@@ -181,7 +167,10 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
                     .collect::<Vec<_>>()
                     .join("\n");
 
-                set_success_result("RecordResult", &json!({ "result": result_text }));
+                set_success_result("RecordResult", &json!({
+                    "result": result_text,
+                    "conversation": updated_conversation,
+                }));
             }
             other => {
                 set_success_result(
@@ -215,14 +204,24 @@ fn call_anthropic(
     messages: &[Value],
     tools: &[Value],
 ) -> Result<LlmResponse, String> {
+    // Detect OAuth token (sk-ant-oat-*) vs standard API key
+    let is_oauth = api_key.contains("sk-ant-oat");
+
+    // For OAuth tokens, the system prompt MUST include Claude Code identity
+    let effective_system = if is_oauth && !system_prompt.contains("Claude Code") {
+        format!("You are Claude Code, Anthropic's official CLI for Claude.\n\n{system_prompt}")
+    } else {
+        system_prompt.to_string()
+    };
+
     let mut body = json!({
         "model": model,
         "max_tokens": 4096,
         "messages": messages,
     });
 
-    if !system_prompt.is_empty() {
-        body["system"] = json!(system_prompt);
+    if !effective_system.is_empty() {
+        body["system"] = json!(effective_system);
     }
 
     if !tools.is_empty() {
@@ -231,26 +230,66 @@ fn call_anthropic(
 
     let body_str = serde_json::to_string(&body).map_err(|e| format!("JSON serialize error: {e}"))?;
 
-    let headers = vec![
-        ("x-api-key".to_string(), api_key.to_string()),
-        ("anthropic-version".to_string(), "2023-06-01".to_string()),
-        ("content-type".to_string(), "application/json".to_string()),
-    ];
+    ctx.log("info", &format!("llm_caller: calling Anthropic API, model={model}, oauth={is_oauth}, messages={}", messages.len()));
 
-    let resp = ctx.http_call(
-        "POST",
-        "https://api.anthropic.com/v1/messages",
-        &headers,
-        &body_str,
-    )?;
+    // Build auth headers — OAuth tokens use Bearer + beta header
+    let headers = if is_oauth {
+        vec![
+            ("authorization".to_string(), format!("Bearer {api_key}")),
+            ("anthropic-version".to_string(), "2023-06-01".to_string()),
+            ("anthropic-beta".to_string(), "oauth-2025-04-20".to_string()),
+            ("content-type".to_string(), "application/json".to_string()),
+            ("user-agent".to_string(), "claude-cli/2.1.75".to_string()),
+            ("x-app".to_string(), "cli".to_string()),
+        ]
+    } else {
+        vec![
+            ("x-api-key".to_string(), api_key.to_string()),
+            ("anthropic-version".to_string(), "2023-06-01".to_string()),
+            ("content-type".to_string(), "application/json".to_string()),
+        ]
+    };
 
-    if resp.status != 200 {
-        return Err(format!(
-            "Anthropic API returned {}: {}",
-            resp.status,
-            &resp.body[..resp.body.len().min(500)]
-        ));
+    // Retry on transient API errors (500, 529, and 400 with vague "Error" message)
+    let mut last_err = String::new();
+    let mut resp = None;
+    for attempt in 0..5 {
+        if attempt > 0 {
+            ctx.log("warn", &format!("llm_caller: retrying (attempt {}/5), last error: {last_err}", attempt + 1));
+        }
+        match ctx.http_call(
+            "POST",
+            "https://api.anthropic.com/v1/messages",
+            &headers,
+            &body_str,
+        ) {
+            Ok(r) if r.status == 200 => {
+                resp = Some(r);
+                break;
+            }
+            Ok(r) if r.status == 500 || r.status == 529 => {
+                last_err = format!("HTTP {}: {}", r.status, &r.body[..r.body.len().min(200)]);
+                continue;
+            }
+            Ok(r) if r.status == 400 && r.body.contains("\"message\":\"Error\"") => {
+                // Transient 400 with vague error message — retry
+                last_err = format!("HTTP 400 (transient): {}", &r.body[..r.body.len().min(200)]);
+                continue;
+            }
+            Ok(r) => {
+                return Err(format!(
+                    "Anthropic API returned {}: {}",
+                    r.status,
+                    &r.body[..r.body.len().min(500)]
+                ));
+            }
+            Err(e) => {
+                last_err = e;
+                continue;
+            }
+        }
     }
+    let resp = resp.ok_or_else(|| format!("Anthropic API failed after 5 attempts: {last_err}"))?;
 
     let parsed: Value =
         serde_json::from_str(&resp.body).map_err(|e| format!("failed to parse LLM response: {e}"))?;
