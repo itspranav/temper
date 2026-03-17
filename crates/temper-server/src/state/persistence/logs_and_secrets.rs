@@ -147,12 +147,10 @@ impl ServerState {
                 .map_err(|e| format!("failed to upsert secret {tenant}/{key_name}: {e}"))?;
                 Ok(())
             }
-            TenantMetadataBackend::Turso(turso) => {
-                turso
-                    .upsert_secret(tenant, key_name, ciphertext, nonce)
-                    .await
-                    .map_err(|e| format!("failed to upsert secret {tenant}/{key_name} in turso: {e}"))
-            }
+            TenantMetadataBackend::Turso(turso) => turso
+                .upsert_secret(tenant, key_name, ciphertext, nonce)
+                .await
+                .map_err(|e| format!("failed to upsert secret {tenant}/{key_name} in turso: {e}")),
             TenantMetadataBackend::Redis => Err(Self::redis_ephemeral_error("Secret persistence")),
         }
     }
@@ -224,10 +222,9 @@ impl ServerState {
                 Ok(count)
             }
             TenantMetadataBackend::Turso(turso) => {
-                let rows = turso
-                    .load_secrets_for_tenant(tenant)
-                    .await
-                    .map_err(|e| format!("failed to load secrets for tenant {tenant} from turso: {e}"))?;
+                let rows = turso.load_secrets_for_tenant(tenant).await.map_err(|e| {
+                    format!("failed to load secrets for tenant {tenant} from turso: {e}")
+                })?;
 
                 let mut count = 0;
                 for (key_name, ciphertext, nonce) in &rows {

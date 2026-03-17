@@ -41,10 +41,7 @@ pub(crate) async fn handle_trajectories(
 
     // Determine which stores to query: tenant-scoped or fan-out.
     let stores = if let Some(ref scope) = tenant_scope {
-        match state
-            .persistent_store_for_tenant(scope.as_str())
-            .await
-        {
+        match state.persistent_store_for_tenant(scope.as_str()).await {
             Some(turso) => vec![turso],
             None => Vec::new(),
         }
@@ -76,13 +73,14 @@ pub(crate) async fn handle_trajectories(
                     success_count += stats.success_count;
                     error_count += stats.error_count;
                     for (action, action_stats) in stats.by_action {
-                        let entry = by_action.entry(action).or_insert(
-                            temper_store_turso::ActionStats {
-                                total: 0,
-                                success: 0,
-                                error: 0,
-                            },
-                        );
+                        let entry =
+                            by_action
+                                .entry(action)
+                                .or_insert(temper_store_turso::ActionStats {
+                                    total: 0,
+                                    success: 0,
+                                    error: 0,
+                                });
                         entry.total += action_stats.total;
                         entry.success += action_stats.success;
                         entry.error += action_stats.error;

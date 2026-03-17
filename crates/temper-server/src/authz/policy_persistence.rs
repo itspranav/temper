@@ -70,7 +70,6 @@ pub async fn persist_and_activate_policy(
         let now = sim_now().to_rfc3339();
         if let Err(e) = turso
             .persist_trajectory(TursoTrajectoryInsert {
-
                 tenant,
                 entity_type: "_cedar",
                 entity_id: tenant,

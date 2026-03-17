@@ -153,7 +153,9 @@ impl ServerState {
                 .map_err(|e| {
                     format!("failed to delete WASM module {tenant}/{module_name} in turso: {e}")
                 }),
-            TenantMetadataBackend::Redis => Err(Self::redis_ephemeral_error("WASM module deletion")),
+            TenantMetadataBackend::Redis => {
+                Err(Self::redis_ephemeral_error("WASM module deletion"))
+            }
         }
     }
 

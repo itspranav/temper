@@ -127,17 +127,19 @@ pub(crate) async fn handle_list_agents(
         let mut merged: std::collections::BTreeMap<String, AgentSummary> =
             std::collections::BTreeMap::new();
         for agent in all_agents {
-            let entry = merged.entry(agent.agent_id.clone()).or_insert(AgentSummary {
-                agent_id: agent.agent_id.clone(),
-                total_actions: 0,
-                success_count: 0,
-                error_count: 0,
-                denial_count: 0,
-                success_rate: 0.0,
-                last_active_at: None,
-                entity_types: Vec::new(),
-                tenants: Vec::new(),
-            });
+            let entry = merged
+                .entry(agent.agent_id.clone())
+                .or_insert(AgentSummary {
+                    agent_id: agent.agent_id.clone(),
+                    total_actions: 0,
+                    success_count: 0,
+                    error_count: 0,
+                    denial_count: 0,
+                    success_rate: 0.0,
+                    last_active_at: None,
+                    entity_types: Vec::new(),
+                    tenants: Vec::new(),
+                });
             entry.total_actions += agent.total_actions;
             entry.success_count += agent.success_count;
             entry.error_count += agent.error_count;
