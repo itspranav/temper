@@ -97,14 +97,24 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
         let tenant = &ctx.tenant;
 
         // Read current conversation and append tool results
-        let mut messages: Vec<Value> = if !conversation_file_id.is_empty() {
-            read_conversation_from_temperfs(&ctx, &temper_api_url, tenant, conversation_file_id)
-        } else {
+        let inline_fallback = || -> Vec<Value> {
             let conversation_json = fields
                 .get("conversation")
                 .and_then(|v| v.as_str())
                 .unwrap_or("[]");
             serde_json::from_str(conversation_json).unwrap_or_default()
+        };
+        let mut messages: Vec<Value> = if !conversation_file_id.is_empty() {
+            let fs_messages = read_conversation_from_temperfs(&ctx, &temper_api_url, tenant, conversation_file_id);
+            if fs_messages.is_empty() {
+                // TemperFS read failed or returned empty — fall back to inline state
+                ctx.log("warn", "tool_runner: TemperFS read empty, falling back to inline");
+                inline_fallback()
+            } else {
+                fs_messages
+            }
+        } else {
+            inline_fallback()
         };
 
         // Append tool results as a user message (Anthropic API format)
@@ -123,8 +133,16 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
                 ("x-tenant-id".to_string(), tenant.to_string()),
                 ("x-temper-principal-kind".to_string(), "system".to_string()),
             ];
-            if let Err(e) = ctx.http_call("PUT", &url, &headers, &body) {
-                ctx.log("warn", &format!("tool_runner: TemperFS write failed: {e}"));
+            match ctx.http_call("PUT", &url, &headers, &body) {
+                Ok(resp) if resp.status >= 200 && resp.status < 300 => {
+                    ctx.log("info", &format!("tool_runner: wrote conversation to TemperFS ({} bytes)", body.len()));
+                }
+                Ok(resp) => {
+                    return Err(format!("TemperFS conversation write failed (HTTP {}): {}", resp.status, &resp.body[..resp.body.len().min(200)]));
+                }
+                Err(e) => {
+                    return Err(format!("TemperFS conversation write failed: {e}"));
+                }
             }
         }
 
