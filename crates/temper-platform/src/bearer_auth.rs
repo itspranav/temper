@@ -62,10 +62,10 @@ pub async fn bearer_auth_check(
     }
 
     // Step 2: Fall back to global API key (admin/operator access).
-    if let Some(ref expected) = state.api_token {
-        if constant_time_eq(token.as_bytes(), expected.as_bytes()) {
-            return Ok(next.run(req).await);
-        }
+    if let Some(ref expected) = state.api_token
+        && constant_time_eq(token.as_bytes(), expected.as_bytes())
+    {
+        return Ok(next.run(req).await);
     }
 
     // No match — reject.
