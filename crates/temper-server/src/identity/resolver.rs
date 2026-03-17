@@ -170,10 +170,13 @@ impl IdentityResolver {
             cache.remove(&k);
         }
 
-        cache.insert(key_hash, CacheEntry {
-            identity,
-            expires_at,
-        });
+        cache.insert(
+            key_hash,
+            CacheEntry {
+                identity,
+                expires_at,
+            },
+        );
     }
 }
 

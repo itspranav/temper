@@ -90,9 +90,7 @@ impl RuntimeContext {
                 return;
             }
             // Resolution failed — fall back to legacy derivation.
-            tracing::warn!(
-                "Credential resolution failed; falling back to SHA-256 ID derivation"
-            );
+            tracing::warn!("Credential resolution failed; falling back to SHA-256 ID derivation");
         }
 
         // Legacy fallback: derive agent_type from client name, agent_id from hash.

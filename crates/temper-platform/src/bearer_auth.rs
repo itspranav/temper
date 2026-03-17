@@ -6,12 +6,12 @@
 //!
 //! See ADR-0033: Platform-Assigned Agent Identity.
 
+use crate::state::PlatformState;
 use axum::extract::{Request, State};
 use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::Response;
 use temper_runtime::tenant::TenantId;
-use crate::state::PlatformState;
 
 /// Axum middleware that validates Bearer token authentication and resolves
 /// agent identity from credentials.

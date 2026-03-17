@@ -757,11 +757,7 @@ mod tests {
         let engine = AuthzEngine::new(PM_ISSUE_POLICY).unwrap();
 
         // Even with verified identity, openclaw is not in ["supervisor", "human"].
-        let ctx = SecurityContext::from_resolved_identity(
-            "bot-openclaw",
-            "openclaw",
-            None,
-        );
+        let ctx = SecurityContext::from_resolved_identity("bot-openclaw", "openclaw", None);
 
         let mut attrs = HashMap::new();
         attrs.insert("id".to_string(), serde_json::json!("issue-1"));
@@ -778,11 +774,7 @@ mod tests {
         let engine = AuthzEngine::new(PM_ISSUE_POLICY).unwrap();
 
         // Use credential-resolved identity (ADR-0033) — agentTypeVerified is true.
-        let ctx = SecurityContext::from_resolved_identity(
-            "bot-supervisor",
-            "supervisor",
-            None,
-        );
+        let ctx = SecurityContext::from_resolved_identity("bot-supervisor", "supervisor", None);
 
         let mut attrs = HashMap::new();
         attrs.insert("id".to_string(), serde_json::json!("issue-1"));
