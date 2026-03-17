@@ -258,6 +258,14 @@ impl crate::state::ServerState {
                     request_body: Some(action_params.clone()),
                     intent: agent_ctx.intent.clone(),
                 };
+                let request_body_str = {
+                    let s = action_params.to_string();
+                    if s.len() > 4096 {
+                        format!("{}[truncated]", &s[..4096])
+                    } else {
+                        s
+                    }
+                };
                 tracing::info!(
                     tenant = %entry.tenant,
                     entity_type = %entry.entity_type,
@@ -269,6 +277,8 @@ impl crate::state::ServerState {
                     error = ?entry.error,
                     source = ?entry.source,
                     authz_denied = ?entry.authz_denied,
+                    spec_governed = ?entry.spec_governed,
+                    request_body = %request_body_str,
                     "trajectory.entry"
                 );
                 if !entry.success {

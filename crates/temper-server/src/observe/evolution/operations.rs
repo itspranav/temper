@@ -294,6 +294,20 @@ pub(crate) async fn handle_unmet_intents(
         );
     }
 
+    // Emit one detail span per intent for per-intent Logfire visibility.
+    for intent in &intents {
+        tracing::info!(
+            entity_type = %intent.entity_type,
+            action = %intent.action,
+            error_pattern = %intent.error_pattern,
+            failure_count = intent.failure_count,
+            first_seen = %intent.first_seen,
+            last_seen = %intent.last_seen,
+            recommendation = %intent.recommendation,
+            "unmet_intent.detail"
+        );
+    }
+
     Ok(Json(serde_json::json!({
         "intents": intents,
         "open_count": open_count,

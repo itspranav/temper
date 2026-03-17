@@ -157,6 +157,14 @@ pub(crate) fn generate_insights(entries: &[crate::state::TrajectoryEntry]) -> Ve
             } else {
                 compute_priority_score(&insight_signal).max(0.5)
             };
+            let severity = if priority >= 0.7 {
+                "high"
+            } else if priority >= 0.4 {
+                "medium"
+            } else {
+                "low"
+            };
+            let category = classify_insight(&insight_signal);
             if resolved {
                 tracing::info!(
                     entity_type = %signal.entity_type,
@@ -165,6 +173,9 @@ pub(crate) fn generate_insights(entries: &[crate::state::TrajectoryEntry]) -> Ve
                     success_rate,
                     resolved,
                     priority_score = priority,
+                    category = ?category,
+                    severity,
+                    recommendation = %recommendation,
                     "evolution.pattern"
                 );
             } else {
@@ -175,6 +186,9 @@ pub(crate) fn generate_insights(entries: &[crate::state::TrajectoryEntry]) -> Ve
                     success_rate,
                     resolved,
                     priority_score = priority,
+                    category = ?category,
+                    severity,
+                    recommendation = %recommendation,
                     "evolution.pattern"
                 );
             }
@@ -205,12 +219,24 @@ pub(crate) fn generate_insights(entries: &[crate::state::TrajectoryEntry]) -> Ve
                 growth_rate: None,
             };
 
+            let authz_priority = compute_priority_score(&insight_signal);
+            let authz_category = classify_insight(&insight_signal);
+            let authz_severity = if authz_priority >= 0.7 {
+                "high"
+            } else if authz_priority >= 0.4 {
+                "medium"
+            } else {
+                "low"
+            };
             tracing::warn!(
                 entity_type = %signal.entity_type,
                 action = %signal.action,
                 total = signal.total,
                 authz_denials = signal.authz_denials,
                 success_rate,
+                category = ?authz_category,
+                severity = authz_severity,
+                recommendation = %recommendation,
                 "evolution.pattern"
             );
             insights.push(build_insight(insight_signal, recommendation, None));
@@ -233,15 +259,6 @@ pub(crate) fn generate_insights(entries: &[crate::state::TrajectoryEntry]) -> Ve
         }
 
         let category = classify_insight(&insight_signal);
-        tracing::info!(
-            entity_type = %signal.entity_type,
-            action = %signal.action,
-            total = signal.total,
-            success_rate,
-            priority_score = priority,
-            category = ?category,
-            "evolution.pattern"
-        );
         let recommendation = match category {
             temper_evolution::records::InsightCategory::UnmetIntent => {
                 format!(
@@ -274,6 +291,25 @@ pub(crate) fn generate_insights(entries: &[crate::state::TrajectoryEntry]) -> Ve
                 )
             }
         };
+
+        let severity = if priority >= 0.7 {
+            "high"
+        } else if priority >= 0.4 {
+            "medium"
+        } else {
+            "low"
+        };
+        tracing::info!(
+            entity_type = %signal.entity_type,
+            action = %signal.action,
+            total = signal.total,
+            success_rate,
+            priority_score = priority,
+            category = ?category,
+            severity,
+            recommendation = %recommendation,
+            "evolution.pattern"
+        );
 
         insights.push(build_insight(
             insight_signal,
