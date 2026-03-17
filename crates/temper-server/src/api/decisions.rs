@@ -49,7 +49,7 @@ pub(crate) async fn handle_list_decisions(
     if let Some(resp) = require_policy_auth(&state, &headers, &tenant).await {
         return resp;
     }
-    if let Some(turso) = state.persistent_store() {
+    if let Some(turso) = state.persistent_store_for_tenant(&tenant).await {
         match turso
             .query_decisions(&tenant, params.status.as_deref())
             .await
@@ -86,7 +86,7 @@ pub(crate) async fn handle_approve_decision(
 
     // Read decision from Turso (single source of truth).
     let mut decision: PendingDecision = {
-        let Some(turso) = state.persistent_store() else {
+        let Some(turso) = state.persistent_store_for_tenant(&tenant).await else {
             tracing::error!("Turso backend not configured for approve decision");
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -194,8 +194,8 @@ pub(crate) async fn handle_approve_decision(
         verification_results: None,
         implementation: None,
     };
-    // Persist D-Record to Turso.
-    if let Some(turso) = state.persistent_store() {
+    // Persist D-Record to Turso (evolution records stay on platform DB).
+    if let Some(turso) = state.platform_persistent_store() {
         let data_json = serde_json::to_string(&d_record).unwrap_or_default();
         if let Err(e) = turso
             .insert_evolution_record(
@@ -243,7 +243,7 @@ pub(crate) async fn handle_deny_decision(
 
     // Read decision from Turso (single source of truth).
     let mut decision: PendingDecision = {
-        let Some(turso) = state.persistent_store() else {
+        let Some(turso) = state.persistent_store_for_tenant(&tenant).await else {
             tracing::error!("Turso backend not configured for deny decision");
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -346,13 +346,19 @@ pub(crate) async fn handle_list_all_decisions(
     if let Err(status) = require_observe_auth(&state, &headers, "manage_policies", "PolicySet") {
         return (status, "Authorization required for cross-tenant access").into_response();
     }
-    if let Some(turso) = state.persistent_store() {
+    // Fan-out across all tenant stores to aggregate decisions.
+    let stores = state.collect_all_turso_stores().await;
+    let mut all_data = Vec::new();
+    for turso in &stores {
         match turso.query_all_decisions(params.status.as_deref()).await {
-            Ok(data_strings) => return format_decision_list(data_strings),
+            Ok(data_strings) => all_data.extend(data_strings),
             Err(e) => {
-                tracing::warn!(error = %e, "failed to query all decisions from Turso");
+                tracing::warn!(error = %e, "failed to query decisions from a Turso store");
             }
         }
+    }
+    if !all_data.is_empty() {
+        return format_decision_list(all_data);
     }
     empty_decision_list()
 }

@@ -221,40 +221,45 @@ pub async fn install_os_app(
 
     // ── Step 1: Persist to Turso FIRST (if available). ──────────────
     // If any write fails, bail before touching in-memory state.
-    if let Some(ref store) = state.server.event_store
-        && let Some(turso) = store.platform_turso_store()
-    {
-        let mut spec_sources: BTreeMap<String, String> = turso
-            .load_specs()
-            .await
-            .map_err(|e| format!("Failed to load existing specs for tenant '{tenant}': {e}"))?
-            .into_iter()
-            .filter(|row| row.tenant == tenant)
-            .map(|row| (row.entity_type, row.ioa_source))
-            .collect();
-
-        for (entity_type, ioa_source) in bundle.specs {
-            spec_sources.insert((*entity_type).to_string(), (*ioa_source).to_string());
-        }
-
-        for (entity_type, ioa_source) in spec_sources {
-            let hash = temper_store_turso::spec_content_hash(&ioa_source);
-            turso
-                .upsert_spec(tenant, &entity_type, &ioa_source, &merged_csdl, &hash)
+    // Specs and policies go to the per-tenant store; the app installation
+    // record goes to the platform store (cross-tenant boot index).
+    if let Some(ref store) = state.server.event_store {
+        if let Some(tenant_turso) = store.turso_for_tenant(tenant).await {
+            let mut spec_sources: BTreeMap<String, String> = tenant_turso
+                .load_specs()
                 .await
-                .map_err(|e| format!("Failed to persist spec {entity_type}: {e}"))?;
+                .map_err(|e| format!("Failed to load existing specs for tenant '{tenant}': {e}"))?
+                .into_iter()
+                .filter(|row| row.tenant == tenant)
+                .map(|row| (row.entity_type, row.ioa_source))
+                .collect();
+
+            for (entity_type, ioa_source) in bundle.specs {
+                spec_sources.insert((*entity_type).to_string(), (*ioa_source).to_string());
+            }
+
+            for (entity_type, ioa_source) in spec_sources {
+                let hash = temper_store_turso::spec_content_hash(&ioa_source);
+                tenant_turso
+                    .upsert_spec(tenant, &entity_type, &ioa_source, &merged_csdl, &hash)
+                    .await
+                    .map_err(|e| format!("Failed to persist spec {entity_type}: {e}"))?;
+            }
+            if let Some(ref policy_text) = os_app_policy {
+                let policy_id = format!("os-app:{app_name}");
+                tenant_turso
+                    .save_policy(tenant, &policy_id, policy_text, "system")
+                    .await
+                    .map_err(|e| format!("Failed to persist Cedar policy: {e}"))?;
+            }
         }
-        if let Some(ref policy_text) = os_app_policy {
-            let policy_id = format!("os-app:{app_name}");
-            turso
-                .save_policy(tenant, &policy_id, policy_text, "system")
+        // App installation record stays on platform store (cross-tenant boot index).
+        if let Some(platform_turso) = store.platform_turso_store() {
+            platform_turso
+                .record_installed_app(tenant, app_name)
                 .await
-                .map_err(|e| format!("Failed to persist Cedar policy: {e}"))?;
+                .map_err(|e| format!("Failed to record app installation: {e}"))?;
         }
-        turso
-            .record_installed_app(tenant, app_name)
-            .await
-            .map_err(|e| format!("Failed to record app installation: {e}"))?;
     }
 
     // ── Step 2: Bootstrap into memory (verification + registry). ────
@@ -269,7 +274,7 @@ pub async fn install_os_app(
 
     if !specs_to_bootstrap.is_empty() {
         let verified_cache = if let Some(ref store) = state.server.event_store
-            && let Some(turso) = store.platform_turso_store()
+            && let Some(turso) = store.turso_for_tenant(tenant).await
         {
             turso
                 .load_verification_cache(tenant)
@@ -294,7 +299,7 @@ pub async fn install_os_app(
     // and Cedar engine reflect the newly-persisted OS app policy.
     if os_app_policy.is_some()
         && let Some(ref store) = state.server.event_store
-        && let Some(turso) = store.platform_turso_store()
+        && let Some(turso) = store.turso_for_tenant(tenant).await
     {
         let rows = turso
             .load_policies_for_tenant(tenant)

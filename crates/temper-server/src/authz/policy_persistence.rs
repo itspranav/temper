@@ -30,7 +30,7 @@ use crate::state::ServerState;
 /// Returns `true` if the policy was written (content changed or new entry),
 /// `false` when the hash matched and no write was needed.
 /// Returns `false` silently (with a `tracing::debug` log) when no Turso store
-/// is configured — callers that need to know should check `state.persistent_store()`.
+/// is configured — callers that need to know should check `state.platform_persistent_store()`.
 #[instrument(skip_all, fields(tenant, policy_id, otel.name = "authz.persist_and_activate_policy"))]
 pub async fn persist_and_activate_policy(
     state: &ServerState,
@@ -39,7 +39,7 @@ pub async fn persist_and_activate_policy(
     cedar_text: &str,
     created_by: &str,
 ) -> bool {
-    let Some(turso) = state.persistent_store() else {
+    let Some(turso) = state.persistent_store_for_tenant(tenant).await else {
         tracing::debug!(
             tenant,
             policy_id,

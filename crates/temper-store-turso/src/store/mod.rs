@@ -19,16 +19,15 @@ use crate::schema;
 mod authz;
 mod constraints;
 mod event_store;
-mod instrumentation;
-pub mod policy;
-mod specs;
-mod trajectory;
-mod wasm;
-
 mod evolution;
-
+mod instrumentation;
+mod policy;
+mod secrets;
+mod specs;
 #[cfg(test)]
 mod tests;
+mod trajectory;
+mod wasm;
 
 use instrumentation::InstrumentedConnection;
 
@@ -187,6 +186,9 @@ impl TursoEventStore {
             .await
             .map_err(storage_error)?;
         conn.execute(schema::CREATE_DESIGN_TIME_EVENTS_TENANT_INDEX, ())
+            .await
+            .map_err(storage_error)?;
+        conn.execute(schema::CREATE_TENANT_SECRETS_TABLE, ())
             .await
             .map_err(storage_error)?;
 

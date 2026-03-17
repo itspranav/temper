@@ -101,8 +101,8 @@ pub(crate) async fn handle_load_inline(
             }),
         };
         let o_id = o_record.header.id.clone();
-        // Persist observation to Turso.
-        if let Some(turso) = state.persistent_store() {
+        // Persist observation to Turso (evolution records stay on platform).
+        if let Some(turso) = state.platform_persistent_store() {
             let data_json = serde_json::to_string(&o_record).unwrap_or_default();
             let _ = turso
                 .insert_evolution_record(
@@ -140,8 +140,8 @@ pub(crate) async fn handle_load_inline(
             recommendation: Some(0),
         };
         let a_record_id = a_record.header.id.clone();
-        // Persist analysis to Turso.
-        if let Some(turso) = state.persistent_store() {
+        // Persist analysis to Turso (evolution records stay on platform).
+        if let Some(turso) = state.platform_persistent_store() {
             let data_json = serde_json::to_string(&a_record).unwrap_or_default();
             let _ = turso
                 .insert_evolution_record(
@@ -156,9 +156,9 @@ pub(crate) async fn handle_load_inline(
         }
 
         // Link the PendingDecision to the A-Record for O-A-D chain tracing.
-        // Decisions are persisted to Turso; the evolution_record_id link will be
-        // available when the decision is read back from Turso.
-        if let Some(turso) = state.persistent_store() {
+        // Decisions are persisted to the tenant store; the evolution_record_id
+        // link will be available when the decision is read back from Turso.
+        if let Some(turso) = state.persistent_store_for_tenant(&tenant).await {
             for decision_id in &decision_ids {
                 if let Ok(Some(data_str)) = turso.get_pending_decision(decision_id).await
                     && let Ok(mut pd) =
