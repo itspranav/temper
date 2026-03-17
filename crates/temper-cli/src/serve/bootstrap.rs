@@ -12,6 +12,7 @@ use anyhow::{Context, Result};
 
 use temper_platform::state::PlatformState;
 use temper_runtime::tenant::TenantId;
+use temper_server::authz::load_and_activate_tenant_policies;
 use temper_server::event_store::ServerEventStore;
 use temper_server::registry::SpecRegistry;
 use temper_server::registry_bootstrap::{
@@ -297,6 +298,13 @@ pub(super) async fn hydrate_entities(state: &PlatformState, apps: &[(String, Str
 }
 
 /// Phase 6: Recover Cedar policies from persistent storage.
+///
+/// Two-pass recovery:
+/// 1. Legacy pass: reads from `tenant_policies` (flat blob per tenant) for
+///    backward compatibility with data written before this migration.
+/// 2. New pass: reads from `policies` (per-entry rows with hash tracking) via
+///    [`load_and_activate_tenant_policies`].  The new table takes precedence for
+///    any tenant that has entries there, overwriting what the legacy pass loaded.
 pub(super) async fn recover_cedar_policies(state: &PlatformState) {
     let Some(ref store) = state.server.event_store else {
         return;
@@ -334,6 +342,7 @@ pub(super) async fn recover_cedar_policies(state: &PlatformState) {
         }
     }
 
+    // Legacy pass: populate from old `tenant_policies` table.
     if !all_policy_rows.is_empty() {
         let mut policies = state.server.tenant_policies.write().unwrap(); // ci-ok: infallible lock
         let mut loaded_count = 0usize;
@@ -356,6 +365,34 @@ pub(super) async fn recover_cedar_policies(state: &PlatformState) {
             eprintln!("  Warning: failed to reload Cedar policies: {e}");
         } else if loaded_count > 0 {
             println!("  Restored Cedar policies for {loaded_count} tenants.");
+        }
+    }
+
+    // New pass: load from `policies` table (per-entry rows with hash tracking).
+    // Overwrites legacy data for any tenant that has entries in the new table.
+    // `load_and_activate_tenant_policies` logs via tracing on success; no-ops silently.
+    // Collect registered tenants; silently skip if registry lock is poisoned (unreachable in practice).
+    let tenants: Vec<String> = state
+        .server
+        .registry
+        .read()
+        .map(|reg| {
+            reg.tenant_ids()
+                .into_iter()
+                .map(|t| t.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if let Some(turso) = store.turso_store() {
+        for tenant in &tenants {
+            load_and_activate_tenant_policies(&state.server, tenant, turso).await;
+        }
+    } else if let Some(router) = store.tenant_router() {
+        for tenant in &tenants {
+            if let Ok(turso) = router.store_for_tenant(tenant).await {
+                load_and_activate_tenant_policies(&state.server, tenant, &turso).await;
+            }
         }
     }
 }
