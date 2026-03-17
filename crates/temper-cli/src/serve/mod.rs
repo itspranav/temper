@@ -99,7 +99,8 @@ pub async fn run(
     }
 
     // Phase 5b: Secrets vault
-    if let Ok(key_b64) = std::env::var("TEMPER_VAULT_KEY") { // determinism-ok: read once at startup
+    if let Ok(key_b64) = std::env::var("TEMPER_VAULT_KEY") {
+        // determinism-ok: read once at startup
         use base64::Engine as _;
         let key_bytes = base64::engine::general_purpose::STANDARD
             .decode(&key_b64)

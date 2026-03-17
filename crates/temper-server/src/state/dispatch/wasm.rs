@@ -159,8 +159,10 @@ impl crate::state::ServerState {
             .and_then(|s| s.parse::<u64>().ok())
             .map(std::time::Duration::from_secs)
             .unwrap_or(std::time::Duration::from_secs(30));
-        let inner: Arc<dyn WasmHost> =
-            Arc::new(ProductionWasmHost::with_timeout(tenant_secrets, http_timeout));
+        let inner: Arc<dyn WasmHost> = Arc::new(ProductionWasmHost::with_timeout(
+            tenant_secrets,
+            http_timeout,
+        ));
         let host: Arc<dyn WasmHost> = Arc::new(AuthorizedWasmHost::new(inner, gate, authz_ctx));
         let mut limits = WasmResourceLimits::default();
         // Allow integration config to override WASM execution timeout.

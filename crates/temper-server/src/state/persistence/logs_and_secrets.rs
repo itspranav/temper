@@ -162,12 +162,10 @@ impl ServerState {
                         .map_err(|e| format!("failed to delete secret {tenant}/{key_name}: {e}"))?;
                 Ok(result.rows_affected() > 0)
             }
-            MetadataBackend::Turso(turso) => {
-                turso
-                    .delete_secret(tenant, key_name)
-                    .await
-                    .map_err(|e| format!("failed to delete secret {tenant}/{key_name}: {e}"))
-            }
+            MetadataBackend::Turso(turso) => turso
+                .delete_secret(tenant, key_name)
+                .await
+                .map_err(|e| format!("failed to delete secret {tenant}/{key_name}: {e}")),
             MetadataBackend::Redis => Err(Self::redis_ephemeral_error("Secret deletion")),
         }
     }
@@ -182,21 +180,17 @@ impl ServerState {
         };
 
         let rows: Vec<(String, Vec<u8>, Vec<u8>)> = match backend {
-            MetadataBackend::Postgres(pool) => {
-                sqlx::query_as(
-                    "SELECT key_name, ciphertext, nonce FROM tenant_secrets WHERE tenant = $1",
-                )
-                .bind(tenant)
-                .fetch_all(pool)
+            MetadataBackend::Postgres(pool) => sqlx::query_as(
+                "SELECT key_name, ciphertext, nonce FROM tenant_secrets WHERE tenant = $1",
+            )
+            .bind(tenant)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| format!("failed to load secrets for tenant {tenant}: {e}"))?,
+            MetadataBackend::Turso(turso) => turso
+                .load_tenant_secrets(tenant)
                 .await
-                .map_err(|e| format!("failed to load secrets for tenant {tenant}: {e}"))?
-            }
-            MetadataBackend::Turso(turso) => {
-                turso
-                    .load_tenant_secrets(tenant)
-                    .await
-                    .map_err(|e| format!("failed to load secrets for tenant {tenant}: {e}"))?
-            }
+                .map_err(|e| format!("failed to load secrets for tenant {tenant}: {e}"))?,
             MetadataBackend::Redis => return Err(Self::redis_ephemeral_error("Secret loading")),
         };
 

@@ -87,7 +87,15 @@ pub(crate) fn bootstrap_tenant_specs(
     label: &str,
     verified_cache: &BTreeMap<String, (String, bool)>,
 ) {
-    bootstrap_tenant_specs_inner(state, tenant, csdl_source, specs, label, verified_cache, false);
+    bootstrap_tenant_specs_inner(
+        state,
+        tenant,
+        csdl_source,
+        specs,
+        label,
+        verified_cache,
+        false,
+    );
 }
 
 /// Like [`bootstrap_tenant_specs`] but merges into an existing tenant config
@@ -101,7 +109,15 @@ pub(crate) fn bootstrap_tenant_specs_merge(
     label: &str,
     verified_cache: &BTreeMap<String, (String, bool)>,
 ) {
-    bootstrap_tenant_specs_inner(state, tenant, csdl_source, specs, label, verified_cache, true);
+    bootstrap_tenant_specs_inner(
+        state,
+        tenant,
+        csdl_source,
+        specs,
+        label,
+        verified_cache,
+        true,
+    );
 }
 
 fn bootstrap_tenant_specs_inner(
