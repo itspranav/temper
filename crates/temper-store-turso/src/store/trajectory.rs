@@ -13,7 +13,13 @@ use crate::metrics::TursoQueryTimer;
 
 impl TursoEventStore {
     /// Persist a trajectory entry (all columns including agent/authz fields).
-    #[instrument(skip_all, fields(otel.name = "turso.persist_trajectory"))]
+    #[instrument(skip_all, fields(
+        otel.name = "turso.persist_trajectory",
+        entity_type = entry.entity_type,
+        action = entry.action,
+        success = entry.success,
+        rows_written = tracing::field::Empty,
+    ))]
     pub async fn persist_trajectory(
         &self,
         entry: TursoTrajectoryInsert<'_>,
@@ -63,6 +69,7 @@ impl TursoEventStore {
             );
         }
         execute_res?;
+        tracing::Span::current().record("rows_written", 1u64);
         tracing::info!(
             tenant = entry.tenant,
             entity_type = entry.entity_type,
@@ -77,7 +84,7 @@ impl TursoEventStore {
     }
 
     /// Load recent trajectory entries (newest first, up to `limit`).
-    #[instrument(skip_all, fields(otel.name = "turso.load_recent_trajectories"))]
+    #[instrument(skip_all, fields(otel.name = "turso.load_recent_trajectories", row_count = tracing::field::Empty))]
     pub async fn load_recent_trajectories(
         &self,
         limit: i64,
@@ -104,6 +111,7 @@ impl TursoEventStore {
         while let Some(row) = rows.next().await.map_err(storage_error)? {
             out.push(Self::row_to_trajectory(&row)?);
         }
+        tracing::Span::current().record("row_count", out.len());
         tracing::debug!(limit, count = out.len(), "trajectory.store.read");
         Ok(out)
     }
@@ -113,7 +121,7 @@ impl TursoEventStore {
     /// Returns one row per (entity_type, error) group with counts and
     /// timestamps. This replaces the previous pattern of loading up to 10,000
     /// raw trajectory rows and grouping them in Rust.
-    #[instrument(skip_all, fields(otel.name = "turso.load_unmet_intent_rows"))]
+    #[instrument(skip_all, fields(otel.name = "turso.load_unmet_intent_rows", row_count = tracing::field::Empty))]
     pub async fn load_unmet_intent_rows(&self) -> Result<Vec<UnmetIntentAggRow>, PersistenceError> {
         let _query_timer = TursoQueryTimer::start("turso.load_unmet_intent_rows");
         let conn = self.configured_connection().await?;
@@ -151,6 +159,7 @@ impl TursoEventStore {
                 last_seen: row.get::<String>(5).map_err(storage_error)?,
             });
         }
+        tracing::Span::current().record("row_count", out.len());
         tracing::debug!(count = out.len(), "turso.load_unmet_intent_rows");
         Ok(out)
     }
