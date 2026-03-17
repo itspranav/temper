@@ -93,7 +93,7 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
             .config
             .get("temper_api_url")
             .cloned()
-            .unwrap_or_else(|| "http://localhost:3210".to_string());
+            .unwrap_or_else(|| "http://127.0.0.1:3000".to_string());
         let tenant = &ctx.tenant;
 
         // Read current conversation and append tool results
@@ -243,10 +243,7 @@ fn execute_tool(
                 .ok_or("bash: missing 'command' parameter")?;
 
             if e2b {
-                run_bash_local(ctx, sandbox_url, command, workdir)
-                    .map_err(|e| format!("E2B bash not yet supported via Connect protocol — \
-                        process execution requires host_grpc_call or custom template. \
-                        Underlying error: {e}"))
+                run_bash_e2b(ctx, sandbox_url, command, workdir)
             } else {
                 run_bash_local(ctx, sandbox_url, command, workdir)
             }
@@ -372,6 +369,82 @@ fn write_file_e2b(
     } else {
         Err(format!("E2B write failed (HTTP {}): {}", resp.status, resp.body))
     }
+}
+
+/// Run bash command via E2B envd Connect protocol: POST /process.Process/Start.
+///
+/// Uses the `host_connect_call` host function which handles Connect binary
+/// frame parsing. The envd daemon returns server-streamed process output
+/// frames, each containing stdout/stderr/exitCode fields.
+fn run_bash_e2b(
+    ctx: &Context,
+    sandbox_url: &str,
+    command: &str,
+    workdir: &str,
+) -> Result<String, String> {
+    let url = format!("{sandbox_url}/process.Process/Start");
+    let body = serde_json::to_string(&json!({
+        "command": command,
+        "envs": {},
+        "cwd": workdir,
+    }))
+    .unwrap_or_default();
+
+    let headers: Vec<(String, String)> = Vec::new();
+    let frames = ctx.connect_call(&url, &headers, &body)?;
+
+    if frames.is_empty() {
+        return Ok(String::new());
+    }
+
+    // Parse each frame — E2B process output has stdout, stderr, exitCode fields
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    let mut exit_code: i64 = 0;
+
+    for frame_str in &frames {
+        if let Ok(frame) = serde_json::from_str::<Value>(frame_str) {
+            if let Some(event) = frame.get("event") {
+                // Connect-streamed events may nest the data
+                if let Some(s) = event.get("stdout").and_then(|v| v.as_str()) {
+                    stdout.push_str(s);
+                }
+                if let Some(s) = event.get("stderr").and_then(|v| v.as_str()) {
+                    stderr.push_str(s);
+                }
+                if let Some(c) = event.get("exitCode").and_then(|v| v.as_i64()) {
+                    exit_code = c;
+                }
+            } else {
+                // Direct fields
+                if let Some(s) = frame.get("stdout").and_then(|v| v.as_str()) {
+                    stdout.push_str(s);
+                }
+                if let Some(s) = frame.get("stderr").and_then(|v| v.as_str()) {
+                    stderr.push_str(s);
+                }
+                if let Some(c) = frame.get("exitCode").and_then(|v| v.as_i64()) {
+                    exit_code = c;
+                }
+            }
+        }
+    }
+
+    let mut output = String::new();
+    if !stdout.is_empty() {
+        output.push_str(&stdout);
+    }
+    if !stderr.is_empty() {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str("STDERR: ");
+        output.push_str(&stderr);
+    }
+    if exit_code != 0 {
+        output.push_str(&format!("\n(exit code: {exit_code})"));
+    }
+    Ok(output)
 }
 
 /// Read conversation from TemperFS File entity.

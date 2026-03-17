@@ -54,4 +54,18 @@ unsafe extern "C" {
         result_buf_ptr: i32,
         result_buf_len: i32,
     ) -> i32;
+
+    /// Make a Connect protocol server-streaming RPC call via the host.
+    /// Returns bytes written to result_buf (JSON array of frame payloads),
+    /// -1 on error, -2 if buffer too small.
+    pub fn host_connect_call(
+        url_ptr: i32,
+        url_len: i32,
+        headers_ptr: i32,
+        headers_len: i32,
+        body_ptr: i32,
+        body_len: i32,
+        result_buf_ptr: i32,
+        result_buf_len: i32,
+    ) -> i32;
 }

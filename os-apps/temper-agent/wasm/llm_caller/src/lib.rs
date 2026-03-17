@@ -58,12 +58,21 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
             .get("tools_enabled")
             .and_then(|v| v.as_str())
             .unwrap_or("read,write,edit,bash");
+        // `prompt` is the system instruction (agent persona/behavior).
+        // `user_message` is the actual user task from the Provision action.
+        // If `system_prompt` is set explicitly, it overrides `prompt` for the
+        // Anthropic system parameter; otherwise `prompt` serves as the system prompt.
+        let prompt = fields
+            .get("prompt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let system_prompt = fields
             .get("system_prompt")
             .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let prompt = fields
-            .get("prompt")
+            .filter(|s| !s.is_empty())
+            .unwrap_or(prompt);
+        let user_message = fields
+            .get("user_message")
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let sandbox_url = fields
@@ -95,22 +104,24 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
             .config
             .get("temper_api_url")
             .cloned()
-            .unwrap_or_else(|| "http://localhost:3210".to_string());
+            .unwrap_or_else(|| "http://127.0.0.1:3000".to_string());
         let tenant = &ctx.tenant;
 
-        // Read conversation — from TemperFS if file_id set, else inline state
+        // Read conversation — from TemperFS if file_id set, else inline state.
+        // First turn uses `user_message` (the actual task). `prompt` is the system prompt.
+        let first_turn_content = if user_message.is_empty() { prompt } else { user_message };
         let mut messages: Vec<Value> = if !conversation_file_id.is_empty() {
-            read_conversation_from_temperfs(&ctx, &temper_api_url, tenant, conversation_file_id, prompt)?
+            read_conversation_from_temperfs(&ctx, &temper_api_url, tenant, conversation_file_id, first_turn_content)?
         } else {
             let conversation_json = fields
                 .get("conversation")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             if conversation_json.is_empty() {
-                vec![json!({ "role": "user", "content": prompt })]
+                vec![json!({ "role": "user", "content": first_turn_content })]
             } else {
                 serde_json::from_str(conversation_json)
-                    .unwrap_or_else(|_| vec![json!({ "role": "user", "content": prompt })])
+                    .unwrap_or_else(|_| vec![json!({ "role": "user", "content": first_turn_content })])
             }
         };
 

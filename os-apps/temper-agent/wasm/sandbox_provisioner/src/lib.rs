@@ -50,7 +50,7 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
             .config
             .get("temper_api_url")
             .cloned()
-            .unwrap_or_else(|| "http://localhost:3210".to_string());
+            .unwrap_or_else(|| "http://127.0.0.1:3000".to_string());
 
         let entity_id = ctx
             .entity_state

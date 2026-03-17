@@ -470,6 +470,77 @@ fn link_host_functions(linker: &mut Linker<HostState>) -> Result<(), WasmError> 
         )
         .map_err(|e| WasmError::Compilation(format!("failed to link host_http_call: {e}")))?;
 
+    // host_connect_call(url_ptr, url_len, headers_ptr, headers_len,
+    //                   body_ptr, body_len, result_buf_ptr, result_buf_len) -> i32
+    // Makes a Connect protocol server-streaming RPC call.
+    // Returns: bytes written to result_buf (JSON array of frame payloads),
+    // or -1 on error, -2 if buf too small.
+    linker
+        .func_wrap(
+            "env",
+            "host_connect_call",
+            |mut caller: Caller<'_, HostState>,
+             url_ptr: i32,
+             url_len: i32,
+             headers_ptr: i32,
+             headers_len: i32,
+             body_ptr: i32,
+             body_len: i32,
+             result_buf_ptr: i32,
+             result_buf_len: i32|
+             -> i32 {
+                let memory = caller.get_export("memory").and_then(|e| e.into_memory());
+                let Some(memory) = memory else {
+                    return -1;
+                };
+
+                // Read URL
+                let mut url_buf = vec![0u8; url_len as usize];
+                let _ = memory.read(&caller, url_ptr as usize, &mut url_buf);
+                let url = String::from_utf8_lossy(&url_buf).to_string();
+
+                // Read headers (JSON array of [key, value] pairs)
+                let headers: Vec<(String, String)> = if headers_len > 0 {
+                    let mut hdr_buf = vec![0u8; headers_len as usize];
+                    let _ = memory.read(&caller, headers_ptr as usize, &mut hdr_buf);
+                    serde_json::from_slice(&hdr_buf).unwrap_or_default()
+                } else {
+                    vec![]
+                };
+
+                // Read body
+                let body = if body_len > 0 {
+                    let mut body_buf = vec![0u8; body_len as usize];
+                    let _ = memory.read(&caller, body_ptr as usize, &mut body_buf);
+                    String::from_utf8_lossy(&body_buf).to_string()
+                } else {
+                    String::new()
+                };
+
+                // Bridge async -> sync
+                let host = caller.data().host.clone();
+                let result = tokio::task::block_in_place(|| {
+                    // determinism-ok: blocking bridge for WASM host call
+                    tokio::runtime::Handle::current()
+                        .block_on(host.connect_call(&url, &headers, &body))
+                });
+
+                match result {
+                    Ok(frames) => {
+                        let json = serde_json::to_string(&frames).unwrap_or_else(|_| "[]".into());
+                        let json_bytes = json.as_bytes();
+                        if json_bytes.len() > result_buf_len as usize {
+                            return -2; // buffer too small
+                        }
+                        let _ = memory.write(&mut caller, result_buf_ptr as usize, json_bytes);
+                        json_bytes.len() as i32
+                    }
+                    Err(_) => -1,
+                }
+            },
+        )
+        .map_err(|e| WasmError::Compilation(format!("failed to link host_connect_call: {e}")))?;
+
     // host_http_call_stream(method_ptr, method_len, url_ptr, url_len,
     //                       headers_ptr, headers_len,
     //                       body_stream_id_ptr, body_stream_id_len,
