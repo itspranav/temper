@@ -230,7 +230,7 @@ pub(crate) async fn handle_get_agent_history(
 
     // Sort by timestamp descending and truncate to limit.
     all_history.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-    all_history.truncate(limit as usize);
+    all_history.truncate(limit);
     let total = all_history.len();
     Ok(Json(serde_json::json!({
         "agent_id": agent_id,
