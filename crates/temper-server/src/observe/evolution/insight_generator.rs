@@ -313,6 +313,12 @@ pub(crate) struct UnmetIntent {
     pub resolved_by: Option<String>,
     /// Recommendation text.
     pub recommendation: String,
+    /// Sample request body from the most recent failure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_body: Option<serde_json::Value>,
+    /// Sample intent from X-Intent header.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_intent: Option<String>,
 }
 
 /// Accumulator for unmet-intent grouping.
@@ -323,12 +329,19 @@ struct UnmetIntentAccum {
     count: u64,
     first_seen: String,
     last_seen: String,
+    sample_body: Option<serde_json::Value>,
+    sample_intent: Option<String>,
 }
 
 /// Generate unmet intent summaries from trajectory data.
 ///
 /// Groups failed trajectories by error pattern and cross-references with
 /// SubmitSpec events to determine open vs resolved status.
+///
+/// This path is superseded in production by [`generate_unmet_intents_from_aggregated`]
+/// (SQL GROUP BY). Retained for unit tests that exercise the aggregation logic
+/// against in-memory trajectory slices.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn generate_unmet_intents(
     entries: &[crate::state::TrajectoryEntry],
 ) -> Vec<UnmetIntent> {
@@ -360,9 +373,18 @@ pub(crate) fn generate_unmet_intents(
                 count: 0,
                 first_seen: entry.timestamp.clone(),
                 last_seen: entry.timestamp.clone(),
+                sample_body: None,
+                sample_intent: None,
             });
             accum.count += 1;
             accum.last_seen = entry.timestamp.clone();
+            // Capture the most recent non-None body/intent as sample.
+            if entry.request_body.is_some() {
+                accum.sample_body = entry.request_body.clone();
+            }
+            if entry.intent.is_some() {
+                accum.sample_intent = entry.intent.clone();
+            }
         }
     }
 
@@ -399,6 +421,8 @@ pub(crate) fn generate_unmet_intents(
                 },
                 resolved_by,
                 recommendation,
+                sample_body: accum.sample_body,
+                sample_intent: accum.sample_intent,
             }
         })
         .collect();
@@ -515,6 +539,87 @@ struct PlatformGapAccum {
 }
 
 /// Categorize an error string into a pattern name.
+/// Generate unmet intent summaries from SQL-aggregated trajectory rows.
+///
+/// Accepts the output of [`ServerState::load_unmet_intent_rows_aggregated`]
+/// instead of loading thousands of raw [`TrajectoryEntry`] rows.  The
+/// `submitted_specs` map is keyed by entity_type and holds the latest
+/// SubmitSpec timestamp for that type.
+///
+/// Multiple SQL rows that map to the same (entity_type, error_pattern) after
+/// [`categorize_error`] are merged by summing counts and taking extreme timestamps.
+pub(crate) fn generate_unmet_intents_from_aggregated(
+    failures: &[temper_store_turso::UnmetIntentAggRow],
+    submitted_specs: &std::collections::BTreeMap<String, String>,
+) -> Vec<UnmetIntent> {
+    // Merge rows whose raw errors collapse to the same category.
+    let mut groups: BTreeMap<(String, String), UnmetIntentAccum> = BTreeMap::new();
+
+    for row in failures {
+        let error_pattern = categorize_error(row.error.as_deref());
+        // AuthzDenied belongs in the Decisions view, not Unmet Intents.
+        if error_pattern == "AuthzDenied" {
+            continue;
+        }
+        let key = (row.entity_type.clone(), error_pattern.clone());
+        let accum = groups.entry(key).or_insert_with(|| UnmetIntentAccum {
+            entity_type: row.entity_type.clone(),
+            action: row.action.clone(),
+            error_pattern,
+            count: 0,
+            first_seen: row.first_seen.clone(),
+            last_seen: row.last_seen.clone(),
+            sample_body: None,
+            sample_intent: None,
+        });
+        accum.count += row.count;
+        if row.first_seen < accum.first_seen {
+            accum.first_seen = row.first_seen.clone();
+        }
+        if row.last_seen > accum.last_seen {
+            accum.last_seen = row.last_seen.clone();
+        }
+    }
+
+    groups
+        .into_values()
+        .map(|accum| {
+            let resolved = submitted_specs.contains_key(&accum.entity_type);
+            let resolved_by = submitted_specs.get(&accum.entity_type).cloned();
+            let recommendation = if resolved {
+                format!("Spec for '{}' has been submitted.", accum.entity_type)
+            } else {
+                match accum.error_pattern.as_str() {
+                    "EntitySetNotFound" => {
+                        format!("Consider creating '{}' entity type.", accum.entity_type)
+                    }
+                    _ => format!(
+                        "Investigate failures for '{}' (pattern: {}).",
+                        accum.entity_type, accum.error_pattern,
+                    ),
+                }
+            };
+            UnmetIntent {
+                entity_type: accum.entity_type,
+                action: accum.action,
+                error_pattern: accum.error_pattern,
+                failure_count: accum.count,
+                first_seen: accum.first_seen,
+                last_seen: accum.last_seen,
+                status: if resolved {
+                    "resolved".to_string()
+                } else {
+                    "open".to_string()
+                },
+                resolved_by,
+                recommendation,
+                sample_body: accum.sample_body,
+                sample_intent: accum.sample_intent,
+            }
+        })
+        .collect()
+}
+
 fn categorize_error(error: Option<&str>) -> String {
     match error {
         Some(e) if e.contains("EntitySetNotFound") || e.contains("entity set not found") => {
@@ -556,6 +661,8 @@ mod tests {
             source: None,
             spec_governed: None,
             agent_type: None,
+            request_body: None,
+            intent: None,
         }
     }
 
