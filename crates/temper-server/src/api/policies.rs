@@ -318,7 +318,8 @@ pub(crate) async fn handle_create_policy(
     };
 
     // Validate: build prospective enabled policy text with the new entry added.
-    let prospective = build_prospective_enabled_text(&state, &tenant, Some((&policy_id, &cedar_text))).await;
+    let prospective =
+        build_prospective_enabled_text(&state, &tenant, Some((&policy_id, &cedar_text))).await;
     if let Err(resp) = super::validate_and_reload_policies(&state, &tenant, &prospective) {
         return resp;
     }

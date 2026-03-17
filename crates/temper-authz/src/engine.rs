@@ -166,8 +166,7 @@ impl AuthzEngine {
                     .map_err(|e| AuthzError::PolicyParse(e.to_string()))?;
             } else {
                 for (idx, p) in entry_policies.into_iter().enumerate() {
-                    let named =
-                        p.new_id(PolicyId::new(format!("{tenant}:{policy_id}:{idx}")));
+                    let named = p.new_id(PolicyId::new(format!("{tenant}:{policy_id}:{idx}")));
                     combined_set
                         .add(named)
                         .map_err(|e| AuthzError::PolicyParse(e.to_string()))?;
@@ -261,7 +260,13 @@ impl AuthzEngine {
                 )));
             }
         };
-        self.evaluate_request(security_ctx, action, resource_type, resource_attrs, &policy_set)
+        self.evaluate_request(
+            security_ctx,
+            action,
+            resource_type,
+            resource_attrs,
+            &policy_set,
+        )
     }
 
     /// Evaluate an authorization request against a specific tenant's policy set.
@@ -286,7 +291,13 @@ impl AuthzEngine {
         };
 
         if let Some(tp) = tenants.get(tenant) {
-            self.evaluate_request(security_ctx, action, resource_type, resource_attrs, &tp.policy_set)
+            self.evaluate_request(
+                security_ctx,
+                action,
+                resource_type,
+                resource_attrs,
+                &tp.policy_set,
+            )
         } else {
             // No per-tenant policies loaded — fall back to global.
             drop(tenants);
@@ -440,9 +451,9 @@ impl AuthzEngine {
             }
         };
 
-        let response: CedarResponse =
-            self.authorizer
-                .is_authorized(&request, policy_set, &entities);
+        let response: CedarResponse = self
+            .authorizer
+            .is_authorized(&request, policy_set, &entities);
 
         match response.decision() {
             Decision::Allow => AuthzDecision::Allow,
@@ -1013,20 +1024,28 @@ mod tests {
         attrs.insert("id".to_string(), serde_json::json!("doc-1"));
 
         // Tenant A allows read but not write.
-        assert!(engine
-            .authorize_for_tenant("tenant-a", &ctx, "read", "Doc", &attrs)
-            .is_allowed());
-        assert!(!engine
-            .authorize_for_tenant("tenant-a", &ctx, "write", "Doc", &attrs)
-            .is_allowed());
+        assert!(
+            engine
+                .authorize_for_tenant("tenant-a", &ctx, "read", "Doc", &attrs)
+                .is_allowed()
+        );
+        assert!(
+            !engine
+                .authorize_for_tenant("tenant-a", &ctx, "write", "Doc", &attrs)
+                .is_allowed()
+        );
 
         // Tenant B allows write but not read.
-        assert!(!engine
-            .authorize_for_tenant("tenant-b", &ctx, "read", "Doc", &attrs)
-            .is_allowed());
-        assert!(engine
-            .authorize_for_tenant("tenant-b", &ctx, "write", "Doc", &attrs)
-            .is_allowed());
+        assert!(
+            !engine
+                .authorize_for_tenant("tenant-b", &ctx, "read", "Doc", &attrs)
+                .is_allowed()
+        );
+        assert!(
+            engine
+                .authorize_for_tenant("tenant-b", &ctx, "write", "Doc", &attrs)
+                .is_allowed()
+        );
     }
 
     #[test]
@@ -1056,13 +1075,14 @@ mod tests {
         attrs.insert("id".to_string(), serde_json::json!("issue-1"));
 
         // Read is allowed (by os-app:pm policy).
-        assert!(engine
-            .authorize_for_tenant("default", &ctx, "read", "Issue", &attrs)
-            .is_allowed());
+        assert!(
+            engine
+                .authorize_for_tenant("default", &ctx, "read", "Issue", &attrs)
+                .is_allowed()
+        );
 
         // Assign is denied for user-1 (decision:abc only allows bot-1).
-        let decision =
-            engine.authorize_for_tenant("default", &ctx, "Assign", "Issue", &attrs);
+        let decision = engine.authorize_for_tenant("default", &ctx, "Assign", "Issue", &attrs);
         assert!(!decision.is_allowed());
 
         // Check that the denial includes meaningful policy IDs.

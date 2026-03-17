@@ -165,9 +165,7 @@ impl TursoEventStore {
             .await
             .map_err(storage_error)?;
         // Migration: add `enabled` column to existing `policies` tables.
-        let _ = conn
-            .execute(schema::ALTER_POLICIES_ADD_ENABLED, ())
-            .await;
+        let _ = conn.execute(schema::ALTER_POLICIES_ADD_ENABLED, ()).await;
         conn.execute(schema::CREATE_TENANT_INSTALLED_APPS_TABLE, ())
             .await
             .map_err(storage_error)?;

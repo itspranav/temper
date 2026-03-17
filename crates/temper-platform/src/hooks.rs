@@ -228,7 +228,11 @@ fn handle_generate_cedar_policy(
         entry.push_str(&generated_policy);
 
         let tenant_text = entry.clone();
-        if let Err(e) = state.server.authz.reload_tenant_policies(tenant, &tenant_text) {
+        if let Err(e) = state
+            .server
+            .authz
+            .reload_tenant_policies(tenant, &tenant_text)
+        {
             tracing::error!(error = %e, "GenerateCedarPolicy: failed to reload policies");
             return Err(format!("Failed to reload policies: {e}"));
         }

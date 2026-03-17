@@ -296,27 +296,27 @@ pub async fn install_os_app(
         && let Some(ref store) = state.server.event_store
         && let Some(turso) = store.platform_turso_store()
     {
-            let rows = turso
-                .load_policies_for_tenant(tenant)
-                .await
-                .unwrap_or_default();
-            let mut combined = String::new();
-            for row in &rows {
-                if !row.enabled {
-                    continue;
-                }
-                if !combined.is_empty() {
-                    combined.push('\n');
-                }
-                combined.push_str(&row.cedar_text);
+        let rows = turso
+            .load_policies_for_tenant(tenant)
+            .await
+            .unwrap_or_default();
+        let mut combined = String::new();
+        for row in &rows {
+            if !row.enabled {
+                continue;
             }
-            // Reload per-tenant Cedar policy set.
-            if let Err(e) = state.server.authz.reload_tenant_policies(tenant, &combined) {
-                tracing::warn!("Failed to reload Cedar policies after OS app install: {e}");
+            if !combined.is_empty() {
+                combined.push('\n');
             }
-            // Update in-memory text cache for backward compat.
-            let mut policies = state.server.tenant_policies.write().unwrap(); // ci-ok: infallible lock
-            policies.insert(tenant.to_string(), combined);
+            combined.push_str(&row.cedar_text);
+        }
+        // Reload per-tenant Cedar policy set.
+        if let Err(e) = state.server.authz.reload_tenant_policies(tenant, &combined) {
+            tracing::warn!("Failed to reload Cedar policies after OS app install: {e}");
+        }
+        // Update in-memory text cache for backward compat.
+        let mut policies = state.server.tenant_policies.write().unwrap(); // ci-ok: infallible lock
+        policies.insert(tenant.to_string(), combined);
     }
 
     tracing::info!(

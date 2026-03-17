@@ -84,8 +84,7 @@ pub fn build_api_router() -> Router<ServerState> {
         )
         .route(
             "/tenants/{tenant}/policies/entry/{policy_id}",
-            patch(policies::handle_patch_policy)
-                .delete(policies::handle_delete_policy_entry),
+            patch(policies::handle_patch_policy).delete(policies::handle_delete_policy_entry),
         )
         .route(
             "/tenants/{tenant}/policies/suggestions",
@@ -216,10 +215,7 @@ pub(crate) fn validate_and_reload_policies(
     new_tenant_text: &str,
 ) -> Result<(), axum::response::Response> {
     // Validate and reload only this tenant's policy set (per-tenant isolation).
-    if let Err(e) = state
-        .authz
-        .reload_tenant_policies(tenant, new_tenant_text)
-    {
+    if let Err(e) = state.authz.reload_tenant_policies(tenant, new_tenant_text) {
         tracing::warn!(error = %e, "policy validation failed");
         return Err((
             StatusCode::BAD_REQUEST,
