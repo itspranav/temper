@@ -177,7 +177,15 @@ impl crate::state::ServerState {
     /// Core dispatch without reaction cascade (used by ReactionDispatcher to
     /// avoid infinite async recursion).
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all, fields(otel.name = "dispatch.dispatch_tenant_action_core", tenant = %tenant, entity_type, entity_id, action_name = action))]
+    #[instrument(skip_all, fields(
+        otel.name = "dispatch.dispatch_tenant_action_core",
+        tenant = %tenant,
+        entity_type,
+        entity_id,
+        action_name = action,
+        success = tracing::field::Empty,
+        error_msg = tracing::field::Empty,
+    ))]
     pub(crate) async fn dispatch_tenant_action_core(
         &self,
         tenant: &TenantId,
@@ -283,6 +291,10 @@ impl crate::state::ServerState {
                         "unmet_intent"
                     );
                 }
+                tracing::Span::current().record("success", false);
+                if let Some(ref err) = entry.error {
+                    tracing::Span::current().record("error_msg", err.as_str());
+                }
                 if let Err(persist_err) = self.persist_trajectory_entry(&entry).await {
                     tracing::error!(error = %persist_err, "failed to persist trajectory entry");
                 }
@@ -301,6 +313,11 @@ impl crate::state::ServerState {
             await_integration,
         };
         let response = self.run_post_dispatch_effects(&ctx, response).await;
+
+        tracing::Span::current().record("success", response.success);
+        if let Some(ref err) = response.error {
+            tracing::Span::current().record("error_msg", err.as_str());
+        }
 
         Ok(response)
     }

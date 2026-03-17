@@ -6,6 +6,8 @@
 
 use std::collections::BTreeMap;
 
+use tracing::instrument;
+
 use temper_evolution::insight::{classify_insight, compute_priority_score};
 use temper_evolution::records::{
     FeatureRequestDisposition, FeatureRequestRecord, InsightRecord, InsightSignal,
@@ -49,6 +51,7 @@ struct TrajectorySignal {
 /// classification and priority, and returns `InsightRecord`s. Also correlates
 /// EntitySetNotFound 404 trajectories with SubmitSpec events to detect
 /// resolved vs open unmet intents.
+#[instrument(skip_all, fields(entry_count = entries.len(), insight_count = tracing::field::Empty))]
 pub(crate) fn generate_insights(entries: &[crate::state::TrajectoryEntry]) -> Vec<InsightRecord> {
     if entries.is_empty() {
         tracing::debug!("evolution.insight");
@@ -288,6 +291,7 @@ pub(crate) fn generate_insights(entries: &[crate::state::TrajectoryEntry]) -> Ve
             .partial_cmp(&a.priority_score)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+    tracing::Span::current().record("insight_count", insights.len());
     tracing::info!(insight_count = insights.len(), "evolution.insight");
     insights
 }
@@ -342,6 +346,7 @@ struct UnmetIntentAccum {
 /// (SQL GROUP BY). Retained for unit tests that exercise the aggregation logic
 /// against in-memory trajectory slices.
 #[cfg_attr(not(test), allow(dead_code))]
+#[instrument(skip_all, fields(entry_count = entries.len(), intent_count = tracing::field::Empty))]
 pub(crate) fn generate_unmet_intents(
     entries: &[crate::state::TrajectoryEntry],
 ) -> Vec<UnmetIntent> {
@@ -428,6 +433,7 @@ pub(crate) fn generate_unmet_intents(
         .collect();
     let open_count = intents.iter().filter(|i| i.status == "open").count();
     let resolved_count = intents.iter().filter(|i| i.status == "resolved").count();
+    tracing::Span::current().record("intent_count", intents.len());
     if open_count > 0 {
         tracing::warn!(
             entry_count = entries.len(),
@@ -548,6 +554,7 @@ struct PlatformGapAccum {
 ///
 /// Multiple SQL rows that map to the same (entity_type, error_pattern) after
 /// [`categorize_error`] are merged by summing counts and taking extreme timestamps.
+#[instrument(skip_all, fields(failure_row_count = failures.len(), intent_count = tracing::field::Empty))]
 pub(crate) fn generate_unmet_intents_from_aggregated(
     failures: &[temper_store_turso::UnmetIntentAggRow],
     submitted_specs: &std::collections::BTreeMap<String, String>,
@@ -581,7 +588,7 @@ pub(crate) fn generate_unmet_intents_from_aggregated(
         }
     }
 
-    groups
+    let intents: Vec<UnmetIntent> = groups
         .into_values()
         .map(|accum| {
             let resolved = submitted_specs.contains_key(&accum.entity_type);
@@ -617,7 +624,9 @@ pub(crate) fn generate_unmet_intents_from_aggregated(
                 sample_intent: accum.sample_intent,
             }
         })
-        .collect()
+        .collect();
+    tracing::Span::current().record("intent_count", intents.len());
+    intents
 }
 
 fn categorize_error(error: Option<&str>) -> String {
