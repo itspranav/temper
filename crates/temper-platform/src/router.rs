@@ -56,6 +56,10 @@ pub fn build_platform_router(state: PlatformState) -> Router {
         .nest("/api", tenant_api.with_state(state.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),
+            crate::identity_cache::invalidate_identity_cache_on_credential_mutation,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
             tenant_access_check,
         ))
         .layer(middleware::from_fn_with_state(state, bearer_auth_check))

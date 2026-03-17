@@ -595,3 +595,88 @@ async fn e2e_http_global_api_key_admin_access() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 }
+
+/// Cache coherence: rotating a credential invalidates resolver cache immediately.
+#[tokio::test]
+async fn e2e_http_rotate_invalidates_identity_cache() {
+    let mut state = identity_test_state();
+    state.api_token = Some("admin-test-key".to_string());
+    let resolver = state.identity_resolver.clone();
+    let app = temper_platform::router::build_platform_router(state.clone());
+    let tenant = TenantId::new(TEST_TENANT);
+
+    // Create AgentType + credential.
+    let r = dispatch(
+        &state,
+        "AgentType",
+        "cache-type",
+        "Define",
+        serde_json::json!({
+            "name": "cache-agent",
+            "system_prompt": "test",
+            "tool_set": "local",
+            "model": "claude-sonnet-4-6",
+            "max_turns": "200",
+            "adapter_config": "{}",
+            "default_budget_cents": "0"
+        }),
+    )
+    .await;
+    assert!(r.success);
+
+    let plaintext = "tmpr_cache-invalidate-test";
+    let key_hash = hash_token(plaintext);
+    let r = dispatch(
+        &state,
+        "AgentCredential",
+        &key_hash,
+        "Issue",
+        serde_json::json!({
+            "agent_type_id": "cache-type",
+            "agent_instance_id": "cache-inst-1",
+            "key_hash": key_hash,
+            "key_prefix": "tmpr_cach",
+            "description": "cache test",
+            "created_by": "test",
+            "expires_at": ""
+        }),
+    )
+    .await;
+    assert!(r.success);
+
+    // Populate cache with a successful resolution.
+    assert!(
+        resolver
+            .resolve(&state.server, &tenant, plaintext)
+            .await
+            .is_some()
+    );
+
+    // Rotate through HTTP route (this should trigger middleware invalidation).
+    let response = app
+        .oneshot(
+            Request::post(format!(
+                "/tdata/AgentCredentials('{key_hash}')/Temper.Agent.Rotate"
+            ))
+            .header("Content-Type", "application/json")
+            .header("Authorization", "Bearer admin-test-key")
+            .header("X-Temper-Principal-Kind", "admin")
+            .header("X-Tenant-Id", TEST_TENANT)
+            .body(Body::from(
+                r#"{"key_hash":"rotated-hash","key_prefix":"tmpr_rot","description":"rotated"}"#,
+            ))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Resolver should not return stale cached identity after rotate.
+    assert!(
+        resolver
+            .resolve(&state.server, &tenant, plaintext)
+            .await
+            .is_none(),
+        "rotated credential must be invalidated in resolver cache immediately"
+    );
+}

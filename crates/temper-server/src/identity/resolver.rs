@@ -145,8 +145,13 @@ impl IdentityResolver {
     /// Invalidate a specific credential by its token.
     pub fn invalidate_token(&self, bearer_token: &str) {
         let key_hash = hash_token(bearer_token);
+        self.invalidate_key_hash(&key_hash);
+    }
+
+    /// Invalidate a specific credential by its hashed key (`AgentCredential` entity ID).
+    pub fn invalidate_key_hash(&self, key_hash: &str) {
         let mut cache = self.cache.write().unwrap(); // ci-ok: infallible lock
-        cache.remove(&key_hash);
+        cache.remove(key_hash);
     }
 
     fn get_cached(&self, key_hash: &str) -> Option<ResolvedIdentity> {

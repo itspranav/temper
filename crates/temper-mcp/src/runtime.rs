@@ -39,6 +39,7 @@ pub(crate) struct RuntimeContext {
     pub(crate) agent_type: Option<String>,
     pub(crate) session_id: Option<String>,
     pub(crate) api_key: Option<String>,
+    pub(crate) identity_tenant: String,
     /// Identity from the MCP client's `initialize` request.
     pub(crate) client_info: ClientInfo,
     /// Timestamp when this MCP session started (used for agent ID derivation).
@@ -66,6 +67,10 @@ impl RuntimeContext {
                 .api_key
                 .clone()
                 .or_else(|| std::env::var("TEMPER_API_KEY").ok()), // determinism-ok: startup config
+            identity_tenant: std::env::var("TEMPER_TENANT")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .unwrap_or_else(|| "default".to_string()), // determinism-ok: startup config
             client_info: ClientInfo::default(),
             started_at: std::time::Instant::now(), // determinism-ok: startup config, used only for agent ID derivation
             sandbox: temper_sandbox::runner::PersistentSandbox::new(&[("temper", "Temper", 1)]),
@@ -128,7 +133,11 @@ impl RuntimeContext {
         let resp = self
             .http
             .post(&url)
-            .json(&serde_json::json!({ "bearer_token": token }))
+            .header("X-Tenant-Id", &self.identity_tenant)
+            .json(&serde_json::json!({
+                "bearer_token": token,
+                "tenant": self.identity_tenant,
+            }))
             .send()
             .await
             .ok()?;
