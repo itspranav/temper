@@ -164,15 +164,16 @@ impl crate::state::ServerState {
             http_timeout,
         ));
         let host: Arc<dyn WasmHost> = Arc::new(AuthorizedWasmHost::new(inner, gate, authz_ctx));
-        let mut limits = WasmResourceLimits::default();
-        // Allow integration config to override WASM execution timeout.
-        limits.max_duration = http_timeout;
-        // Allow larger HTTP response bodies for LLM responses.
-        if let Some(max_resp) = integration.config.get("max_response_bytes") {
-            if let Ok(bytes) = max_resp.parse::<usize>() {
-                limits.max_response_bytes = bytes;
-            }
-        }
+        let max_response_bytes = integration
+            .config
+            .get("max_response_bytes")
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(WasmResourceLimits::default().max_response_bytes);
+        let limits = WasmResourceLimits {
+            max_duration: http_timeout,
+            max_response_bytes,
+            ..WasmResourceLimits::default()
+        };
 
         tracing::info!(
             tenant = %ctx.entity_ref.tenant,
@@ -290,8 +291,8 @@ impl crate::state::ServerState {
                     .as_deref()
                     .unwrap_or(&result.callback_action);
 
-                if !callback_action.is_empty() {
-                    if let Some(resp) = self
+                if !callback_action.is_empty()
+                    && let Some(resp) = self
                         .dispatch_wasm_callback(
                             ctx.entity_ref,
                             callback_action,
@@ -300,9 +301,8 @@ impl crate::state::ServerState {
                             ctx.mode,
                         )
                         .await?
-                    {
-                        return Ok(Some(resp));
-                    }
+                {
+                    return Ok(Some(resp));
                 }
                 Ok(None)
             }
