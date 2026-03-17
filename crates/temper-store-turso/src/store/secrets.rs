@@ -6,6 +6,9 @@ use tracing::instrument;
 
 use super::TursoEventStore;
 
+/// Encrypted secret row: (key_name, ciphertext, nonce).
+type SecretRow = (String, Vec<u8>, Vec<u8>);
+
 impl TursoEventStore {
     /// Upsert an encrypted secret for a tenant.
     ///
@@ -61,7 +64,7 @@ impl TursoEventStore {
     pub async fn load_tenant_secrets(
         &self,
         tenant: &str,
-    ) -> Result<Vec<(String, Vec<u8>, Vec<u8>)>, PersistenceError> {
+    ) -> Result<Vec<SecretRow>, PersistenceError> {
         let conn = self.configured_connection().await?;
         let mut rows = conn
             .query(
