@@ -122,8 +122,8 @@ initial = ""
 name = "Configure"
 kind = "input"
 from = ["Created"]
-params = ["prompt", "model", "provider", "max_turns", "tools_enabled", "system_prompt", "workdir"]
-hint = "Configure agent with task prompt, model, and tool settings."
+params = ["prompt", "model", "provider", "max_turns", "tools_enabled", "system_prompt", "workdir", "sandbox_url"]
+hint = "Configure agent with task prompt, model, tool settings, and optional sandbox URL."
 
 [[action]]
 name = "Provision"

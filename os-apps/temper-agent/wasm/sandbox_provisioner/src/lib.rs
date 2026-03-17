@@ -63,16 +63,30 @@ struct SandboxResult {
     sandbox_id: String,
 }
 
-/// Provision a sandbox. Checks for a pre-provisioned sandbox URL first
-/// (from config or trigger params), then falls back to Modal API.
+/// Provision a sandbox. Priority order:
+/// 1. sandbox_url from entity state (set via Configure action)
+/// 2. sandbox_url from integration config
+/// 3. Modal API broker
 fn provision_sandbox(ctx: &Context) -> Result<SandboxResult, String> {
-    // Priority 1: Static sandbox_url from integration config or trigger params.
-    let static_url = ctx.config.get("sandbox_url").cloned().or_else(|| {
-        ctx.trigger_params
-            .get("sandbox_url")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-    });
+    let fields = ctx
+        .entity_state
+        .get("fields")
+        .cloned()
+        .unwrap_or(json!({}));
+
+    // Priority 1: sandbox_url from entity state (set at Configure time).
+    let static_url = fields
+        .get("sandbox_url")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .or_else(|| ctx.config.get("sandbox_url").cloned())
+        .or_else(|| {
+            ctx.trigger_params
+                .get("sandbox_url")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        });
     if let Some(url) = static_url {
         ctx.log("info", &format!("sandbox_provisioner: using static sandbox_url: {url}"));
         return Ok(SandboxResult {
