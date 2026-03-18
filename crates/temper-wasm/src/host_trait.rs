@@ -445,9 +445,7 @@ impl WasmHost for SimWasmHost {
             .get(&(hash, action.to_string()))
             .cloned()
             .ok_or_else(|| {
-                format!(
-                    r#"{{"success": false, "error": "sim: no canned response for action '{action}'"}}"#
-                )
+                format!("sim: no canned response for action '{action}'")
             })
     }
 }

@@ -53,12 +53,11 @@ impl ObjectiveScores {
             );
         }
 
-        // Coverage: fraction of unique actions that are known (not unknown)
-        let total_unique = result.succeeded + result.guard_rejections + result.unknown_actions;
-        if total_unique > 0 {
+        // Coverage: fraction of actions that are known (not unknown)
+        if result.actions_attempted > 0 {
             scores.insert(
                 "coverage".into(),
-                1.0 - (result.unknown_actions as f64 / total_unique as f64),
+                1.0 - (result.unknown_actions as f64 / result.actions_attempted as f64),
             );
         }
 
@@ -101,6 +100,7 @@ mod tests {
             succeeded: 10,
             guard_rejections: 0,
             unknown_actions: 0,
+            invalid_transitions: 0,
             errors: Vec::new(),
         };
 
@@ -117,6 +117,7 @@ mod tests {
             succeeded: 7,
             guard_rejections: 2,
             unknown_actions: 1,
+            invalid_transitions: 0,
             errors: Vec::new(),
         };
 
@@ -133,6 +134,7 @@ mod tests {
             succeeded: 0,
             guard_rejections: 0,
             unknown_actions: 0,
+            invalid_transitions: 0,
             errors: Vec::new(),
         };
 

@@ -32,24 +32,23 @@ impl ParetoFrontier {
             return false;
         }
 
+        // Collect all objective keys from both sides.
+        let all_keys: std::collections::BTreeSet<&String> =
+            a_scores.keys().chain(b_scores.keys()).collect();
+
         let mut at_least_as_good = true;
         let mut strictly_better = false;
 
-        for (key, a_val) in a_scores {
-            match b_scores.get(key) {
-                Some(b_val) => {
-                    if a_val < b_val {
-                        at_least_as_good = false;
-                        break;
-                    }
-                    if a_val > b_val {
-                        strictly_better = true;
-                    }
-                }
-                // If b doesn't have this objective, a is better on it
-                None => {
-                    strictly_better = true;
-                }
+        for key in all_keys {
+            let a_val = a_scores.get(key).copied().unwrap_or(0.0);
+            let b_val = b_scores.get(key).copied().unwrap_or(0.0);
+
+            if a_val < b_val {
+                at_least_as_good = false;
+                break;
+            }
+            if a_val > b_val {
+                strictly_better = true;
             }
         }
 

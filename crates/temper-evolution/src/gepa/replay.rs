@@ -21,6 +21,9 @@ pub struct ReplayResult {
     /// Number of actions not found in the spec.
     pub unknown_actions: u32,
 
+    /// Number of invalid transitions (action exists but not from current state).
+    pub invalid_transitions: u32,
+
     /// Detailed error messages for failed actions.
     pub errors: Vec<ReplayError>,
 }
@@ -63,6 +66,7 @@ impl ReplayResult {
             succeeded: 0,
             guard_rejections: 0,
             unknown_actions: 0,
+            invalid_transitions: 0,
             errors: Vec::new(),
         }
     }
@@ -100,6 +104,7 @@ impl ReplayResult {
     /// Record an invalid transition.
     pub fn record_invalid_transition(&mut self, action: &str, from_state: &str, message: String) {
         self.actions_attempted += 1;
+        self.invalid_transitions += 1;
         self.errors.push(ReplayError {
             action: action.into(),
             from_state: from_state.into(),
