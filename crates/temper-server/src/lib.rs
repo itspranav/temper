@@ -17,6 +17,7 @@ pub mod identity;
 #[cfg(feature = "observe")]
 pub mod observe;
 pub mod odata;
+pub mod platform_store;
 mod query_eval;
 pub mod reaction;
 pub mod registry;
