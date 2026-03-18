@@ -298,7 +298,6 @@ pub(crate) async fn handle_deny_decision(
     let _ = state
         .observe_refresh_tx
         .send(crate::state::ObserveRefreshHint::Decisions);
-    }
 
     (
         StatusCode::OK,
