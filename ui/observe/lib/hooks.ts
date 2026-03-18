@@ -70,7 +70,7 @@ export function usePolling<T>({
   return { data, error, loading, lastUpdated, refresh };
 }
 
-export function useRelativeTime(date: Date | null): string {
+export function useRelativeTime(date: Date | string | null): string {
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -96,7 +96,9 @@ export function useRelativeTime(date: Date | null): string {
   }, []);
 
   if (!date) return "";
-  const seconds = Math.floor((now - date.getTime()) / 1000);
+  const d = typeof date === "string" ? new Date(date) : date;
+  if (isNaN(d.getTime())) return "";
+  const seconds = Math.floor((now - d.getTime()) / 1000);
   if (seconds < 5) return "just now";
   if (seconds < 60) return `${seconds}s ago`;
   const minutes = Math.floor(seconds / 60);
