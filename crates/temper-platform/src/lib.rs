@@ -16,6 +16,7 @@ pub mod bootstrap;
 pub mod deploy;
 pub mod evolution;
 pub mod hooks;
+pub mod identity_cache;
 pub mod integration;
 pub mod optimization;
 pub mod os_apps;

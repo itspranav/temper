@@ -13,6 +13,7 @@ pub mod event_store;
 pub mod events;
 pub mod eventual_invariants;
 pub mod idempotency;
+pub mod identity;
 #[cfg(feature = "observe")]
 pub mod observe;
 pub mod odata;

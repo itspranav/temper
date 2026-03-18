@@ -393,14 +393,8 @@ fn test_context_entity_status_in_cedar_context() {
 fn test_pm_assign_denies_openclaw_agent_type() {
     let engine = AuthzEngine::new(PM_ISSUE_POLICY).unwrap();
 
-    let ctx = SecurityContext::from_headers(&[
-        (
-            "X-Temper-Principal-Id".to_string(),
-            "bot-openclaw".to_string(),
-        ),
-        ("X-Temper-Principal-Kind".to_string(), "agent".to_string()),
-        ("X-Temper-Agent-Type".to_string(), "openclaw".to_string()),
-    ]);
+    // Even with verified identity, openclaw is not in ["supervisor", "human"].
+    let ctx = SecurityContext::from_resolved_identity("bot-openclaw", "openclaw", None);
 
     let mut attrs = HashMap::new();
     attrs.insert("id".to_string(), serde_json::json!("issue-1"));
@@ -416,14 +410,8 @@ fn test_pm_assign_denies_openclaw_agent_type() {
 fn test_pm_assign_allows_supervisor_agent_type() {
     let engine = AuthzEngine::new(PM_ISSUE_POLICY).unwrap();
 
-    let ctx = SecurityContext::from_headers(&[
-        (
-            "X-Temper-Principal-Id".to_string(),
-            "bot-supervisor".to_string(),
-        ),
-        ("X-Temper-Principal-Kind".to_string(), "agent".to_string()),
-        ("X-Temper-Agent-Type".to_string(), "supervisor".to_string()),
-    ]);
+    // Use credential-resolved identity (ADR-0033) — agentTypeVerified is true.
+    let ctx = SecurityContext::from_resolved_identity("bot-supervisor", "supervisor", None);
 
     let mut attrs = HashMap::new();
     attrs.insert("id".to_string(), serde_json::json!("issue-1"));
@@ -431,7 +419,7 @@ fn test_pm_assign_allows_supervisor_agent_type() {
     let decision = engine.authorize(&ctx, "Assign", "Issue", &attrs);
     assert!(
         decision.is_allowed(),
-        "supervisor agent_type must be allowed for Assign: {decision:?}"
+        "verified supervisor agent_type must be allowed for Assign: {decision:?}"
     );
 }
 
