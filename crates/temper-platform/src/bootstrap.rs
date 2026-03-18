@@ -94,6 +94,26 @@ pub(crate) fn bootstrap_tenant_specs(
     label: &str,
     verified_cache: &BTreeMap<String, (String, bool)>,
 ) -> Vec<(String, String)> {
+    bootstrap_tenant_specs_inner(
+        state,
+        tenant,
+        csdl_source,
+        specs,
+        label,
+        verified_cache,
+        merge,
+    )
+}
+
+fn bootstrap_tenant_specs_inner(
+    state: &PlatformState,
+    tenant: &str,
+    csdl_source: &str,
+    specs: &[(&str, &str)],
+    label: &str,
+    verified_cache: &BTreeMap<String, (String, bool)>,
+    merge: bool,
+) -> Vec<(String, String)> {
     tracing::info!(
         "Bootstrapping {label} specs for tenant '{tenant}' with {} entities",
         specs.len()

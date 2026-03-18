@@ -412,6 +412,35 @@ pub(super) async fn recover_wasm_modules(state: &PlatformState) {
     }
 }
 
+/// Phase 7b: Recover encrypted secrets from persistent backend into in-memory cache.
+pub(super) async fn recover_secrets(state: &PlatformState) {
+    if state.server.secrets_vault.is_none() || state.server.event_store.is_none() {
+        return;
+    }
+
+    // Collect known tenants from the registry.
+    let tenants: Vec<String> = {
+        let reg = state.registry.read().unwrap(); // ci-ok: infallible lock
+        reg.tenant_ids()
+            .into_iter()
+            .map(|t| t.as_str().to_string())
+            .collect()
+    };
+
+    let mut total = 0usize;
+    for tenant in &tenants {
+        match state.server.load_tenant_secrets(tenant).await {
+            Ok(count) => total += count,
+            Err(e) => {
+                eprintln!("  Warning: failed to load secrets for tenant '{tenant}': {e}");
+            }
+        }
+    }
+    if total > 0 {
+        println!("  Recovered {total} secrets from database.");
+    }
+}
+
 /// Load the verification cache from Turso for a tenant (hash + verified status).
 ///
 /// Routes to the per-tenant store in TenantRouted mode.

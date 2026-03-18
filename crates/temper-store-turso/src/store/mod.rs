@@ -192,6 +192,10 @@ impl TursoEventStore {
             .await
             .map_err(storage_error)?;
 
+        conn.execute(schema::CREATE_TENANT_SECRETS_TABLE, ())
+            .await
+            .map_err(storage_error)?;
+
         // Specs table extensions — add content_hash column for verification caching.
         let _ = conn.execute(schema::ALTER_SPECS_ADD_CONTENT_HASH, ()).await;
         let _ = conn.execute(schema::ALTER_SPECS_ADD_COMMITTED, ()).await;

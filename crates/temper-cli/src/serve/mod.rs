@@ -114,12 +114,28 @@ pub async fn run(
         state.server.event_store = Some(Arc::new(store));
     }
 
+    // Phase 5b: Secrets vault
+    if let Ok(key_b64) = std::env::var("TEMPER_VAULT_KEY") {
+        // determinism-ok: read once at startup
+        use base64::Engine as _;
+        let key_bytes = base64::engine::general_purpose::STANDARD
+            .decode(&key_b64)
+            .expect("TEMPER_VAULT_KEY must be valid base64");
+        assert_eq!(key_bytes.len(), 32, "TEMPER_VAULT_KEY must be 32 bytes");
+        let vault = temper_server::secrets::vault::SecretsVault::new(
+            key_bytes.as_slice().try_into().unwrap(), // ci-ok: length asserted == 32 above
+        );
+        state.server.secrets_vault = Some(std::sync::Arc::new(vault));
+        println!("  Secrets vault: configured");
+    }
+
     // Phase 6: Entity hydration
     bootstrap::hydrate_entities(&state, &apps).await;
 
-    // Phase 7: Recovery (Cedar policies + WASM modules)
+    // Phase 7: Recovery (Cedar policies + WASM modules + secrets)
     bootstrap::recover_cedar_policies(&state).await;
     bootstrap::recover_wasm_modules(&state).await;
+    bootstrap::recover_secrets(&state).await;
 
     // Startup banner
     println!("Starting Temper platform server...");
