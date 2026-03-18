@@ -172,6 +172,9 @@ pub(crate) async fn handle_approve_decision(
     if let Err(e) = state.persist_pending_decision(&approved_decision).await {
         tracing::warn!(id = %id, error = %e, "failed to persist approved decision");
     }
+    let _ = state
+        .observe_refresh_tx
+        .send(crate::state::ObserveRefreshHint::Decisions);
 
     // Create D-Record for the approval (evolution audit trail).
     // Link to the A-Record via derived_from for O-A-D chain tracing.
@@ -291,6 +294,10 @@ pub(crate) async fn handle_deny_decision(
     // Persist updated decision to Turso synchronously.
     if let Err(e) = state.persist_pending_decision(&denied_decision).await {
         tracing::warn!(error = %e, "failed to persist denied decision");
+    }
+    let _ = state
+        .observe_refresh_tx
+        .send(crate::state::ObserveRefreshHint::Decisions);
     }
 
     (

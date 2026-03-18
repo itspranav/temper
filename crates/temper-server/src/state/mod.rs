@@ -73,6 +73,27 @@ pub struct AgentProgressEvent {
     pub timestamp: String,
 }
 
+/// Lightweight hint broadcast for the Observe UI SSE refresh stream.
+///
+/// Each variant signals that a particular domain's data has changed.
+/// The frontend subscribes to `/observe/refresh/stream` and re-fetches
+/// the relevant REST endpoint when it receives a matching hint.
+#[derive(Clone, Debug, serde::Serialize)]
+pub enum ObserveRefreshHint {
+    Specs,
+    Entities,
+    Verification,
+    Trajectories,
+    Agents,
+    Policies,
+    EvolutionRecords,
+    EvolutionInsights,
+    UnmetIntents,
+    FeatureRequests,
+    OsApps,
+    Decisions,
+}
+
 /// A design-time event emitted during spec loading and verification.
 ///
 /// These events are broadcast via SSE so the observe UI can show
@@ -213,6 +234,9 @@ pub struct ServerState {
     /// Broadcast channel for agent progress events (SSE subscriptions).
     /// // determinism-ok: broadcast channel for external observation only
     pub agent_progress_tx: Arc<tokio::sync::broadcast::Sender<AgentProgressEvent>>,
+    /// Broadcast channel for observe UI refresh hints (SSE push).
+    /// // determinism-ok: broadcast channel for external observation only
+    pub observe_refresh_tx: Arc<tokio::sync::broadcast::Sender<ObserveRefreshHint>>,
     /// Listening port for HTTP REPL self-referencing calls.
     pub listen_port: Arc<std::sync::OnceLock<u16>>,
     /// When true, missing `X-Tenant-Id` headers fall back to the first
@@ -251,6 +275,7 @@ impl ServerState {
         let (design_time_tx, _) = tokio::sync::broadcast::channel(256); // determinism-ok: broadcast for external observation
         let (pending_decision_tx, _) = tokio::sync::broadcast::channel(256); // determinism-ok: broadcast for external observation
         let (agent_progress_tx, _) = tokio::sync::broadcast::channel(256); // determinism-ok: broadcast for external observation
+        let (observe_refresh_tx, _) = tokio::sync::broadcast::channel(64); // determinism-ok: broadcast for external observation
         let state = Self {
             actor_system: Arc::new(system),
             csdl: Arc::new(csdl),
@@ -290,6 +315,7 @@ impl ServerState {
             tenant_policies: Arc::new(RwLock::new(BTreeMap::new())),
             secrets_vault: None,
             agent_progress_tx: Arc::new(agent_progress_tx), // determinism-ok: broadcast for external observation
+            observe_refresh_tx: Arc::new(observe_refresh_tx), // determinism-ok: broadcast for external observation
             listen_port: Arc::new(std::sync::OnceLock::new()),
             single_tenant_mode: true,
             suggestion_engine: Arc::new(RwLock::new(PolicySuggestionEngine::new())),
@@ -389,6 +415,7 @@ impl ServerState {
         let (design_time_tx, _) = tokio::sync::broadcast::channel(256); // determinism-ok: broadcast for external observation
         let (pending_decision_tx, _) = tokio::sync::broadcast::channel(256); // determinism-ok: broadcast for external observation
         let (agent_progress_tx, _) = tokio::sync::broadcast::channel(256); // determinism-ok: broadcast for external observation
+        let (observe_refresh_tx, _) = tokio::sync::broadcast::channel(64); // determinism-ok: broadcast for external observation
         let state = Self {
             actor_system: Arc::new(system),
             csdl: Arc::new(CsdlDocument {
@@ -431,6 +458,7 @@ impl ServerState {
             tenant_policies: Arc::new(RwLock::new(BTreeMap::new())),
             secrets_vault: None,
             agent_progress_tx: Arc::new(agent_progress_tx), // determinism-ok: broadcast for external observation
+            observe_refresh_tx: Arc::new(observe_refresh_tx), // determinism-ok: broadcast for external observation
             listen_port: Arc::new(std::sync::OnceLock::new()),
             single_tenant_mode: false,
             suggestion_engine: Arc::new(RwLock::new(PolicySuggestionEngine::new())),

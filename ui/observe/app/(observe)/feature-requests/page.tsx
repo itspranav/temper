@@ -5,7 +5,7 @@ import {
   fetchFeatureRequests,
   updateFeatureRequest,
 } from "@/lib/api";
-import { usePolling, useRelativeTime } from "@/lib/hooks";
+import { useSSERefresh, useRelativeTime } from "@/lib/hooks";
 import type {
   FeatureRequest,
   FeatureRequestDisposition,
@@ -178,9 +178,9 @@ export default function FeatureRequestsPage() {
   const [activeTab, setActiveTab] = useState<FilterTab>("all");
   const [acting, setActing] = useState(false);
 
-  const featuresPoll = usePolling<FeatureRequest[]>({
+  const featuresPoll = useSSERefresh<FeatureRequest[]>({
     fetcher: fetchFeatureRequests,
-    interval: 10000,
+    sseKinds: ["FeatureRequests"],
   });
 
   const lastUpdated = useRelativeTime(featuresPoll.lastUpdated);

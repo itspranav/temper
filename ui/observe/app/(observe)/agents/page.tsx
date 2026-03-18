@@ -3,7 +3,7 @@
 import { useState, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { fetchAgents } from "@/lib/api";
-import { usePolling, useRelativeTime } from "@/lib/hooks";
+import { useSSERefresh, useRelativeTime } from "@/lib/hooks";
 import type { AgentsResponse } from "@/lib/types";
 import ErrorDisplay from "@/components/ErrorDisplay";
 import StatCard from "@/components/StatCard";
@@ -29,9 +29,9 @@ export default function AgentsPage() {
     }
   }, []);
 
-  const agentsPoll = usePolling<AgentsResponse>({
+  const agentsPoll = useSSERefresh<AgentsResponse>({
     fetcher: () => fetchAgents(),
-    interval: 5000,
+    sseKinds: ["Agents"],
     enabled: !initialError,
   });
 

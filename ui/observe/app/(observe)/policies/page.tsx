@@ -10,7 +10,7 @@ import {
   createPolicy,
   fetchSpecs,
 } from "@/lib/api";
-import { usePolling } from "@/lib/hooks";
+import { useSSERefresh } from "@/lib/hooks";
 import type {
   PolicyEntry,
   PoliciesResponse,
@@ -68,12 +68,12 @@ export default function PoliciesPage() {
   }, [loadInitial]);
 
   // Fetch policies for current view
-  const policiesPoll = usePolling<PoliciesResponse | AllPoliciesResponse>({
+  const policiesPoll = useSSERefresh<PoliciesResponse | AllPoliciesResponse>({
     fetcher: () =>
       tenant === ALL_TENANTS
         ? fetchAllPolicies()
         : fetchPoliciesList(tenant),
-    interval: 5000,
+    sseKinds: ["Policies"],
     enabled: !initialLoading && !initialError,
   });
 

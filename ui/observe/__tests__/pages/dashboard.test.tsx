@@ -11,8 +11,13 @@ vi.mock("@/lib/api", () => ({
 }));
 
 vi.mock("@/lib/hooks", () => ({
-  usePolling: vi.fn(),
+  useSSERefresh: vi.fn(),
   useRelativeTime: vi.fn(),
+}));
+
+vi.mock("@/lib/sse-context", () => ({
+  useSSERefreshSubscribe: vi.fn(),
+  useSSEConnected: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock("next/link", () => ({
@@ -26,19 +31,19 @@ vi.mock("next/navigation", () => ({
 }));
 
 import { fetchSpecs } from "@/lib/api";
-import { usePolling, useRelativeTime } from "@/lib/hooks";
+import { useSSERefresh, useRelativeTime } from "@/lib/hooks";
 
 const mockFetchSpecs = vi.mocked(fetchSpecs);
-const mockUsePolling = vi.mocked(usePolling);
+const mockUseSSERefresh = vi.mocked(useSSERefresh);
 const mockUseRelativeTime = vi.mocked(useRelativeTime);
 
 const emptyVerifyStatus = { pending: 0, running: 0, passed: 0, failed: 0, partial: 0, entities: [] };
 
 /**
- * Set up the 3 usePolling calls: specs, entities, verification status.
+ * Set up the 3 useSSERefresh calls: specs, entities, verification status.
  * Uses mockImplementation with a counter that cycles through the 3 return values.
  */
-function setPollingReturns(
+function setSSERefreshReturns(
   specs: unknown[] | null,
   entities: unknown[] | null,
   opts?: { error?: string; loading?: boolean },
@@ -67,7 +72,7 @@ function setPollingReturns(
       refresh: vi.fn(),
     },
   ];
-  mockUsePolling.mockImplementation(() => {
+  mockUseSSERefresh.mockImplementation(() => {
     const result = results[callIndex % 3];
     callIndex++;
     return result;
@@ -77,20 +82,20 @@ function setPollingReturns(
 beforeEach(() => {
   vi.clearAllMocks();
   mockUseRelativeTime.mockReturnValue("5s ago");
-  setPollingReturns([], []);
+  setSSERefreshReturns([], []);
 });
 
 describe("Dashboard page", () => {
   it("shows loading skeleton initially", () => {
     mockFetchSpecs.mockReturnValue(new Promise(() => {}));
-    setPollingReturns(null, null, { loading: true });
+    setSSERefreshReturns(null, null, { loading: true });
     const { container } = render(<Dashboard />);
     expect(container.querySelector(".animate-pulse")).toBeTruthy();
   });
 
   it("shows empty state when no data", async () => {
     mockFetchSpecs.mockResolvedValue([]);
-    setPollingReturns([], []);
+    setSSERefreshReturns([], []);
     render(<Dashboard />);
     await waitFor(() => {
       expect(screen.getByText("No specs loaded")).toBeInTheDocument();
@@ -101,7 +106,7 @@ describe("Dashboard page", () => {
     mockFetchSpecs.mockResolvedValue([
       { entity_type: "Ticket", states: ["Open", "Closed"], actions: ["close"], initial_state: "Open" },
     ]);
-    setPollingReturns(
+    setSSERefreshReturns(
       [{ entity_type: "Ticket", states: ["Open", "Closed"], actions: ["close"], initial_state: "Open" }],
       [{ entity_type: "Ticket", entity_id: "TKT-001", actor_status: "active", current_state: "Open" }],
     );
@@ -118,7 +123,7 @@ describe("Dashboard page", () => {
 
   it("shows error state when API fails", async () => {
     mockFetchSpecs.mockRejectedValue(new Error("Network error"));
-    setPollingReturns([], []);
+    setSSERefreshReturns([], []);
     render(<Dashboard />);
     await waitFor(() => {
       expect(screen.getByText("Cannot load dashboard")).toBeInTheDocument();
@@ -131,7 +136,7 @@ describe("Dashboard page", () => {
     mockFetchSpecs.mockResolvedValue([
       { entity_type: "Ticket", states: ["Open"], actions: [], initial_state: "Open" },
     ]);
-    setPollingReturns(
+    setSSERefreshReturns(
       [{ entity_type: "Ticket", states: ["Open"], actions: [], initial_state: "Open" }],
       [{ entity_type: "Ticket", entity_id: "TKT-001", actor_status: "active", current_state: "Open" }],
     );

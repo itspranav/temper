@@ -1,14 +1,9 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useSSERefreshSubscribe } from "./sse-context";
 
-interface UsePollingOptions<T> {
-  fetcher: () => Promise<T>;
-  interval: number;
-  enabled?: boolean;
-}
-
-interface UsePollingResult<T> {
+export interface UsePollingResult<T> {
   data: T | null;
   error: string | null;
   loading: boolean;
@@ -16,56 +11,60 @@ interface UsePollingResult<T> {
   refresh: () => Promise<void>;
 }
 
-export function usePolling<T>({
+interface UseSSERefreshOptions<T> {
+  fetcher: () => Promise<T>;
+  sseKinds: string[];
+  enabled?: boolean;
+}
+
+export function useSSERefresh<T>({
   fetcher,
-  interval,
+  sseKinds,
   enabled = true,
-}: UsePollingOptions<T>): UsePollingResult<T> {
+}: UseSSERefreshOptions<T>): UsePollingResult<T> {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fetcherRef = useRef(fetcher);
   const abortRef = useRef<AbortController | null>(null);
   fetcherRef.current = fetcher;
 
-  const doFetch = useCallback(async (showLoading = false) => {
-    // Cancel any in-flight request
+  const doFetch = useCallback(async (isInitial: boolean) => {
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
-
-    if (showLoading) setLoading(true);
     try {
+      if (isInitial) setLoading(true);
       const result = await fetcherRef.current();
       if (!controller.signal.aborted) {
         setData(result);
         setError(null);
         setLastUpdated(new Date());
+        if (isInitial) setLoading(false);
       }
     } catch (err) {
       if (!controller.signal.aborted) {
-        setError(err instanceof Error ? err.message : "Unknown error");
-      }
-    } finally {
-      if (!controller.signal.aborted) {
-        setLoading(false);
+        setError(err instanceof Error ? err.message : String(err));
+        if (isInitial) setLoading(false);
       }
     }
   }, []);
 
+  // Initial fetch
   useEffect(() => {
     if (!enabled) return;
     doFetch(true);
-    intervalRef.current = setInterval(() => doFetch(false), interval);
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      abortRef.current?.abort();
-    };
-  }, [doFetch, interval, enabled]);
+    return () => { abortRef.current?.abort(); };
+  }, [enabled, doFetch]);
 
-  const refresh = useCallback(() => doFetch(false), [doFetch]);
+  // SSE-driven refetch
+  useSSERefreshSubscribe(
+    enabled ? sseKinds : [],
+    () => { if (enabled) doFetch(false); }
+  );
+
+  const refresh = useCallback(async () => { await doFetch(false); }, [doFetch]);
 
   return { data, error, loading, lastUpdated, refresh };
 }

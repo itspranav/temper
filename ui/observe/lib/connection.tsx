@@ -1,7 +1,7 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, useCallback } from "react";
-import { checkConnection } from "./api";
+import { createContext, useContext } from "react";
+import { useSSEConnected } from "./sse-context";
 
 interface ConnectionState {
   connected: boolean;
@@ -11,18 +11,12 @@ interface ConnectionState {
 const ConnectionContext = createContext<ConnectionState>({ connected: true, checking: true });
 
 export function ConnectionProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<ConnectionState>({ connected: true, checking: true });
+  const sseConnected = useSSEConnected();
 
-  const check = useCallback(async () => {
-    const ok = await checkConnection();
-    setState({ connected: ok, checking: false });
-  }, []);
-
-  useEffect(() => {
-    check();
-    const id = setInterval(check, 10000);
-    return () => clearInterval(id);
-  }, [check]);
+  const state: ConnectionState = {
+    connected: sseConnected,
+    checking: false,
+  };
 
   return (
     <ConnectionContext.Provider value={state}>{children}</ConnectionContext.Provider>

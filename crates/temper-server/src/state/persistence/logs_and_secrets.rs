@@ -30,6 +30,16 @@ impl ServerState {
         }
         // Broadcast via SSE (keep for real-time UI).
         let _ = self.design_time_tx.send(event);
+        // Emit observe refresh hints for specs/verification changes.
+        let _ = self
+            .observe_refresh_tx
+            .send(crate::state::ObserveRefreshHint::Specs);
+        let _ = self
+            .observe_refresh_tx
+            .send(crate::state::ObserveRefreshHint::Verification);
+        let _ = self
+            .observe_refresh_tx
+            .send(crate::state::ObserveRefreshHint::OsApps);
         Ok(())
     }
 

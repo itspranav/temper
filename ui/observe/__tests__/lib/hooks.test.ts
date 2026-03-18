@@ -1,10 +1,33 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { usePolling, useRelativeTime } from "@/lib/hooks";
 
-describe("usePolling", () => {
+// Mock the SSE context before importing hooks
+vi.mock("@/lib/sse-context", () => {
+  let capturedCallback: (() => void) | null = null;
+  return {
+    useSSERefreshSubscribe: vi.fn((kinds: string[], callback: () => void) => {
+      capturedCallback = callback;
+    }),
+    useSSEConnected: vi.fn().mockReturnValue(true),
+    // Helper for tests to trigger the captured callback
+    __triggerSSE: () => { if (capturedCallback) capturedCallback(); },
+    __resetCapture: () => { capturedCallback = null; },
+  };
+});
+
+import { useSSERefresh, useRelativeTime } from "@/lib/hooks";
+
+// Access the test helpers
+const sseContextMock = await import("@/lib/sse-context") as unknown as {
+  useSSERefreshSubscribe: ReturnType<typeof vi.fn>;
+  __triggerSSE: () => void;
+  __resetCapture: () => void;
+};
+
+describe("useSSERefresh", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    sseContextMock.__resetCapture();
   });
 
   afterEach(() => {
@@ -14,7 +37,7 @@ describe("usePolling", () => {
   it("fetches data on mount", async () => {
     const fetcher = vi.fn().mockResolvedValue(["a", "b"]);
     const { result } = renderHook(() =>
-      usePolling({ fetcher, interval: 5000 }),
+      useSSERefresh({ fetcher, sseKinds: ["Test"] }),
     );
 
     expect(result.current.loading).toBe(true);
@@ -31,27 +54,34 @@ describe("usePolling", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
-  it("polls at the specified interval", async () => {
-    const fetcher = vi.fn().mockResolvedValue([]);
-    renderHook(() => usePolling({ fetcher, interval: 3000 }));
+  it("refetches when SSE callback is triggered", async () => {
+    let callCount = 0;
+    const fetcher = vi.fn().mockImplementation(() => {
+      callCount++;
+      return Promise.resolve([`call-${callCount}`]);
+    });
+    const { result } = renderHook(() =>
+      useSSERefresh({ fetcher, sseKinds: ["Test"] }),
+    );
 
     // Initial fetch
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(result.current.data).toEqual(["call-1"]);
 
-    // Advance past first interval
+    // Trigger SSE callback
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(3000);
+      sseContextMock.__triggerSSE();
+      await vi.advanceTimersByTimeAsync(0);
     });
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(result.current.data).toEqual(["call-2"]);
   });
 
   it("does not fetch when disabled", async () => {
     const fetcher = vi.fn().mockResolvedValue([]);
     const { result } = renderHook(() =>
-      usePolling({ fetcher, interval: 5000, enabled: false }),
+      useSSERefresh({ fetcher, sseKinds: ["Test"], enabled: false }),
     );
 
     await act(async () => {
@@ -65,7 +95,7 @@ describe("usePolling", () => {
   it("sets error on fetch failure", async () => {
     const fetcher = vi.fn().mockRejectedValue(new Error("API down"));
     const { result } = renderHook(() =>
-      usePolling({ fetcher, interval: 5000 }),
+      useSSERefresh({ fetcher, sseKinds: ["Test"] }),
     );
 
     await act(async () => {
@@ -84,7 +114,7 @@ describe("usePolling", () => {
       return Promise.resolve([`call-${callCount}`]);
     });
     const { result } = renderHook(() =>
-      usePolling({ fetcher, interval: 5000 }),
+      useSSERefresh({ fetcher, sseKinds: ["Test"] }),
     );
 
     await act(async () => {

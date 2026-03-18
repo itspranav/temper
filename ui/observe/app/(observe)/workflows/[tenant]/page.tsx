@@ -3,7 +3,7 @@
 import { useEffect, useState, useMemo, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { fetchWorkflows, fetchVerificationStatus, subscribeDesignTimeEvents } from "@/lib/api";
-import { usePolling } from "@/lib/hooks";
+import { useSSERefresh } from "@/lib/hooks";
 import type { WorkflowsResponse, AppWorkflow, DesignTimeEvent } from "@/lib/types";
 import WorkflowTimeline from "@/components/WorkflowTimeline";
 import type { StepDetailsMap } from "@/components/WorkflowTimeline";
@@ -64,9 +64,9 @@ export default function WorkflowDetailPage() {
   const [initialError, setInitialError] = useState<string | null>(null);
   const [liveEvents, setLiveEvents] = useState<DesignTimeEvent[]>([]);
 
-  const poll = usePolling<WorkflowsResponse>({
+  const poll = useSSERefresh<WorkflowsResponse>({
     fetcher: fetchWorkflows,
-    interval: 2000,
+    sseKinds: ["Specs"],
     enabled: !initialLoading && !initialError,
   });
 

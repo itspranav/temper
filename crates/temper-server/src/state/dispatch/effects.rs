@@ -118,6 +118,15 @@ impl crate::state::ServerState {
         });
         let cache_key = format!("{}:{}:{}", ctx.tenant, ctx.entity_type, ctx.entity_id);
         self.cache_entity_status(cache_key, response.state.status.clone());
+        let _ = self
+            .observe_refresh_tx
+            .send(crate::state::ObserveRefreshHint::Entities);
+        let _ = self
+            .observe_refresh_tx
+            .send(crate::state::ObserveRefreshHint::Trajectories);
+        let _ = self
+            .observe_refresh_tx
+            .send(crate::state::ObserveRefreshHint::Agents);
     }
 
     /// Fire webhooks for the trajectory entry (non-blocking).
@@ -170,8 +179,7 @@ impl crate::state::ServerState {
                     "unmet_intent"
                 );
             }
-            tokio::spawn(async move {
-                // determinism-ok: external side-effect, no simulation-visible state
+            tokio::spawn(async move { // determinism-ok: external side-effect, no simulation-visible state
                 dispatcher.dispatch(&entry);
             });
         }
@@ -197,9 +205,8 @@ impl crate::state::ServerState {
             let action = sched.action.clone();
             let ctx = agent_ctx.clone();
             let delay = std::time::Duration::from_secs(sched.delay_seconds);
-            tokio::spawn(
+            tokio::spawn( // determinism-ok: timer delivery is a background side-effect
                 async move {
-                    // determinism-ok: timer delivery is a background side-effect
                     tokio::time::sleep(delay).await; // determinism-ok: scheduled delay
                     let _ = state
                         .dispatch_tenant_action(

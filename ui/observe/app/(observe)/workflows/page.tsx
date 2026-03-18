@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useMemo } from "react";
 import { fetchWorkflows, deleteTenant } from "@/lib/api";
-import { usePolling } from "@/lib/hooks";
+import { useSSERefresh } from "@/lib/hooks";
 import type { WorkflowsResponse, AppWorkflow } from "@/lib/types";
 import ErrorDisplay from "@/components/ErrorDisplay";
 import Link from "next/link";
@@ -130,9 +130,9 @@ export default function WorkflowsPage() {
   const [initialError, setInitialError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
 
-  const poll = usePolling<WorkflowsResponse>({
+  const poll = useSSERefresh<WorkflowsResponse>({
     fetcher: fetchWorkflows,
-    interval: 2000,
+    sseKinds: ["Specs"],
     enabled: !initialLoading && !initialError,
   });
   const workflows = useMemo(() => poll.data?.workflows ?? [], [poll.data]);

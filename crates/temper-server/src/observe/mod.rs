@@ -7,6 +7,7 @@ mod agents;
 mod entities;
 pub(crate) mod evolution;
 mod metrics;
+mod refresh;
 pub(crate) mod specs;
 mod specs_helpers;
 pub mod subprocess_verify;
@@ -204,6 +205,7 @@ pub fn build_observe_router() -> Router<ServerState> {
             patch(evolution::handle_update_feature_request),
         )
         .route("/evolution/stream", get(evolution::handle_evolution_stream))
+        .route("/refresh/stream", get(refresh::handle_refresh_stream))
 }
 
 #[cfg(test)]
