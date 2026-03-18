@@ -43,10 +43,21 @@ pub fn build_platform_router(state: PlatformState) -> Router {
             routing::delete(crate::tenant_api::delete_tenant),
         );
 
+    // Identity resolution endpoint — used by MCP server at startup.
+    let identity_api = Router::new().route(
+        "/api/identity/resolve",
+        routing::post(temper_server::identity::endpoint::handle_identity_resolve),
+    );
+
     temper_server::build_router(state.server.clone())
         .merge(health)
+        .merge(identity_api.with_state(state.server.clone()))
         .merge(platform_observe.with_state(state.clone()))
         .nest("/api", tenant_api.with_state(state.clone()))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::identity_cache::invalidate_identity_cache_on_credential_mutation,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             tenant_access_check,
@@ -163,8 +174,11 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "installed");
-        let entity_types = json["entity_types"].as_array().unwrap();
-        assert_eq!(entity_types.len(), 5);
+        // Fresh install — all 5 PM specs should be added.
+        let added = json["added"].as_array().unwrap();
+        assert_eq!(added.len(), 5);
+        assert!(json["updated"].as_array().unwrap().is_empty());
+        assert!(json["skipped"].as_array().unwrap().is_empty());
     }
 
     #[tokio::test]

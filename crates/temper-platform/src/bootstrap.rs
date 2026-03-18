@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 
 use temper_runtime::tenant::TenantId;
+use temper_server::platform_store::{PlatformStore, SpecVerificationUpdate};
 use temper_server::registry::{EntityLevelSummary, EntityVerificationResult, VerificationStatus};
 use temper_spec::automaton;
 use temper_spec::csdl::parse_csdl;
@@ -58,6 +59,7 @@ const TASK_IOA: &str = include_str!("specs/task.ioa.toml");
 const TOOL_CALL_IOA: &str = include_str!("specs/tool_call.ioa.toml");
 const SCHEDULE_IOA: &str = include_str!("specs/schedule.ioa.toml");
 const POLICY_IOA: &str = include_str!("specs/policy.ioa.toml");
+const AGENT_CREDENTIAL_IOA: &str = include_str!("specs/agent_credential.ioa.toml");
 const AGENT_CSDL: &str = include_str!("specs/agent_model.csdl.xml");
 
 /// Agent entity specs as (entity_type, ioa_source) pairs.
@@ -69,6 +71,7 @@ const AGENT_SPECS: &[(&str, &str)] = &[
     ("ToolCall", TOOL_CALL_IOA),
     ("Schedule", SCHEDULE_IOA),
     ("Policy", POLICY_IOA),
+    ("AgentCredential", AGENT_CREDENTIAL_IOA),
 ];
 
 /// Verify, parse, and register a set of IOA specs under a tenant.
@@ -78,15 +81,19 @@ const AGENT_SPECS: &[(&str, &str)] = &[
 /// This prevents the expensive Z3 + Stateright + proptest cascade from
 /// running on every boot (which caused OOM on Railway's 512 MB containers).
 ///
+/// Returns a list of `(entity_type, content_hash)` for all bootstrapped specs
+/// so the caller can persist them to the backing store.
+///
 /// Panics if any spec fails to parse or verify (fatal startup error).
 pub(crate) fn bootstrap_tenant_specs(
     state: &PlatformState,
     tenant: &str,
     csdl_source: &str,
     specs: &[(&str, &str)],
+    merge: bool,
     label: &str,
     verified_cache: &BTreeMap<String, (String, bool)>,
-) {
+) -> Vec<(String, String)> {
     bootstrap_tenant_specs_inner(
         state,
         tenant,
@@ -94,30 +101,8 @@ pub(crate) fn bootstrap_tenant_specs(
         specs,
         label,
         verified_cache,
-        false,
-    );
-}
-
-/// Like [`bootstrap_tenant_specs`] but merges into an existing tenant config
-/// instead of replacing it. Used by OS app installation so multiple apps can
-/// coexist in the same tenant.
-pub(crate) fn bootstrap_tenant_specs_merge(
-    state: &PlatformState,
-    tenant: &str,
-    csdl_source: &str,
-    specs: &[(&str, &str)],
-    label: &str,
-    verified_cache: &BTreeMap<String, (String, bool)>,
-) {
-    bootstrap_tenant_specs_inner(
-        state,
-        tenant,
-        csdl_source,
-        specs,
-        label,
-        verified_cache,
-        true,
-    );
+        merge,
+    )
 }
 
 fn bootstrap_tenant_specs_inner(
@@ -128,7 +113,7 @@ fn bootstrap_tenant_specs_inner(
     label: &str,
     verified_cache: &BTreeMap<String, (String, bool)>,
     merge: bool,
-) {
+) -> Vec<(String, String)> {
     tracing::info!(
         "Bootstrapping {label} specs for tenant '{tenant}' with {} entities",
         specs.len()
@@ -142,6 +127,7 @@ fn bootstrap_tenant_specs_inner(
 
     // Hash-gated verification: only run the cascade for specs whose
     // content has changed since the last successful verification.
+    let mut spec_hashes = Vec::with_capacity(specs.len());
     for (entity_type, ioa_source) in specs {
         let hash = spec_content_hash(ioa_source);
         let already_verified = verified_cache
@@ -167,6 +153,7 @@ fn bootstrap_tenant_specs_inner(
                 "{label} spec {entity_type} failed verification cascade"
             );
         }
+        spec_hashes.push((entity_type.to_string(), hash));
     }
 
     // Parse CSDL schema.
@@ -187,7 +174,7 @@ fn bootstrap_tenant_specs_inner(
                 None,
                 merge,
             )
-            .unwrap_or_else(|e| panic!("{label} failed to register tenant: {e}"));
+            .unwrap_or_else(|e| panic!("failed to register {label} specs for '{tenant}': {e}"));
         let now = temper_runtime::scheduler::sim_now().to_rfc3339();
         for (entity_type, _) in specs {
             registry.set_verification_status(
@@ -211,43 +198,118 @@ fn bootstrap_tenant_specs_inner(
         "{label} specs bootstrapped for tenant '{tenant}': {:?}",
         specs.iter().map(|(t, _)| *t).collect::<Vec<_>>()
     );
+
+    spec_hashes
 }
 
 /// Bootstrap the system tenant.
 ///
 /// Validates, verifies, and registers all temper-system entity specs.
+/// Returns `(entity_type, content_hash)` pairs for persistence.
 /// Panics if system specs fail to parse or verify (fatal startup error).
 pub fn bootstrap_system_tenant(
     state: &PlatformState,
     verified_cache: &BTreeMap<String, (String, bool)>,
-) {
+) -> Vec<(String, String)> {
     bootstrap_tenant_specs(
         state,
         SYSTEM_TENANT,
         SYSTEM_CSDL,
         SYSTEM_SPECS,
+        false,
         "System",
         verified_cache,
-    );
+    )
 }
 
 /// Bootstrap agent entity specs (Agent, Plan, Task, ToolCall) for a tenant.
 ///
 /// Parses and verifies the agent IOA specs, then registers them under the
-/// given tenant. Panics if agent specs fail to parse or verify.
+/// given tenant. Returns `(entity_type, content_hash)` pairs for persistence.
+/// Panics if agent specs fail to parse or verify.
 pub fn bootstrap_agent_specs(
     state: &PlatformState,
     tenant: &str,
+    merge: bool,
     verified_cache: &BTreeMap<String, (String, bool)>,
-) {
+) -> Vec<(String, String)> {
     bootstrap_tenant_specs(
         state,
         tenant,
         AGENT_CSDL,
         AGENT_SPECS,
+        merge,
         "Agent",
         verified_cache,
-    );
+    )
+}
+
+/// Persist built-in spec hashes and verification status to Turso.
+///
+/// After bootstrap verifies specs (or skips via cache), this writes each
+/// spec into the `specs` table with its content hash and marks it verified.
+/// On subsequent boots, `load_verification_cache` finds these rows and
+/// the cascade is skipped — preventing OOM on memory-constrained hosts.
+///
+/// Note: the upsert + mark-verified is two statements, not atomic.  If
+/// the process crashes between them the spec row will have `verified=0`
+/// and the cascade will re-run on next boot — safe, just slower.
+pub(crate) async fn persist_bootstrap_verification(
+    store: &dyn PlatformStore,
+    tenant: &str,
+    specs: &[(&str, &str)],
+    csdl_source: &str,
+    hashes: &[(String, String)],
+) {
+    for (entity_type, content_hash) in hashes {
+        // Find the IOA source for this entity type.
+        let ioa_source = specs
+            .iter()
+            .find(|(et, _)| *et == entity_type)
+            .map(|(_, src)| *src)
+            .expect("hash returned for unknown entity type");
+
+        // Upsert the spec row (preserves verification if hash unchanged).
+        if let Err(e) = store
+            .upsert_spec(tenant, entity_type, ioa_source, csdl_source, content_hash)
+            .await
+        {
+            tracing::warn!("Failed to persist bootstrap spec {tenant}/{entity_type}: {e}");
+            continue;
+        }
+
+        // Mark as verified (bootstrap panics on failure, so all specs here passed).
+        if let Err(e) = store
+            .persist_spec_verification(
+                tenant,
+                entity_type,
+                SpecVerificationUpdate {
+                    status: "completed",
+                    verified: true,
+                    levels_passed: None,
+                    levels_total: None,
+                    verification_result_json: None,
+                },
+            )
+            .await
+        {
+            tracing::warn!("Failed to persist verification status for {tenant}/{entity_type}: {e}");
+        }
+    }
+}
+
+/// Persist system tenant spec verification to the platform store.
+pub async fn persist_system_verification(store: &dyn PlatformStore, hashes: &[(String, String)]) {
+    persist_bootstrap_verification(store, SYSTEM_TENANT, SYSTEM_SPECS, SYSTEM_CSDL, hashes).await;
+}
+
+/// Persist agent spec verification to the platform store.
+pub async fn persist_agent_verification(
+    store: &dyn PlatformStore,
+    tenant: &str,
+    hashes: &[(String, String)],
+) {
+    persist_bootstrap_verification(store, tenant, AGENT_SPECS, AGENT_CSDL, hashes).await;
 }
 
 #[cfg(test)]
@@ -462,7 +524,7 @@ mod tests {
     #[test]
     fn test_bootstrap_agent_specs_registers_tenant() {
         let state = PlatformState::new(None);
-        bootstrap_agent_specs(&state, "test-agent", &BTreeMap::new());
+        bootstrap_agent_specs(&state, "test-agent", false, &BTreeMap::new());
         let registry = state.registry.read().unwrap();
         let tenant = TenantId::new("test-agent");
         assert!(registry.get_tenant(&tenant).is_some());
@@ -474,7 +536,62 @@ mod tests {
     }
 
     #[test]
+    fn test_bootstrap_agent_specs_merge_preserves_existing_app_entity_sets() {
+        let state = PlatformState::new(None);
+        let tenant = TenantId::new("app-tenant");
+        let custom_csdl = r#"<?xml version="1.0" encoding="UTF-8"?>
+<edmx:Edmx Version="4.0"
+  xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Temper.Example"
+      xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id"/></Key>
+        <Property Name="Id" Type="Edm.Guid" Nullable="false"/>
+      </EntityType>
+      <EntityContainer Name="ExampleService">
+        <EntitySet Name="Widgets" EntityType="Temper.Example.Widget"/>
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let custom_ioa = r#"
+[automaton]
+name = "Widget"
+states = ["Created"]
+initial = "Created"
+"#;
+
+        {
+            let mut registry = state.registry.write().unwrap();
+            registry.register_tenant(
+                tenant.clone(),
+                parse_csdl(custom_csdl).unwrap(),
+                custom_csdl.to_string(),
+                &[("Widget", custom_ioa)],
+            );
+        }
+
+        bootstrap_agent_specs(&state, "app-tenant", true, &BTreeMap::new());
+
+        let registry = state.registry.read().unwrap();
+        assert!(
+            registry.get_table(&tenant, "Widget").is_some(),
+            "custom app entity should survive merged agent bootstrap"
+        );
+        assert!(
+            registry.get_table(&tenant, "Agent").is_some(),
+            "agent entities should be added during merged bootstrap"
+        );
+        assert_eq!(
+            registry.resolve_entity_type(&tenant, "Widgets").as_deref(),
+            Some("Widget"),
+            "existing app entity-set mapping should survive merged bootstrap"
+        );
+    }
+
+    #[test]
     fn test_agent_specs_count() {
-        assert_eq!(AGENT_SPECS.len(), 7);
+        assert_eq!(AGENT_SPECS.len(), 8);
     }
 }

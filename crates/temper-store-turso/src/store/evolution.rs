@@ -5,6 +5,7 @@ use temper_runtime::persistence::{PersistenceError, storage_error};
 use tracing::instrument;
 
 use super::{DesignTimeEventRow, EvolutionRecordRow, FeatureRequestRow, TursoEventStore};
+use crate::metrics::TursoQueryTimer;
 
 // -----------------------------------------------------------------------
 // Feature request CRUD
@@ -24,6 +25,7 @@ impl TursoEventStore {
         disposition: &str,
         developer_notes: Option<&str>,
     ) -> Result<(), PersistenceError> {
+        let _query_timer = TursoQueryTimer::start("turso.upsert_feature_request");
         let conn = self.configured_connection().await?;
         conn.execute(
             "INSERT INTO feature_requests (id, category, description, frequency, trajectory_refs, disposition, developer_notes, updated_at) \
@@ -44,6 +46,7 @@ impl TursoEventStore {
         &self,
         disposition: Option<&str>,
     ) -> Result<Vec<FeatureRequestRow>, PersistenceError> {
+        let _query_timer = TursoQueryTimer::start("turso.list_feature_requests");
         let conn = self.configured_connection().await?;
         let mut rows = conn
             .query(
@@ -81,6 +84,7 @@ impl TursoEventStore {
         disposition: &str,
         developer_notes: Option<&str>,
     ) -> Result<bool, PersistenceError> {
+        let _query_timer = TursoQueryTimer::start("turso.update_feature_request");
         let conn = self.configured_connection().await?;
         let affected = conn
             .execute(
@@ -108,14 +112,36 @@ impl TursoEventStore {
         derived_from: Option<&str>,
         data_json: &str,
     ) -> Result<(), PersistenceError> {
+        let _query_timer = TursoQueryTimer::start("turso.insert_evolution_record");
         let conn = self.configured_connection().await?;
-        conn.execute(
+        let execute_res = conn
+            .execute(
             "INSERT INTO evolution_records (id, record_type, status, created_by, derived_from, data, timestamp) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))",
             params![id, record_type, status, created_by, derived_from, data_json],
         )
         .await
-        .map_err(storage_error)?;
+        .map_err(storage_error);
+        if let Err(ref error) = execute_res {
+            tracing::warn!(
+                record_id = id,
+                record_type,
+                status,
+                created_by,
+                derived_from,
+                error = %error,
+                "evolution.store.write"
+            );
+        }
+        execute_res?;
+        tracing::info!(
+            record_id = id,
+            record_type,
+            status,
+            created_by,
+            derived_from,
+            "evolution.store.write"
+        );
         Ok(())
     }
 
@@ -125,6 +151,7 @@ impl TursoEventStore {
         &self,
         id: &str,
     ) -> Result<Option<EvolutionRecordRow>, PersistenceError> {
+        let _query_timer = TursoQueryTimer::start("turso.get_evolution_record");
         let conn = self.configured_connection().await?;
         let mut rows = conn
             .query(
@@ -136,9 +163,18 @@ impl TursoEventStore {
             .map_err(storage_error)?;
 
         let Some(row) = rows.next().await.map_err(storage_error)? else {
+            tracing::debug!(record_id = id, found = false, "evolution.store.read");
             return Ok(None);
         };
-        Ok(Some(Self::row_to_evolution_record(&row)?))
+        let parsed = Self::row_to_evolution_record(&row)?;
+        tracing::info!(
+            record_id = id,
+            record_type = parsed.record_type.as_str(),
+            status = parsed.status.as_str(),
+            found = true,
+            "evolution.store.read"
+        );
+        Ok(Some(parsed))
     }
 
     /// List evolution records with optional type and status filters.
@@ -148,6 +184,7 @@ impl TursoEventStore {
         record_type: Option<&str>,
         status: Option<&str>,
     ) -> Result<Vec<EvolutionRecordRow>, PersistenceError> {
+        let _query_timer = TursoQueryTimer::start("turso.list_evolution_records");
         let conn = self.configured_connection().await?;
         let mut rows = conn
             .query(
@@ -165,12 +202,19 @@ impl TursoEventStore {
         while let Some(row) = rows.next().await.map_err(storage_error)? {
             out.push(Self::row_to_evolution_record(&row)?);
         }
+        tracing::info!(
+            record_type,
+            status,
+            count = out.len(),
+            "evolution.store.read"
+        );
         Ok(out)
     }
 
     /// List ranked insights (Insight type, sorted by priority_score in data).
     #[instrument(skip_all, fields(otel.name = "turso.list_ranked_insights"))]
     pub async fn list_ranked_insights(&self) -> Result<Vec<EvolutionRecordRow>, PersistenceError> {
+        let _query_timer = TursoQueryTimer::start("turso.list_ranked_insights");
         let conn = self.configured_connection().await?;
         let mut rows = conn
             .query(
@@ -201,6 +245,7 @@ impl TursoEventStore {
                 .partial_cmp(&score_a)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+        tracing::info!(count = out.len(), "evolution.insight");
         Ok(out)
     }
 
@@ -237,6 +282,7 @@ impl TursoEventStore {
         step_number: Option<i64>,
         total_steps: Option<i64>,
     ) -> Result<(), PersistenceError> {
+        let _query_timer = TursoQueryTimer::start("turso.insert_design_time_event");
         let conn = self.configured_connection().await?;
         conn.execute(
             "INSERT INTO design_time_events (kind, entity_type, tenant, summary, level, passed, step_number, total_steps) \
@@ -255,6 +301,7 @@ impl TursoEventStore {
         tenant: Option<&str>,
         limit: i64,
     ) -> Result<Vec<DesignTimeEventRow>, PersistenceError> {
+        let _query_timer = TursoQueryTimer::start("turso.list_design_time_events");
         let conn = self.configured_connection().await?;
         let mut rows = conn
             .query(

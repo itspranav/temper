@@ -11,7 +11,7 @@ mod runtime_metrics;
 pub mod trajectory;
 pub mod wasm_invocation_log;
 
-pub use dispatch::{DispatchCommand, DispatchExtOptions};
+pub use dispatch::{DispatchCommand, DispatchError, DispatchExtOptions};
 pub use entity_ops::{FailedLevelInfo, VerificationGateError};
 pub use metrics::MetricsCollector;
 pub use pending_decisions::{
@@ -23,7 +23,8 @@ pub use trajectory::{TrajectoryEntry, TrajectorySource};
 pub use wasm_invocation_log::WasmInvocationEntry;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::num::NonZeroUsize;
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 use temper_authz::AuthzEngine;
 use temper_evolution::PostgresRecordStore;
@@ -37,6 +38,7 @@ use temper_runtime::scheduler::sim_now;
 use temper_spec::csdl::CsdlDocument;
 use temper_store_postgres::PostgresEventStore;
 
+use crate::adapters::AdapterRegistry;
 use crate::entity_actor::EntityMsg;
 use crate::event_store::ServerEventStore;
 use crate::events::EntityStateChange;
@@ -178,6 +180,8 @@ pub struct ServerState {
     pub reaction_dispatcher: Arc<RwLock<Option<Arc<ReactionDispatcher>>>>,
     /// Optional webhook dispatcher for external system notifications.
     pub webhook_dispatcher: Option<Arc<WebhookDispatcher>>,
+    /// Native adapter integration registry (`type = "adapter"` dispatch path).
+    pub adapter_registry: Arc<AdapterRegistry>,
     /// WASM module registry: maps (tenant, module_name) → sha256_hash.
     pub wasm_module_registry: Arc<RwLock<WasmModuleRegistry>>,
     /// WASM execution engine: compiles, caches, and invokes sandboxed modules.
@@ -188,10 +192,12 @@ pub struct ServerState {
     pub cross_invariant_eventual_enforce: bool,
     /// Broadcast channel for design-time events (spec loading, verification progress).
     pub design_time_tx: Arc<tokio::sync::broadcast::Sender<DesignTimeEvent>>,
-    /// Cache of entity current state, updated on every state change broadcast.
+    /// LRU cache of entity current state, updated on every state change broadcast.
     /// Key: "{tenant}:{entity_type}:{entity_id}", Value: (current_state, last_updated).
+    /// Capped at [`state_cache_budget()`] entries; oldest entry evicted automatically.
     #[allow(clippy::type_complexity)]
-    pub entity_state_cache: Arc<RwLock<BTreeMap<String, (String, chrono::DateTime<chrono::Utc>)>>>,
+    pub entity_state_cache:
+        Arc<Mutex<lru::LruCache<String, (String, chrono::DateTime<chrono::Utc>)>>>,
     /// Configurable timeout for actor ask operations (default: 5s).
     pub action_dispatch_timeout: Duration,
     /// Eventual invariant convergence tracker.
@@ -215,6 +221,12 @@ pub struct ServerState {
     pub single_tenant_mode: bool,
     /// Denial pattern detection engine for Cedar policy suggestions.
     pub suggestion_engine: Arc<RwLock<PolicySuggestionEngine>>,
+    /// When set, spec verification runs in an isolated child process.
+    ///
+    /// Points to the `temper` binary that supports the `verify-ioa` subcommand.
+    /// Each entity's IOA source is written to stdin; the result is read from stdout
+    /// as JSON. A 30-second timeout is applied per entity.
+    pub verify_subprocess_bin: Option<Arc<std::path::PathBuf>>,
 }
 
 #[allow(deprecated)] // ADR-0025 Phase 4: RecordStore used until chain validation replaced
@@ -260,12 +272,15 @@ impl ServerState {
             pg_record_store: None,
             reaction_dispatcher: Arc::new(RwLock::new(None)),
             webhook_dispatcher: None,
+            adapter_registry: Arc::new(AdapterRegistry::with_builtins()),
             wasm_module_registry: Arc::new(RwLock::new(WasmModuleRegistry::new())),
             wasm_engine: Arc::new(WasmEngine::default()),
             cross_invariant_enforce: env_bool("TEMPER_XINV_ENFORCE", true),
             cross_invariant_eventual_enforce: env_bool("TEMPER_XINV_EVENTUAL_ENFORCE", true),
             design_time_tx: Arc::new(design_time_tx),
-            entity_state_cache: Arc::new(RwLock::new(BTreeMap::new())),
+            entity_state_cache: Arc::new(Mutex::new(lru::LruCache::new(
+                NonZeroUsize::new(state_cache_budget()).expect("cache budget must be > 0"),
+            ))),
             action_dispatch_timeout: env_timeout(),
             eventual_tracker: Arc::new(RwLock::new(
                 crate::eventual_invariants::EventualInvariantTracker::new(),
@@ -278,6 +293,7 @@ impl ServerState {
             listen_port: Arc::new(std::sync::OnceLock::new()),
             single_tenant_mode: true,
             suggestion_engine: Arc::new(RwLock::new(PolicySuggestionEngine::new())),
+            verify_subprocess_bin: None,
         };
 
         // Pre-register built-in WASM modules (http_fetch for generic HTTP integrations).
@@ -397,12 +413,15 @@ impl ServerState {
             pg_record_store: None,
             reaction_dispatcher: Arc::new(RwLock::new(None)),
             webhook_dispatcher: None,
+            adapter_registry: Arc::new(AdapterRegistry::with_builtins()),
             wasm_module_registry: Arc::new(RwLock::new(WasmModuleRegistry::new())),
             wasm_engine: Arc::new(WasmEngine::default()),
             cross_invariant_enforce: env_bool("TEMPER_XINV_ENFORCE", true),
             cross_invariant_eventual_enforce: env_bool("TEMPER_XINV_EVENTUAL_ENFORCE", true),
             design_time_tx: Arc::new(design_time_tx),
-            entity_state_cache: Arc::new(RwLock::new(BTreeMap::new())),
+            entity_state_cache: Arc::new(Mutex::new(lru::LruCache::new(
+                NonZeroUsize::new(state_cache_budget()).expect("cache budget must be > 0"),
+            ))),
             action_dispatch_timeout: env_timeout(),
             eventual_tracker: Arc::new(RwLock::new(
                 crate::eventual_invariants::EventualInvariantTracker::new(),
@@ -415,6 +434,7 @@ impl ServerState {
             listen_port: Arc::new(std::sync::OnceLock::new()),
             single_tenant_mode: false,
             suggestion_engine: Arc::new(RwLock::new(PolicySuggestionEngine::new())),
+            verify_subprocess_bin: None,
         };
         state.register_builtin_wasm_modules();
         state
@@ -469,43 +489,52 @@ impl ServerState {
         self
     }
 
-    /// Insert/update an entity status cache entry with bounded eviction.
+    /// Insert/update an entity status cache entry.
     ///
-    /// When over budget, evicts the oldest timestamped entries first.
+    /// The underlying [`lru::LruCache`] automatically evicts the least-recently-used
+    /// entry when the budget (see [`state_cache_budget`]) is exceeded, so no manual
+    /// eviction loop is needed here.
     pub fn cache_entity_status(&self, cache_key: String, status: String) {
-        if let Ok(mut cache) = self.entity_state_cache.write() {
-            cache.insert(cache_key, (status, sim_now()));
-            let budget = state_cache_budget();
-            while cache.len() > budget {
-                let oldest_key = cache
-                    .iter()
-                    .min_by_key(|(_, (_, ts))| *ts)
-                    .map(|(k, _)| k.clone());
-                if let Some(k) = oldest_key {
-                    cache.remove(&k);
-                } else {
-                    break;
-                }
-            }
+        if let Ok(mut cache) = self.entity_state_cache.lock() {
+            cache.put(cache_key, (status, sim_now()));
         }
     }
 
-    /// Get a reference to the Turso event store.
+    /// Get a reference to the platform Turso event store.
     ///
     /// Panics if the event store is not configured or is not a Turso backend.
     pub fn turso(&self) -> &temper_store_turso::TursoEventStore {
-        self.persistent_store()
+        self.platform_persistent_store()
             .expect("Turso event store is not configured")
     }
 
-    /// Get an optional reference to the persistent Turso event store.
+    /// Get an optional reference to the **platform** Turso event store.
+    ///
+    /// Only use for system-wide data that stays in the platform DB
+    /// (evolution records, feature requests, tenant registry).
+    /// For tenant-scoped data, use [`persistent_store_for_tenant`].
     ///
     /// Returns `None` when the server is running without Turso (e.g. in-memory
     /// mode or tests). Callers should degrade gracefully to empty results.
-    pub fn persistent_store(&self) -> Option<&temper_store_turso::TursoEventStore> {
+    pub fn platform_persistent_store(&self) -> Option<&temper_store_turso::TursoEventStore> {
         self.event_store
             .as_ref()
             .and_then(|store| store.platform_turso_store())
+    }
+
+    /// Get a Turso store for a specific tenant.
+    ///
+    /// In TenantRouted mode, routes to the per-tenant database.
+    /// In single-DB Turso mode, returns the shared store.
+    /// `temper-system` and `default` tenants route to the platform store.
+    ///
+    /// Returns `None` when the server is running without Turso.
+    pub async fn persistent_store_for_tenant(
+        &self,
+        tenant: &str,
+    ) -> Option<temper_store_turso::TursoEventStore> {
+        let store = self.event_store.as_ref()?;
+        store.turso_for_tenant(tenant).await
     }
 
     /// Find an entity spec by name across all tenants.
@@ -525,43 +554,141 @@ impl ServerState {
         None
     }
 
-    /// Load trajectory entries from Turso, converting to domain TrajectoryEntry.
-    pub async fn load_trajectory_entries(&self, limit: i64) -> Vec<TrajectoryEntry> {
-        let Some(turso) = self.persistent_store() else {
-            return Vec::new();
-        };
-        match turso.load_recent_trajectories(limit).await {
-            Ok(rows) => rows
-                .into_iter()
-                .map(|r| TrajectoryEntry {
-                    timestamp: r.created_at,
-                    tenant: r.tenant,
-                    entity_type: r.entity_type,
-                    entity_id: r.entity_id,
-                    action: r.action,
-                    success: r.success,
-                    from_status: r.from_status,
-                    to_status: r.to_status,
-                    error: r.error,
-                    agent_id: r.agent_id,
-                    session_id: r.session_id,
-                    authz_denied: r.authz_denied,
-                    denied_resource: r.denied_resource,
-                    denied_module: r.denied_module,
-                    source: r.source.as_deref().and_then(|s| match s {
-                        "Entity" => Some(TrajectorySource::Entity),
-                        "Platform" => Some(TrajectorySource::Platform),
-                        "Authz" => Some(TrajectorySource::Authz),
-                        _ => None,
-                    }),
-                    spec_governed: r.spec_governed,
-                    agent_type: None,
-                })
-                .collect(),
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to load trajectories from Turso");
-                Vec::new()
+    /// Load aggregated unmet-intent failure groups from Turso.
+    ///
+    /// Uses fan-out across all tenant stores in TenantRouted mode.
+    /// Returns an empty vec when Turso is not configured.
+    pub async fn load_unmet_intent_rows_aggregated(
+        &self,
+    ) -> (
+        Vec<temper_store_turso::UnmetIntentAggRow>,
+        std::collections::BTreeMap<String, String>,
+    ) {
+        let stores = self.collect_all_turso_stores().await;
+        if stores.is_empty() {
+            return (Vec::new(), std::collections::BTreeMap::new());
+        }
+
+        let mut failures = Vec::new();
+        let mut submitted_specs = std::collections::BTreeMap::new();
+
+        for turso in &stores {
+            match turso.load_unmet_intent_rows().await {
+                Ok(rows) => failures.extend(rows),
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to load unmet intent rows from Turso");
+                }
+            }
+            match turso.load_submit_spec_timestamps().await {
+                Ok(map) => submitted_specs.extend(map),
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to load submit-spec timestamps from Turso");
+                }
             }
         }
+        (failures, submitted_specs)
+    }
+
+    /// Count trajectory rows per tenant using fan-out across all stores.
+    ///
+    /// Returns an empty map when Turso is not configured.
+    pub async fn count_trajectories_by_tenant(&self) -> std::collections::BTreeMap<String, u64> {
+        let stores = self.collect_all_turso_stores().await;
+        if stores.is_empty() {
+            return std::collections::BTreeMap::new();
+        }
+
+        let mut counts = std::collections::BTreeMap::new();
+        for turso in &stores {
+            match turso.count_trajectories_by_tenant().await {
+                Ok(c) => {
+                    for (tenant, count) in c {
+                        *counts.entry(tenant).or_insert(0) += count;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to count trajectories by tenant from Turso");
+                }
+            }
+        }
+        counts
+    }
+
+    /// Load trajectory entries from Turso, converting to domain TrajectoryEntry.
+    ///
+    /// Uses fan-out across all tenant stores in TenantRouted mode.
+    pub async fn load_trajectory_entries(&self, limit: i64) -> Vec<TrajectoryEntry> {
+        let stores = self.collect_all_turso_stores().await;
+        if stores.is_empty() {
+            return Vec::new();
+        }
+
+        let mut all_entries = Vec::new();
+        for turso in &stores {
+            match turso.load_recent_trajectories(limit).await {
+                Ok(rows) => {
+                    all_entries.extend(rows.into_iter().map(|r| TrajectoryEntry {
+                        timestamp: r.created_at,
+                        tenant: r.tenant,
+                        entity_type: r.entity_type,
+                        entity_id: r.entity_id,
+                        action: r.action,
+                        success: r.success,
+                        from_status: r.from_status,
+                        to_status: r.to_status,
+                        error: r.error,
+                        agent_id: r.agent_id,
+                        session_id: r.session_id,
+                        authz_denied: r.authz_denied,
+                        denied_resource: r.denied_resource,
+                        denied_module: r.denied_module,
+                        source: r.source.as_deref().and_then(|s| match s {
+                            "Entity" => Some(TrajectorySource::Entity),
+                            "Platform" => Some(TrajectorySource::Platform),
+                            "Authz" => Some(TrajectorySource::Authz),
+                            _ => None,
+                        }),
+                        spec_governed: r.spec_governed,
+                        agent_type: None,
+                        request_body: r.request_body.and_then(|s| serde_json::from_str(&s).ok()),
+                        intent: r.intent,
+                    }));
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to load trajectories from Turso");
+                }
+            }
+        }
+        // Sort by timestamp descending and limit
+        all_entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        all_entries.truncate(limit as usize);
+        all_entries
+    }
+
+    /// Collect all Turso stores for fan-out reads.
+    ///
+    /// In single-DB mode, returns just the shared store.
+    /// In TenantRouted mode, returns the platform store + all connected tenant stores.
+    /// Returns an empty vec when Turso is not configured.
+    pub async fn collect_all_turso_stores(&self) -> Vec<temper_store_turso::TursoEventStore> {
+        let Some(store) = self.event_store.as_ref() else {
+            return Vec::new();
+        };
+
+        if let Some(turso) = store.turso_store() {
+            return vec![turso.clone()];
+        }
+
+        if let Some(router) = store.tenant_router() {
+            let mut stores = vec![router.platform_store().clone()];
+            for tid in router.connected_tenants().await {
+                if let Ok(s) = router.store_for_tenant(&tid).await {
+                    stores.push(s);
+                }
+            }
+            return stores;
+        }
+
+        Vec::new()
     }
 }

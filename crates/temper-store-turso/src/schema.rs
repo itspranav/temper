@@ -155,6 +155,29 @@ CREATE TABLE IF NOT EXISTS tenant_policies (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );";
 
+/// Granular Cedar policy storage with per-policy tracking and hash-based change detection.
+///
+/// Replaces the flat `tenant_policies` table for new write paths.
+/// Multiple policy entries per tenant are supported (e.g. one per approved decision
+/// or one manually-managed "primary" entry).  At boot, all enabled rows for a tenant
+/// are concatenated to reconstruct the effective policy set.
+pub const CREATE_POLICIES_TABLE: &str = "\
+CREATE TABLE IF NOT EXISTS policies (
+    tenant TEXT NOT NULL,
+    policy_id TEXT NOT NULL,
+    cedar_text TEXT NOT NULL,
+    policy_hash TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_by TEXT NOT NULL DEFAULT 'system',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY(tenant, policy_id)
+);";
+
+/// Migration: add `enabled` column to existing `policies` tables.
+/// SQLite returns an error if the column already exists — callers should ignore failures.
+pub const ALTER_POLICIES_ADD_ENABLED: &str =
+    "ALTER TABLE policies ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1";
+
 /// Tracks which OS apps are installed per tenant (workspace).
 ///
 /// On boot, `restore_registry_from_turso()` reads the `specs` table to reload
@@ -175,6 +198,10 @@ CREATE TABLE IF NOT EXISTS tenant_installed_apps (
 /// ALTER TABLE migration: add content_hash to specs table.
 pub const ALTER_SPECS_ADD_CONTENT_HASH: &str = "ALTER TABLE specs ADD COLUMN content_hash TEXT";
 
+/// ALTER TABLE migration: add committed flag to specs table (WAL-style commit pattern).
+pub const ALTER_SPECS_ADD_COMMITTED: &str =
+    "ALTER TABLE specs ADD COLUMN committed INTEGER NOT NULL DEFAULT 1";
+
 /// ALTER TABLE migrations for the `trajectories` table.
 ///
 /// These add columns that were previously only tracked in-memory
@@ -193,6 +220,9 @@ pub const ALTER_TRAJECTORIES_ADD_DENIED_MODULE: &str =
 pub const ALTER_TRAJECTORIES_ADD_SOURCE: &str = "ALTER TABLE trajectories ADD COLUMN source TEXT";
 pub const ALTER_TRAJECTORIES_ADD_SPEC_GOVERNED: &str =
     "ALTER TABLE trajectories ADD COLUMN spec_governed INTEGER";
+pub const ALTER_TRAJECTORIES_ADD_REQUEST_BODY: &str =
+    "ALTER TABLE trajectories ADD COLUMN request_body TEXT";
+pub const ALTER_TRAJECTORIES_ADD_INTENT: &str = "ALTER TABLE trajectories ADD COLUMN intent TEXT";
 
 /// Index on agent_id for agent-scoped trajectory queries.
 pub const CREATE_TRAJECTORIES_AGENT_INDEX: &str = "\
@@ -253,22 +283,6 @@ CREATE INDEX IF NOT EXISTS idx_design_time_events_tenant
     ON design_time_events(tenant, entity_type);";
 
 // ---------------------------------------------------------------------------
-// Tenant secrets (encrypted at rest, per-tenant scoping)
-// ---------------------------------------------------------------------------
-
-/// Encrypted secret storage per tenant, mirroring the Postgres `tenant_secrets` table.
-pub const CREATE_TENANT_SECRETS_TABLE: &str = "\
-CREATE TABLE IF NOT EXISTS tenant_secrets (
-    tenant      TEXT NOT NULL,
-    key_name    TEXT NOT NULL,
-    ciphertext  BLOB NOT NULL,
-    nonce       BLOB NOT NULL,
-    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (tenant, key_name)
-);";
-
-// ---------------------------------------------------------------------------
 // Platform DB tables (tenant registry + user access)
 // ---------------------------------------------------------------------------
 
@@ -296,6 +310,22 @@ CREATE TABLE IF NOT EXISTS tenant_users (
 pub const CREATE_TENANT_USERS_USER_INDEX: &str = "\
 CREATE INDEX IF NOT EXISTS idx_tenant_users_user
     ON tenant_users(user_id);";
+
+/// Per-tenant encrypted secret storage.
+///
+/// Mirrors the Postgres `tenant_secrets` table. Ciphertext and nonce are stored
+/// as BLOBs (AES-256-GCM encrypted by [`SecretsVault`]).  Secrets are always
+/// stored in the per-tenant database for proper isolation.
+pub const CREATE_TENANT_SECRETS_TABLE: &str = "\
+CREATE TABLE IF NOT EXISTS tenant_secrets (
+    tenant TEXT NOT NULL,
+    key_name TEXT NOT NULL,
+    ciphertext BLOB NOT NULL,
+    nonce BLOB NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY(tenant, key_name)
+);";
 
 #[cfg(test)]
 mod tests {

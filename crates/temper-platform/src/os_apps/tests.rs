@@ -55,15 +55,55 @@ fn test_pm_specs_verify() {
 }
 
 #[test]
+fn test_agent_orchestration_specs_parse() {
+    for (entity_type, ioa_source) in AO_SPECS {
+        let result = automaton::parse_automaton(ioa_source);
+        assert!(
+            result.is_ok(),
+            "Agent Orchestration spec {} failed to parse: {:?}",
+            entity_type,
+            result.err()
+        );
+    }
+}
+
+#[test]
+fn test_agent_orchestration_csdl_parses() {
+    let result = parse_csdl(AO_CSDL);
+    assert!(
+        result.is_ok(),
+        "Agent Orchestration CSDL failed to parse: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn test_agent_orchestration_specs_verify() {
+    for (entity_type, ioa_source) in AO_SPECS {
+        let cascade = VerificationCascade::from_ioa(ioa_source)
+            .with_sim_seeds(3)
+            .with_prop_test_cases(30);
+        let result = cascade.run();
+        assert!(
+            result.all_passed,
+            "Agent Orchestration spec {} failed verification",
+            entity_type
+        );
+    }
+}
+
+#[test]
 fn test_list_os_apps_returns_catalog() {
     let apps = list_os_apps();
-    assert_eq!(apps.len(), 3);
+    assert_eq!(apps.len(), 4);
     assert_eq!(apps[0].name, "project-management");
     assert_eq!(apps[0].entity_types.len(), 5);
     assert_eq!(apps[1].name, "temper-fs");
     assert_eq!(apps[1].entity_types.len(), 4);
-    assert_eq!(apps[2].name, "temper-agent");
-    assert_eq!(apps[2].entity_types.len(), 1);
+    assert_eq!(apps[2].name, "agent-orchestration");
+    assert_eq!(apps[2].entity_types.len(), 3);
+    assert_eq!(apps[3].name, "temper-agent");
+    assert_eq!(apps[3].entity_types.len(), 1);
 }
 
 #[test]
@@ -78,7 +118,7 @@ fn test_get_os_app_project_management() {
 
 #[test]
 fn test_agent_specs_parse() {
-    for (entity_type, ioa_source) in AGENT_SPECS {
+    for (entity_type, ioa_source) in TEMPER_AGENT_SPECS {
         let result = automaton::parse_automaton(ioa_source);
         assert!(
             result.is_ok(),
@@ -91,7 +131,7 @@ fn test_agent_specs_parse() {
 
 #[test]
 fn test_agent_csdl_parses() {
-    let result = parse_csdl(AGENT_CSDL);
+    let result = parse_csdl(TEMPER_AGENT_CSDL);
     assert!(
         result.is_ok(),
         "Agent CSDL failed to parse: {:?}",
@@ -101,7 +141,7 @@ fn test_agent_csdl_parses() {
 
 #[test]
 fn test_agent_spec_entity_names() {
-    for (entity_type, ioa_source) in AGENT_SPECS {
+    for (entity_type, ioa_source) in TEMPER_AGENT_SPECS {
         let a = automaton::parse_automaton(ioa_source).unwrap();
         assert_eq!(
             a.automaton.name, *entity_type,
@@ -113,7 +153,7 @@ fn test_agent_spec_entity_names() {
 
 #[test]
 fn test_agent_specs_verify() {
-    for (entity_type, ioa_source) in AGENT_SPECS {
+    for (entity_type, ioa_source) in TEMPER_AGENT_SPECS {
         let cascade = VerificationCascade::from_ioa(ioa_source)
             .with_sim_seeds(3)
             .with_prop_test_cases(50);
@@ -124,6 +164,16 @@ fn test_agent_specs_verify() {
             entity_type
         );
     }
+}
+
+#[test]
+fn test_get_os_app_agent_orchestration() {
+    let bundle = get_os_app("agent-orchestration");
+    assert!(bundle.is_some());
+    let bundle = bundle.unwrap();
+    assert_eq!(bundle.specs.len(), 3);
+    assert!(!bundle.csdl.is_empty());
+    assert_eq!(bundle.cedar_policies.len(), 1);
 }
 
 #[test]
@@ -146,13 +196,21 @@ async fn test_install_os_app_registers_entities() {
     let state = PlatformState::new(None);
     let result = install_os_app(&state, "test-pm", "project-management").await;
     assert!(result.is_ok());
-    let entities = result.unwrap();
-    assert_eq!(entities.len(), 5);
-    assert!(entities.contains(&"Issue".to_string()));
-    assert!(entities.contains(&"Project".to_string()));
-    assert!(entities.contains(&"Cycle".to_string()));
-    assert!(entities.contains(&"Comment".to_string()));
-    assert!(entities.contains(&"Label".to_string()));
+    let result = result.unwrap();
+    // Fresh tenant — all 5 specs should be new.
+    assert_eq!(
+        result.added.len(),
+        5,
+        "expected 5 added: {:?}",
+        result.added
+    );
+    assert!(result.updated.is_empty());
+    assert!(result.skipped.is_empty());
+    assert!(result.added.contains(&"Issue".to_string()));
+    assert!(result.added.contains(&"Project".to_string()));
+    assert!(result.added.contains(&"Cycle".to_string()));
+    assert!(result.added.contains(&"Comment".to_string()));
+    assert!(result.added.contains(&"Label".to_string()));
 
     // Verify entities are in the registry.
     let registry = state.registry.read().unwrap();
@@ -165,11 +223,122 @@ async fn test_install_os_app_registers_entities() {
 }
 
 #[tokio::test]
+async fn test_install_agent_orchestration_registers_entities() {
+    let state = PlatformState::new(None);
+    let result = install_os_app(&state, "test-ao", "agent-orchestration").await;
+    assert!(result.is_ok());
+    let result = result.unwrap();
+    assert_eq!(
+        result.added.len(),
+        3,
+        "expected 3 added: {:?}",
+        result.added
+    );
+    assert!(result.updated.is_empty());
+    assert!(result.skipped.is_empty());
+    assert!(result.added.contains(&"HeartbeatRun".to_string()));
+    assert!(result.added.contains(&"Organization".to_string()));
+    assert!(result.added.contains(&"BudgetLedger".to_string()));
+
+    let registry = state.registry.read().unwrap();
+    let tenant = TenantId::new("test-ao");
+    assert!(registry.get_table(&tenant, "HeartbeatRun").is_some());
+    assert!(registry.get_table(&tenant, "Organization").is_some());
+    assert!(registry.get_table(&tenant, "BudgetLedger").is_some());
+}
+
+#[tokio::test]
 async fn test_install_os_app_nonexistent_returns_error() {
     let state = PlatformState::new(None);
     let result = install_os_app(&state, "test", "nonexistent").await;
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("not found in catalog"));
+}
+
+#[tokio::test]
+async fn test_install_multiple_os_apps_merges_and_is_idempotent() {
+    let state = PlatformState::new(None);
+    let tenant = TenantId::new("test-merge");
+
+    install_os_app(&state, "test-merge", "project-management")
+        .await
+        .expect("install project-management");
+
+    install_os_app(&state, "test-merge", "agent-orchestration")
+        .await
+        .expect("install agent-orchestration");
+
+    {
+        let registry = state.registry.read().unwrap(); // ci-ok: infallible lock
+        for entity_type in [
+            "Issue",
+            "Project",
+            "Cycle",
+            "Comment",
+            "Label",
+            "HeartbeatRun",
+            "Organization",
+            "BudgetLedger",
+        ] {
+            assert!(
+                registry.get_table(&tenant, entity_type).is_some(),
+                "{entity_type} should remain available after multi-app install"
+            );
+        }
+
+        // Existing tenant mappings should still resolve after app merge.
+        assert_eq!(
+            registry.resolve_entity_type(&tenant, "Issues").as_deref(),
+            Some("Issue")
+        );
+        assert_eq!(
+            registry
+                .resolve_entity_type(&tenant, "HeartbeatRuns")
+                .as_deref(),
+            Some("HeartbeatRun")
+        );
+    }
+
+    let reinstall = install_os_app(&state, "test-merge", "project-management")
+        .await
+        .expect("reinstall project-management");
+
+    // Reinstall of identical specs should skip all 5.
+    assert!(
+        reinstall.added.is_empty(),
+        "no new entities expected on reinstall"
+    );
+    assert!(
+        reinstall.updated.is_empty(),
+        "no updates expected on reinstall of identical specs"
+    );
+    assert_eq!(
+        reinstall.skipped.len(),
+        5,
+        "all 5 PM specs should be skipped on identical reinstall"
+    );
+
+    let registry = state.registry.read().unwrap(); // ci-ok: infallible lock
+    let mut entity_types = registry
+        .entity_types(&tenant)
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    entity_types.sort();
+
+    assert_eq!(
+        entity_types,
+        vec![
+            "BudgetLedger".to_string(),
+            "Comment".to_string(),
+            "Cycle".to_string(),
+            "HeartbeatRun".to_string(),
+            "Issue".to_string(),
+            "Label".to_string(),
+            "Organization".to_string(),
+            "Project".to_string(),
+        ]
+    );
 }
 
 /// Proves the full install → persist → reboot → restore cycle.
@@ -197,8 +366,8 @@ async fn test_os_app_install_survives_restart() {
 
     let result = install_os_app(&state, "test-ws", "project-management").await;
     assert!(result.is_ok(), "install failed: {:?}", result.err());
-    let entities = result.unwrap();
-    assert_eq!(entities.len(), 5);
+    let result = result.unwrap();
+    assert_eq!(result.added.len(), 5);
 
     // Verify specs are in the in-memory registry.
     {

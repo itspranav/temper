@@ -9,13 +9,8 @@
 //! - [`constraints`]: Tenant-level cross-entity constraints
 //! - [`event_store`]: [`EventStore`] trait implementation
 
-use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant};
-
 use libsql::{Builder, Database};
-use opentelemetry::KeyValue;
-use opentelemetry::global;
-use opentelemetry::metrics::Histogram;
+use std::sync::Arc;
 use temper_runtime::persistence::{PersistenceError, storage_error};
 use tracing::instrument;
 
@@ -25,85 +20,16 @@ mod authz;
 mod constraints;
 mod event_store;
 mod evolution;
+mod instrumentation;
+mod policy;
 mod secrets;
 mod specs;
+#[cfg(test)]
+mod tests;
 mod trajectory;
 mod wasm;
 
-#[cfg(test)]
-mod tests;
-
-fn turso_query_duration_histogram() -> &'static Histogram<f64> {
-    static HISTOGRAM: OnceLock<Histogram<f64>> = OnceLock::new();
-    HISTOGRAM.get_or_init(|| {
-        global::meter("temper-store-turso")
-            .f64_histogram("temper_turso_query_duration")
-            .with_unit("ms")
-            .with_description("Duration of Turso/libSQL query and execute calls.")
-            .build()
-    })
-}
-
-pub(super) fn record_turso_query_duration(
-    duration: Duration,
-    kind: &'static str,
-    via: &'static str,
-    success: bool,
-) {
-    turso_query_duration_histogram().record(
-        duration.as_secs_f64() * 1_000.0,
-        &[
-            KeyValue::new("kind", kind),
-            KeyValue::new("via", via),
-            KeyValue::new("success", success),
-        ],
-    );
-}
-
-/// Connection wrapper that records Turso query/execute latency metrics.
-pub(crate) struct InstrumentedConnection {
-    inner: libsql::Connection,
-}
-
-impl InstrumentedConnection {
-    fn new(inner: libsql::Connection) -> Self {
-        Self { inner }
-    }
-
-    pub(crate) async fn query(
-        &self,
-        sql: &str,
-        params: impl libsql::params::IntoParams,
-    ) -> Result<libsql::Rows, libsql::Error> {
-        let start = Instant::now();
-        let result = self.inner.query(sql, params).await;
-        record_turso_query_duration(start.elapsed(), "query", "connection", result.is_ok());
-        result
-    }
-
-    pub(crate) async fn execute(
-        &self,
-        sql: &str,
-        params: impl libsql::params::IntoParams,
-    ) -> Result<u64, libsql::Error> {
-        let start = Instant::now();
-        let result = self.inner.execute(sql, params).await;
-        record_turso_query_duration(start.elapsed(), "execute", "connection", result.is_ok());
-        result
-    }
-
-    /// Start a transaction with the given behavior.
-    ///
-    /// Returns a raw `libsql::Transaction` — callers that need latency
-    /// metrics on transaction-level queries should use
-    /// [`record_turso_query_duration`] manually.
-    pub(crate) async fn transaction_with_behavior(
-        &self,
-        behavior: libsql::TransactionBehavior,
-    ) -> Result<libsql::Transaction, libsql::Error> {
-        self.inner.transaction_with_behavior(behavior).await
-    }
-}
+use instrumentation::InstrumentedConnection;
 
 #[derive(Clone, Debug)]
 pub struct TursoEventStore {
@@ -234,6 +160,11 @@ impl TursoEventStore {
         conn.execute(schema::CREATE_TENANT_POLICIES_TABLE, ())
             .await
             .map_err(storage_error)?;
+        conn.execute(schema::CREATE_POLICIES_TABLE, ())
+            .await
+            .map_err(storage_error)?;
+        // Migration: add `enabled` column to existing `policies` tables.
+        let _ = conn.execute(schema::ALTER_POLICIES_ADD_ENABLED, ()).await;
         conn.execute(schema::CREATE_TENANT_INSTALLED_APPS_TABLE, ())
             .await
             .map_err(storage_error)?;
@@ -257,6 +188,9 @@ impl TursoEventStore {
         conn.execute(schema::CREATE_DESIGN_TIME_EVENTS_TENANT_INDEX, ())
             .await
             .map_err(storage_error)?;
+        conn.execute(schema::CREATE_TENANT_SECRETS_TABLE, ())
+            .await
+            .map_err(storage_error)?;
 
         conn.execute(schema::CREATE_TENANT_SECRETS_TABLE, ())
             .await
@@ -264,6 +198,7 @@ impl TursoEventStore {
 
         // Specs table extensions — add content_hash column for verification caching.
         let _ = conn.execute(schema::ALTER_SPECS_ADD_CONTENT_HASH, ()).await;
+        let _ = conn.execute(schema::ALTER_SPECS_ADD_COMMITTED, ()).await;
 
         // Trajectory table extensions — ALTER TABLE to add missing columns.
         // SQLite returns an error for duplicate columns, so we ignore failures.
@@ -275,6 +210,8 @@ impl TursoEventStore {
             schema::ALTER_TRAJECTORIES_ADD_DENIED_MODULE,
             schema::ALTER_TRAJECTORIES_ADD_SOURCE,
             schema::ALTER_TRAJECTORIES_ADD_SPEC_GOVERNED,
+            schema::ALTER_TRAJECTORIES_ADD_REQUEST_BODY,
+            schema::ALTER_TRAJECTORIES_ADD_INTENT,
         ] {
             let _ = conn.execute(stmt, ()).await; // ignore "duplicate column" errors
         }
@@ -306,6 +243,8 @@ impl TursoEventStore {
 // Row / result types
 // ---------------------------------------------------------------------------
 
+pub use policy::PolicyRow;
+
 /// Row returned by [`TursoEventStore::load_specs()`].
 #[derive(Debug, Clone)]
 pub struct TursoSpecRow {
@@ -331,6 +270,8 @@ pub struct TursoSpecRow {
     pub content_hash: Option<String>,
     /// ISO-8601 updated_at timestamp.
     pub updated_at: String,
+    /// Whether this spec has been committed (WAL-style commit flag).
+    pub committed: bool,
 }
 
 /// Row returned by trajectory queries.
@@ -368,6 +309,10 @@ pub struct TursoTrajectoryRow {
     pub spec_governed: Option<bool>,
     /// ISO-8601 timestamp.
     pub created_at: String,
+    /// JSON-serialized request body (up to 4 KB).
+    pub request_body: Option<String>,
+    /// Explicit intent from X-Intent header.
+    pub intent: Option<String>,
 }
 
 /// Aggregated trajectory statistics.
@@ -415,6 +360,26 @@ pub struct AgentSummary {
     pub success_rate: f64,
     /// Most recent activity timestamp.
     pub last_active_at: String,
+}
+
+/// A pre-aggregated row from the unmet-intents SQL GROUP BY query.
+///
+/// Used by the `/observe/evolution/unmet-intents` endpoint to avoid loading
+/// thousands of raw trajectory rows into memory on every poll.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UnmetIntentAggRow {
+    /// Entity type that produced failures.
+    pub entity_type: String,
+    /// Most-recent action name that failed (representative sample).
+    pub action: String,
+    /// Raw error string from the trajectory row (may be None).
+    pub error: Option<String>,
+    /// Number of failures in this group.
+    pub count: u64,
+    /// ISO-8601 timestamp of the oldest failure in the group.
+    pub first_seen: String,
+    /// ISO-8601 timestamp of the most-recent failure in the group.
+    pub last_seen: String,
 }
 
 /// Row returned by feature request queries.

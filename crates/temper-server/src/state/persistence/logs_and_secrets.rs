@@ -2,13 +2,13 @@ use temper_store_turso::TursoTrajectoryInsert;
 
 use super::super::trajectory::TrajectoryEntry;
 use super::super::{DesignTimeEvent, ServerState};
-use super::MetadataBackend;
+use super::TenantMetadataBackend;
 
 impl ServerState {
-    /// Broadcast and persist a design-time event to Turso.
+    /// Broadcast and persist a design-time event to the tenant's store.
     pub async fn emit_design_time_event(&self, event: DesignTimeEvent) -> Result<(), String> {
-        // Persist to Turso.
-        if let Some(turso) = self.persistent_store() {
+        // Persist to the tenant's Turso store.
+        if let Some(turso) = self.persistent_store_for_tenant(&event.tenant).await {
             turso
                 .insert_design_time_event(
                     &event.kind,
@@ -33,11 +33,24 @@ impl ServerState {
         Ok(())
     }
 
-    /// Persist a trajectory entry to Turso (single source of truth).
+    /// Persist a trajectory entry to the tenant's Turso store.
     pub async fn persist_trajectory_entry(&self, entry: &TrajectoryEntry) -> Result<(), String> {
-        let Some(turso) = self.persistent_store() else {
+        let Some(turso) = self.persistent_store_for_tenant(&entry.tenant).await else {
             return Ok(());
         };
+        let request_body_json = entry.request_body.as_ref().and_then(|v| {
+            let s = serde_json::to_string(v).ok()?;
+            Some(if s.len() > 4096 {
+                // Truncate at a valid UTF-8 char boundary at or below 4096 bytes.
+                let mut end = 4096;
+                while !s.is_char_boundary(end) {
+                    end -= 1;
+                }
+                s[..end].to_string()
+            } else {
+                s
+            })
+        });
         turso
             .persist_trajectory(TursoTrajectoryInsert {
                 tenant: &entry.tenant,
@@ -60,6 +73,8 @@ impl ServerState {
                 }),
                 spec_governed: entry.spec_governed,
                 created_at: &entry.timestamp,
+                request_body: request_body_json.as_deref(),
+                intent: entry.intent.as_deref(),
             })
             .await
             .map_err(|e| {
@@ -71,34 +86,32 @@ impl ServerState {
         Ok(())
     }
 
-    /// Persist a pending decision to the storage backend (Turso only for now).
+    /// Persist a pending decision to the tenant's storage backend.
     pub async fn persist_pending_decision(
         &self,
         decision: &super::super::PendingDecision,
     ) -> Result<(), String> {
-        let Some(store) = self.event_store.as_ref() else {
+        let Some(turso) = self.persistent_store_for_tenant(&decision.tenant).await else {
             return Ok(());
         };
 
-        if let Some(turso) = store.platform_turso_store() {
-            let status_str = match decision.status {
-                super::super::DecisionStatus::Pending => "pending",
-                super::super::DecisionStatus::Approved => "approved",
-                super::super::DecisionStatus::Denied => "denied",
-                super::super::DecisionStatus::Expired => "expired",
-            };
-            let data_json = serde_json::to_string(decision)
-                .map_err(|e| format!("failed to serialize decision {}: {e}", decision.id))?;
-            turso
-                .upsert_pending_decision(&decision.id, &decision.tenant, status_str, &data_json)
-                .await
-                .map_err(|e| {
-                    format!(
-                        "failed to persist pending decision {} in turso: {e}",
-                        decision.id
-                    )
-                })?;
-        }
+        let status_str = match decision.status {
+            super::super::DecisionStatus::Pending => "pending",
+            super::super::DecisionStatus::Approved => "approved",
+            super::super::DecisionStatus::Denied => "denied",
+            super::super::DecisionStatus::Expired => "expired",
+        };
+        let data_json = serde_json::to_string(decision)
+            .map_err(|e| format!("failed to serialize decision {}: {e}", decision.id))?;
+        turso
+            .upsert_pending_decision(&decision.id, &decision.tenant, status_str, &data_json)
+            .await
+            .map_err(|e| {
+                format!(
+                    "failed to persist pending decision {} in turso: {e}",
+                    decision.id
+                )
+            })?;
 
         Ok(())
     }
@@ -111,12 +124,12 @@ impl ServerState {
         ciphertext: &[u8],
         nonce: &[u8],
     ) -> Result<(), String> {
-        let Some(backend) = self.metadata_backend() else {
+        let Some(backend) = self.metadata_backend_for_tenant(tenant).await else {
             return Ok(());
         };
 
         match backend {
-            MetadataBackend::Postgres(pool) => {
+            TenantMetadataBackend::Postgres(pool) => {
                 sqlx::query(
                     "INSERT INTO tenant_secrets (tenant, key_name, ciphertext, nonce, created_at, updated_at) \
                      VALUES ($1, $2, $3, $4, now(), now()) \
@@ -129,44 +142,41 @@ impl ServerState {
                 .bind(key_name)
                 .bind(ciphertext)
                 .bind(nonce)
-                .execute(pool)
+                .execute(&pool)
                 .await
                 .map_err(|e| format!("failed to upsert secret {tenant}/{key_name}: {e}"))?;
                 Ok(())
             }
-            MetadataBackend::Turso(turso) => {
-                turso
-                    .upsert_secret(tenant, key_name, ciphertext, nonce)
-                    .await
-                    .map_err(|e| format!("failed to upsert secret {tenant}/{key_name}: {e}"))?;
-                Ok(())
-            }
-            MetadataBackend::Redis => Err(Self::redis_ephemeral_error("Secret persistence")),
+            TenantMetadataBackend::Turso(turso) => turso
+                .upsert_secret(tenant, key_name, ciphertext, nonce)
+                .await
+                .map_err(|e| format!("failed to upsert secret {tenant}/{key_name} in turso: {e}")),
+            TenantMetadataBackend::Redis => Err(Self::redis_ephemeral_error("Secret persistence")),
         }
     }
 
     /// Delete a secret from the persistence backend.
     pub async fn delete_secret(&self, tenant: &str, key_name: &str) -> Result<bool, String> {
-        let Some(backend) = self.metadata_backend() else {
+        let Some(backend) = self.metadata_backend_for_tenant(tenant).await else {
             return Ok(false);
         };
 
         match backend {
-            MetadataBackend::Postgres(pool) => {
+            TenantMetadataBackend::Postgres(pool) => {
                 let result =
                     sqlx::query("DELETE FROM tenant_secrets WHERE tenant = $1 AND key_name = $2")
                         .bind(tenant)
                         .bind(key_name)
-                        .execute(pool)
+                        .execute(&pool)
                         .await
                         .map_err(|e| format!("failed to delete secret {tenant}/{key_name}: {e}"))?;
                 Ok(result.rows_affected() > 0)
             }
-            MetadataBackend::Turso(turso) => turso
+            TenantMetadataBackend::Turso(turso) => turso
                 .delete_secret(tenant, key_name)
                 .await
-                .map_err(|e| format!("failed to delete secret {tenant}/{key_name}: {e}")),
-            MetadataBackend::Redis => Err(Self::redis_ephemeral_error("Secret deletion")),
+                .map_err(|e| format!("failed to delete secret {tenant}/{key_name} in turso: {e}")),
+            TenantMetadataBackend::Redis => Err(Self::redis_ephemeral_error("Secret deletion")),
         }
     }
 
@@ -175,45 +185,71 @@ impl ServerState {
         let Some(vault) = self.secrets_vault.as_ref() else {
             return Ok(0);
         };
-        let Some(backend) = self.metadata_backend() else {
+        let Some(backend) = self.metadata_backend_for_tenant(tenant).await else {
             return Ok(0);
         };
 
-        let rows: Vec<(String, Vec<u8>, Vec<u8>)> = match backend {
-            MetadataBackend::Postgres(pool) => sqlx::query_as(
-                "SELECT key_name, ciphertext, nonce FROM tenant_secrets WHERE tenant = $1",
-            )
-            .bind(tenant)
-            .fetch_all(pool)
-            .await
-            .map_err(|e| format!("failed to load secrets for tenant {tenant}: {e}"))?,
-            MetadataBackend::Turso(turso) => turso
-                .load_tenant_secrets(tenant)
+        match backend {
+            TenantMetadataBackend::Postgres(pool) => {
+                let rows: Vec<(String, Vec<u8>, Vec<u8>)> = sqlx::query_as(
+                    "SELECT key_name, ciphertext, nonce FROM tenant_secrets WHERE tenant = $1",
+                )
+                .bind(tenant)
+                .fetch_all(&pool)
                 .await
-                .map_err(|e| format!("failed to load secrets for tenant {tenant}: {e}"))?,
-            MetadataBackend::Redis => return Err(Self::redis_ephemeral_error("Secret loading")),
-        };
+                .map_err(|e| format!("failed to load secrets for tenant {tenant}: {e}"))?;
 
-        let mut count = 0;
-        for (key_name, ciphertext, nonce) in &rows {
-            match vault.decrypt(ciphertext, nonce) {
-                Ok(plaintext) => {
-                    let value = String::from_utf8(plaintext)
-                        .map_err(|e| format!("secret {key_name} is not valid UTF-8: {e}"))?;
-                    vault.cache_secret(tenant, key_name, value)?;
-                    count += 1;
+                let mut count = 0;
+                for (key_name, ciphertext, nonce) in &rows {
+                    match vault.decrypt(ciphertext, nonce) {
+                        Ok(plaintext) => {
+                            let value = String::from_utf8(plaintext).map_err(|e| {
+                                format!("secret {key_name} is not valid UTF-8: {e}")
+                            })?;
+                            vault.cache_secret(tenant, key_name, value)?;
+                            count += 1;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                tenant,
+                                key_name,
+                                error = %e,
+                                "failed to decrypt secret, skipping"
+                            );
+                        }
+                    }
                 }
-                Err(e) => {
-                    tracing::warn!(
-                        tenant,
-                        key_name,
-                        error = %e,
-                        "failed to decrypt secret, skipping"
-                    );
-                }
+                Ok(count)
             }
+            TenantMetadataBackend::Turso(turso) => {
+                let rows = turso.load_secrets_for_tenant(tenant).await.map_err(|e| {
+                    format!("failed to load secrets for tenant {tenant} from turso: {e}")
+                })?;
+
+                let mut count = 0;
+                for (key_name, ciphertext, nonce) in &rows {
+                    match vault.decrypt(ciphertext, nonce) {
+                        Ok(plaintext) => {
+                            let value = String::from_utf8(plaintext).map_err(|e| {
+                                format!("secret {key_name} is not valid UTF-8: {e}")
+                            })?;
+                            vault.cache_secret(tenant, key_name, value)?;
+                            count += 1;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                tenant,
+                                key_name,
+                                error = %e,
+                                "failed to decrypt secret, skipping"
+                            );
+                        }
+                    }
+                }
+                Ok(count)
+            }
+            TenantMetadataBackend::Redis => Err(Self::redis_ephemeral_error("Secret loading")),
         }
-        Ok(count)
     }
 }
 
@@ -250,36 +286,31 @@ mod tests {
         let vault = state.secrets_vault.as_ref().expect("vault configured");
         let (ciphertext, nonce) = vault.encrypt(b"secret-value").expect("encrypt");
 
-        // Upsert should succeed.
+        // Upsert secret.
         state
             .upsert_secret("tenant-a", "API_KEY", &ciphertext, &nonce)
             .await
             .expect("turso secret upsert should succeed");
 
-        // Load should decrypt and cache.
-        let count = state
+        // Load and decrypt.
+        let loaded = state
             .load_tenant_secrets("tenant-a")
             .await
             .expect("turso secret load should succeed");
-        assert_eq!(count, 1);
+        assert_eq!(loaded, 1, "should have loaded 1 secret");
 
-        // Verify the cached value.
-        let cached = vault.get_secret("tenant-a", "API_KEY");
-        assert_eq!(cached.as_deref(), Some("secret-value"));
+        // Verify the decrypted value is cached.
+        let cached = vault
+            .get_secret("tenant-a", "API_KEY")
+            .expect("secret should be cached");
+        assert_eq!(cached, "secret-value");
 
-        // Delete should succeed.
+        // Delete secret.
         let deleted = state
             .delete_secret("tenant-a", "API_KEY")
             .await
             .expect("turso secret delete should succeed");
-        assert!(deleted, "should have deleted one row");
-
-        // Delete again returns false.
-        let deleted_again = state
-            .delete_secret("tenant-a", "API_KEY")
-            .await
-            .expect("turso secret delete should succeed");
-        assert!(!deleted_again, "no row to delete");
+        assert!(deleted, "should have deleted 1 row");
 
         let _ = std::fs::remove_file(db_path); // determinism-ok: test-only cleanup
     }

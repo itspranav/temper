@@ -12,6 +12,8 @@ use temper_runtime::tenant::TenantId;
 use temper_wasm::{StreamRegistry, WasmInvocationContext};
 use tracing::instrument;
 
+use axum::Extension;
+
 use super::bindings::dispatch_bound_action;
 use super::common::{
     check_has_stream_or_400, constraint_violation_response, extract_key, extract_tenant,
@@ -20,6 +22,7 @@ use super::common::{
 };
 use super::constraints::pre_delete_relation_checks;
 use super::response::annotate_entity;
+use crate::identity::ResolvedIdentity;
 use crate::request_context::{AgentContext, extract_agent_context};
 use crate::response::{ODataResponse, odata_error};
 use crate::state::ServerState;
@@ -73,6 +76,8 @@ fn resolve_entity_type_or_record_404(
     tenant: &TenantId,
     set_name: &str,
     agent_ctx: &AgentContext,
+    request_body: Option<serde_json::Value>,
+    intent: Option<String>,
 ) -> Result<String, ODataWriteError> {
     resolve_entity_type(state, tenant, set_name).ok_or_else(|| {
         tracing::warn!(tenant = %tenant, entity_set = %set_name, "entity set not found");
@@ -94,6 +99,8 @@ fn resolve_entity_type_or_record_404(
             source: Some(TrajectorySource::Platform),
             spec_governed: None,
             agent_type: agent_ctx.agent_type.clone(),
+            request_body,
+            intent,
         };
         {
             let state_c = state.clone();
@@ -149,6 +156,7 @@ fn ensure_entity_exists_or_404(
 #[instrument(skip_all, fields(otel.name = "POST /odata/{path}"))]
 pub async fn handle_odata_post(
     State(state): State<ServerState>,
+    resolved_id: Option<Extension<ResolvedIdentity>>,
     headers: HeaderMap,
     axum::extract::Path(path): axum::extract::Path<String>,
     Query(query_params): Query<std::collections::BTreeMap<String, String>>,
@@ -159,6 +167,7 @@ pub async fn handle_odata_post(
         Err(e) => return e.into_response(),
     };
     let agent_ctx = extract_agent_context(&headers);
+    let resolved_identity = resolved_id.map(|Extension(id)| id);
     let await_integration = query_params
         .get("await_integration")
         .map(|v| v == "true")
@@ -175,11 +184,18 @@ pub async fn handle_odata_post(
 
     match odata_path {
         ODataPath::EntitySet(name) => {
-            let entity_type =
-                match resolve_entity_type_or_record_404(&state, &tenant, &name, &agent_ctx) {
-                    Ok(t) => t,
-                    Err(resp) => return *resp,
-                };
+            let body_for_trajectory = serde_json::from_slice::<serde_json::Value>(&body).ok();
+            let entity_type = match resolve_entity_type_or_record_404(
+                &state,
+                &tenant,
+                &name,
+                &agent_ctx,
+                body_for_trajectory,
+                agent_ctx.intent.clone(),
+            ) {
+                Ok(t) => t,
+                Err(resp) => return *resp,
+            };
             if let Err(resp) = check_verification_gate_or_423(&state, &tenant, &entity_type) {
                 return *resp;
             }
@@ -246,11 +262,17 @@ pub async fn handle_odata_post(
                 }
             };
 
-            let entity_type =
-                match resolve_entity_type_or_record_404(&state, &tenant, &set_name, &agent_ctx) {
-                    Ok(t) => t,
-                    Err(resp) => return *resp,
-                };
+            let entity_type = match resolve_entity_type_or_record_404(
+                &state,
+                &tenant,
+                &set_name,
+                &agent_ctx,
+                Some(body_json.clone()),
+                agent_ctx.intent.clone(),
+            ) {
+                Ok(t) => t,
+                Err(resp) => return *resp,
+            };
 
             if let Err(resp) = check_verification_gate_or_423(&state, &tenant, &entity_type) {
                 return *resp;
@@ -267,6 +289,7 @@ pub async fn handle_odata_post(
                 &headers,
                 await_integration,
                 idempotency_key.clone(),
+                resolved_identity.as_ref(),
             )
             .await
         }

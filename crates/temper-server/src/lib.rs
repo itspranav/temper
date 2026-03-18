@@ -4,6 +4,7 @@
 //! The entity actor uses JIT TransitionTables for state machine transitions,
 //! ensuring the same logic verified by DST runs in production.
 
+pub mod adapters;
 #[cfg(feature = "observe")]
 mod api;
 pub mod authz;
@@ -12,9 +13,11 @@ pub mod event_store;
 pub mod events;
 pub mod eventual_invariants;
 pub mod idempotency;
+pub mod identity;
 #[cfg(feature = "observe")]
 pub mod observe;
 pub mod odata;
+pub mod platform_store;
 mod query_eval;
 pub mod reaction;
 pub mod registry;
@@ -22,6 +25,7 @@ pub mod registry_bootstrap;
 pub mod request_context;
 mod response;
 mod router;
+pub mod runtime_metrics;
 pub mod secrets;
 #[cfg(feature = "observe")]
 pub mod sentinel;

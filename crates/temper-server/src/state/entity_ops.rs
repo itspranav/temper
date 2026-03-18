@@ -14,6 +14,7 @@ use super::ServerState;
 use crate::entity_actor::{EntityActor, EntityMsg, EntityResponse};
 use crate::events::EntityStateChange;
 use crate::registry::{VerificationDetail, VerificationStatus};
+use crate::runtime_metrics;
 
 fn actor_idle_timeout_secs() -> i64 {
     static ACTOR_IDLE_TIMEOUT: OnceLock<i64> = OnceLock::new();
@@ -86,6 +87,31 @@ impl ServerState {
             .unwrap_or(0)
     }
 
+    /// Returns `true` when a tenant/entity_type has a registered spec.
+    pub(crate) fn has_registered_spec(
+        &self,
+        tenant: &TenantId,
+        entity_type: &str,
+    ) -> Result<bool, String> {
+        self.registry
+            .read()
+            .map(|registry| registry.get_spec(tenant, entity_type).is_some())
+            .map_err(|e| format!("registry lock poisoned: {e}"))
+    }
+
+    /// Returns `true` when dispatch should be allowed for the entity type.
+    ///
+    /// This includes both tenant-scoped specs and legacy single-tenant
+    /// transition tables.
+    pub(crate) fn is_entity_type_governed(
+        &self,
+        tenant: &TenantId,
+        entity_type: &str,
+    ) -> Result<bool, String> {
+        Ok(self.has_registered_spec(tenant, entity_type)?
+            || self.transition_tables.contains_key(entity_type))
+    }
+
     /// Populate `entity_index` from the event store without spawning actors.
     ///
     /// This is the memory-safe startup/list path: we discover persisted
@@ -98,19 +124,22 @@ impl ServerState {
 
         match store.list_entity_ids(tenant.as_str()).await {
             Ok(entities) => {
-                let mut index = self.entity_index.write().unwrap(); // ci-ok: infallible lock
-                for (entity_type, entity_id) in &entities {
-                    let index_key = format!("{tenant}:{entity_type}");
-                    index
-                        .entry(index_key)
-                        .or_default()
-                        .insert(entity_id.clone());
-                }
+                {
+                    let mut index = self.entity_index.write().unwrap(); // ci-ok: infallible lock
+                    for (entity_type, entity_id) in &entities {
+                        let index_key = format!("{tenant}:{entity_type}");
+                        index
+                            .entry(index_key)
+                            .or_default()
+                            .insert(entity_id.clone());
+                    }
+                } // write lock dropped before metrics call
                 tracing::info!(
                     tenant = %tenant,
                     count = entities.len(),
                     "populated entity index from event store"
                 );
+                runtime_metrics::record_server_state_metrics(self);
             }
             Err(e) => {
                 tracing::error!(
@@ -144,6 +173,7 @@ impl ServerState {
                         discovered = entities.len(),
                         "hydrated entities from event store"
                     );
+                    runtime_metrics::record_server_state_metrics(self);
                 }
                 Err(e) => {
                     tracing::error!(
@@ -253,6 +283,7 @@ impl ServerState {
                 .insert(entity_id.to_string());
         }
         self.touch_actor_access(&key);
+        runtime_metrics::record_server_state_metrics(self);
 
         Some(actor_ref)
     }
@@ -280,6 +311,7 @@ impl ServerState {
                 ids.remove(entity_id);
             }
         }
+        runtime_metrics::record_server_state_metrics(self);
     }
 
     /// List all entity IDs for a (tenant, entity_type) pair.
@@ -334,9 +366,13 @@ impl ServerState {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect(); // determinism-ok
         let authz_start = sim_now();
-        let decision = self
-            .authz
-            .authorize_or_bypass(security_ctx, action, resource_type, &attrs);
+        let decision = self.authz.authorize_for_tenant_or_bypass(
+            tenant,
+            security_ctx,
+            action,
+            resource_type,
+            &attrs,
+        );
         let duration_ns = (sim_now() - authz_start)
             .num_nanoseconds()
             .unwrap_or(0)
@@ -657,11 +693,16 @@ impl ServerState {
                 if let Ok(mut last_accessed) = self.last_accessed.write() {
                     last_accessed.remove(&actor_key);
                 }
+                // Evict the state cache entry so stale status doesn't linger.
+                if let Ok(mut cache) = self.entity_state_cache.lock() {
+                    cache.pop(&actor_key);
+                }
                 passivated += 1;
             }
         }
 
         if passivated > 0 {
+            runtime_metrics::record_server_state_metrics(self);
             tracing::info!(count = passivated, timeout_secs, "passivated idle actors");
         }
     }
@@ -774,9 +815,9 @@ impl ServerState {
         entity_type: &str,
         entity_id: &str,
     ) -> Option<String> {
-        // Fast path: check cache
+        // Fast path: check cache (LruCache::get requires &mut, so use Mutex).
         let cache_key = format!("{tenant}:{entity_type}:{entity_id}");
-        if let Ok(cache) = self.entity_state_cache.read()
+        if let Ok(mut cache) = self.entity_state_cache.lock()
             && let Some((status, _timestamp)) = cache.get(&cache_key)
         {
             return Some(status.clone());

@@ -28,7 +28,14 @@ async fn persist_evolution_record(
     derived_from: Option<&str>,
     data_json: &str,
 ) -> Result<(), String> {
-    let Some(turso) = state.persistent_store() else {
+    let Some(turso) = state.platform_persistent_store() else {
+        tracing::debug!(
+            record_id,
+            record_type,
+            status,
+            created_by,
+            "evolution.store.unavailable"
+        );
         return Ok(());
     };
     turso
@@ -41,7 +48,26 @@ async fn persist_evolution_record(
             data_json,
         )
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| {
+            tracing::warn!(
+                record_id,
+                record_type,
+                status,
+                created_by,
+                error = %e,
+                "evolution.store.write"
+            );
+            e.to_string()
+        })?;
+    tracing::info!(
+        record_id,
+        record_type,
+        status,
+        created_by,
+        derived_from,
+        "evolution.store.write"
+    );
+    Ok(())
 }
 
 /// Create an entity in the temper-system tenant, logging a warning on failure.
@@ -75,6 +101,15 @@ async fn persist_alerts(
 ) -> Result<Vec<serde_json::Value>, StatusCode> {
     let mut results = Vec::new();
     for alert in alerts {
+        tracing::warn!(
+            rule = %alert.rule_name,
+            record_id = %alert.record.header.id,
+            source = %alert.record.source,
+            classification = ?alert.record.classification,
+            observed_value = ?alert.record.observed_value,
+            threshold = ?alert.record.threshold_value,
+            "evolution.sentinel"
+        );
         let data_json = serde_json::to_string(&alert.record).unwrap_or_default();
         if let Err(e) = persist_evolution_record(
             state,
@@ -87,7 +122,11 @@ async fn persist_alerts(
         )
         .await
         {
-            tracing::error!(record_id = %alert.record.header.id, error = %e, "failed to persist sentinel observation");
+            tracing::warn!(
+                record_id = %alert.record.header.id,
+                error = %e,
+                "evolution.store.write"
+            );
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
 
@@ -128,6 +167,15 @@ async fn persist_insights(
 ) -> Vec<serde_json::Value> {
     let mut results = Vec::new();
     for insight in insights {
+        tracing::info!(
+            record_id = %insight.header.id,
+            category = ?insight.category,
+            intent = %insight.signal.intent,
+            volume = insight.signal.volume,
+            success_rate = insight.signal.success_rate,
+            priority_score = insight.priority_score,
+            "evolution.insight"
+        );
         let data_json = serde_json::to_string(insight).unwrap_or_default();
         if let Err(e) = persist_evolution_record(
             state,
@@ -140,7 +188,7 @@ async fn persist_insights(
         )
         .await
         {
-            tracing::error!(record_id = %insight.header.id, error = %e, "failed to persist insight");
+            tracing::warn!(record_id = %insight.header.id, error = %e, "evolution.store.write");
         }
 
         let insight_id = format!("INS-{}", sim_uuid());
@@ -177,19 +225,41 @@ async fn persist_insights(
 /// Evaluates all default sentinel rules against current server state.
 /// Any triggered rules generate O-Records and store them in the RecordStore.
 /// Returns a list of alerts (may be empty if all is healthy).
-#[instrument(skip_all, fields(otel.name = "POST /api/evolution/sentinel/check"))]
+#[instrument(skip_all, fields(
+    otel.name = "POST /api/evolution/sentinel/check",
+    trajectory_count = tracing::field::Empty,
+    alerts_count = tracing::field::Empty,
+    insights_count = tracing::field::Empty,
+))]
 pub(crate) async fn handle_sentinel_check(
     State(state): State<ServerState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     require_observe_auth(&state, &headers, "run_sentinel", "Evolution")?;
-    let trajectory_entries = state.load_trajectory_entries(10_000).await;
+    let trajectory_entries = state.load_trajectory_entries(1_000).await;
+    tracing::Span::current().record("trajectory_count", trajectory_entries.len());
+    tracing::info!(
+        trajectory_count = trajectory_entries.len(),
+        "evolution.sentinel"
+    );
 
     let rules = sentinel::default_rules();
     let alerts = sentinel::check_rules(&rules, &state, &trajectory_entries);
+    tracing::Span::current().record("alerts_count", alerts.len());
+    if alerts.is_empty() {
+        tracing::info!(rule_count = rules.len(), "evolution.sentinel");
+    } else {
+        tracing::warn!(
+            rule_count = rules.len(),
+            alerts_count = alerts.len(),
+            "evolution.sentinel"
+        );
+    }
     let results = persist_alerts(&state, &alerts).await?;
 
     let insights = insight_generator::generate_insights(&trajectory_entries);
+    tracing::Span::current().record("insights_count", insights.len());
+    tracing::info!(insights_count = insights.len(), "evolution.insight");
     let insight_results = persist_insights(&state, &insights).await;
 
     Ok(Json(serde_json::json!({
@@ -201,16 +271,58 @@ pub(crate) async fn handle_sentinel_check(
 }
 
 /// GET /observe/evolution/unmet-intents -- grouped unmet intents from trajectories.
-#[instrument(skip_all, fields(otel.name = "GET /observe/evolution/unmet-intents"))]
+///
+/// Uses a SQL GROUP BY aggregation instead of loading raw trajectory rows to
+/// avoid the OOM-causing bulk-load anti-pattern (previously 10,000 rows on
+/// every 15-second Observe UI poll).
+#[instrument(skip_all, fields(
+    otel.name = "GET /observe/evolution/unmet-intents",
+    open_count = tracing::field::Empty,
+    resolved_count = tracing::field::Empty,
+    total_intents = tracing::field::Empty,
+))]
 pub(crate) async fn handle_unmet_intents(
     State(state): State<ServerState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     require_observe_auth(&state, &headers, "read_evolution", "Evolution")?;
-    let trajectory_entries = state.load_trajectory_entries(10_000).await;
-    let intents = insight_generator::generate_unmet_intents(&trajectory_entries);
+    let (failure_rows, submitted_specs) = state.load_unmet_intent_rows_aggregated().await;
+    let intents =
+        insight_generator::generate_unmet_intents_from_aggregated(&failure_rows, &submitted_specs);
     let open_count = intents.iter().filter(|i| i.status == "open").count();
     let resolved_count = intents.iter().filter(|i| i.status == "resolved").count();
+    tracing::Span::current().record("open_count", open_count);
+    tracing::Span::current().record("resolved_count", resolved_count);
+    tracing::Span::current().record("total_intents", intents.len());
+    if open_count > 0 {
+        tracing::warn!(
+            open_count,
+            resolved_count,
+            total = intents.len(),
+            "unmet_intent"
+        );
+    } else {
+        tracing::info!(
+            open_count,
+            resolved_count,
+            total = intents.len(),
+            "unmet_intent"
+        );
+    }
+
+    // Per-intent detail at debug level to avoid OTEL span spam on every poll.
+    for intent in &intents {
+        tracing::debug!(
+            entity_type = %intent.entity_type,
+            action = %intent.action,
+            error_pattern = %intent.error_pattern,
+            failure_count = intent.failure_count,
+            first_seen = %intent.first_seen,
+            last_seen = %intent.last_seen,
+            recommendation = %intent.recommendation,
+            "unmet_intent.detail"
+        );
+    }
 
     Ok(Json(serde_json::json!({
         "intents": intents,
@@ -232,11 +344,11 @@ pub(crate) async fn handle_feature_requests(
     let disposition_filter = params.get("disposition").map(|d| d.as_str());
 
     // Load trajectory entries for feature request generation.
-    let trajectory_entries = state.load_trajectory_entries(10_000).await;
+    let trajectory_entries = state.load_trajectory_entries(1_000).await;
 
     // Query Turso directly (single source of truth).
     let system_tenant = TenantId::new("temper-system");
-    if let Some(turso) = state.persistent_store() {
+    if let Some(turso) = state.platform_persistent_store() {
         // First, generate and upsert fresh feature requests from trajectory data.
         let generated = insight_generator::generate_feature_requests(&trajectory_entries);
         for fr in &generated {
@@ -357,7 +469,7 @@ pub(crate) async fn handle_update_feature_request(
         }
     }
 
-    let Some(turso) = state.persistent_store() else {
+    let Some(turso) = state.platform_persistent_store() else {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     };
 

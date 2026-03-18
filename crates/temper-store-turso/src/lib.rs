@@ -5,6 +5,7 @@
 //! This crate implements the [`EventStore`](temper_runtime::persistence::EventStore)
 //! trait from `temper-runtime` using libSQL (Turso-compatible).
 
+mod metrics;
 pub mod router;
 pub mod schema;
 pub mod store;
@@ -47,6 +48,8 @@ pub struct TursoTrajectoryInsert<'a> {
     pub source: Option<&'a str>,
     pub spec_governed: Option<bool>,
     pub created_at: &'a str,
+    pub request_body: Option<&'a str>,
+    pub intent: Option<&'a str>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -63,9 +66,10 @@ pub struct TursoWasmInvocationInsert<'a> {
     pub created_at: &'a str,
 }
 
+pub use metrics::init_metrics;
 pub use router::{TenantRegistryRow, TenantStoreRouter, TenantUserRow};
 pub use store::{
-    AgentSummary, DesignTimeEventRow, EvolutionRecordRow, FeatureRequestRow, TursoEventStore,
-    TursoSpecRow, TursoTenantConstraintRow, TursoTrajectoryRow, TursoWasmInvocationRow,
-    TursoWasmModuleRow,
+    ActionStats, AgentSummary, DesignTimeEventRow, EvolutionRecordRow, FeatureRequestRow,
+    PolicyRow, TursoEventStore, TursoSpecRow, TursoTenantConstraintRow, TursoTrajectoryRow,
+    TursoWasmInvocationRow, TursoWasmModuleRow, UnmetIntentAggRow,
 };

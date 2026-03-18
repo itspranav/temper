@@ -16,6 +16,8 @@
 //! | `OTLP_ENDPOINT` | OTEL collector base URL (e.g. `http://localhost:4318`) |
 //! | `LOGFIRE_TOKEN` | Logfire write token — auto-sets endpoint + auth header |
 //! | `RUST_LOG` | Log level filter (default: `info`) |
+//! | `TEMPER_TRACE_QUEUE_SIZE` | Max buffered spans before drop (default: 2048, range: 128–32768) |
+//! | `TEMPER_LOG_QUEUE_SIZE` | Max buffered log records before drop (default: 2048, range: 128–32768) |
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -28,23 +30,35 @@ use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::logs::{
     BatchConfigBuilder as LogBatchConfigBuilder, BatchLogProcessor, SdkLoggerProvider,
 };
-use opentelemetry_sdk::metrics::SdkMeterProvider;
+use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 use opentelemetry_sdk::trace::{
     BatchConfigBuilder as SpanBatchConfigBuilder, BatchSpanProcessor, SdkTracerProvider,
 };
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::prelude::*;
 
 /// Default OTLP endpoint for Logfire.
 const LOGFIRE_ENDPOINT: &str = "https://logfire-us.pydantic.dev";
 const OTEL_EXPORTER_BUILD_RETRY_ATTEMPTS: usize = 3;
 const OTEL_EXPORTER_RETRY_BASE_DELAY_MS: u64 = 250;
-const TRACE_BATCH_MAX_QUEUE_SIZE: usize = 16_384;
-const TRACE_BATCH_MAX_EXPORT_BATCH_SIZE: usize = 1_024;
+const TRACE_BATCH_MAX_QUEUE_SIZE: usize = 2_048;
+const TRACE_BATCH_MAX_EXPORT_BATCH_SIZE: usize = 512;
 const TRACE_BATCH_SCHEDULE_DELAY_MS: u64 = 1_000;
-const LOG_BATCH_MAX_QUEUE_SIZE: usize = 16_384;
-const LOG_BATCH_MAX_EXPORT_BATCH_SIZE: usize = 1_024;
+const LOG_BATCH_MAX_QUEUE_SIZE: usize = 2_048;
+const LOG_BATCH_MAX_EXPORT_BATCH_SIZE: usize = 512;
 const LOG_BATCH_SCHEDULE_DELAY_MS: u64 = 1_000;
+
+/// Read an OTEL queue-size override from the environment, falling back to the
+/// compiled-in default.  Called once at startup so the `std::env::var` is
+/// acceptable (determinism-ok: read once at init).
+fn queue_size_from_env(var: &str, default: usize) -> usize {
+    std::env::var(var) // determinism-ok: startup config
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(default)
+        .clamp(128, 32_768)
+}
 
 #[derive(Clone, Copy, Debug)]
 enum EndpointSource {
@@ -177,8 +191,9 @@ impl OtelGuard {
 ///
 /// Resolution order for the OTLP endpoint:
 /// 1. `OTLP_ENDPOINT` env var → full OTEL export to that endpoint
-/// 2. `LOGFIRE_TOKEN` env var → full OTEL export to Logfire default endpoint
-/// 3. Neither → stderr-only logging (no OTEL export)
+/// 2. `OTEL_EXPORTER_OTLP_ENDPOINT` env var → full OTEL export to that endpoint
+/// 3. `LOGFIRE_TOKEN` env var → full OTEL export to Logfire default endpoint
+/// 4. Neither → stderr-only logging (no OTEL export)
 ///
 /// When `LOGFIRE_TOKEN` is set, an `Authorization: Bearer <token>` header
 /// is injected into all OTLP exporters regardless of which endpoint is used.
@@ -287,8 +302,9 @@ pub fn init_tracing(
             .build()
     })?;
 
+    let trace_queue = queue_size_from_env("TEMPER_TRACE_QUEUE_SIZE", TRACE_BATCH_MAX_QUEUE_SIZE);
     let trace_batch_config = SpanBatchConfigBuilder::default()
-        .with_max_queue_size(TRACE_BATCH_MAX_QUEUE_SIZE)
+        .with_max_queue_size(trace_queue)
         .with_max_export_batch_size(TRACE_BATCH_MAX_EXPORT_BATCH_SIZE)
         .with_scheduled_delay(Duration::from_millis(TRACE_BATCH_SCHEDULE_DELAY_MS))
         .build();
@@ -312,8 +328,13 @@ pub fn init_tracing(
             .build()
     })?;
 
+    // Export every 30 s so metrics are visible quickly and canary gauges stay fresh.
+    let metric_reader = PeriodicReader::builder(metric_exporter)
+        .with_interval(Duration::from_secs(30))
+        .build();
+
     let meter_provider = SdkMeterProvider::builder()
-        .with_periodic_exporter(metric_exporter)
+        .with_reader(metric_reader)
         .with_resource(resource.clone())
         .build();
 
@@ -327,8 +348,9 @@ pub fn init_tracing(
             .build()
     })?;
 
+    let log_queue = queue_size_from_env("TEMPER_LOG_QUEUE_SIZE", LOG_BATCH_MAX_QUEUE_SIZE);
     let log_batch_config = LogBatchConfigBuilder::default()
-        .with_max_queue_size(LOG_BATCH_MAX_QUEUE_SIZE)
+        .with_max_queue_size(log_queue)
         .with_max_export_batch_size(LOG_BATCH_MAX_EXPORT_BATCH_SIZE)
         .with_scheduled_delay(Duration::from_millis(LOG_BATCH_SCHEDULE_DELAY_MS))
         .build();
@@ -356,21 +378,28 @@ pub fn init_tracing(
     let otel_trace_layer =
         tracing_opentelemetry::layer().with_tracer(tracer_provider.tracer("temper"));
 
-    let otel_log_layer = OpenTelemetryTracingBridge::new(&logger_provider);
+    // Restrict the log bridge to WARN+ to avoid flooding Logfire's /v1/logs
+    // endpoint with high-volume info events.  Traces already capture info-level
+    // spans via the otel_trace_layer, so no diagnostic value is lost.
+    let otel_log_layer =
+        OpenTelemetryTracingBridge::new(&logger_provider).with_filter(LevelFilter::WARN);
 
     tracing_subscriber::registry()
         .with(env_filter)
         .with(fmt_layer)
         .with(otel_trace_layer)
         .with(otel_log_layer)
-        .init();
+        .try_init()
+        .map_err(|e| {
+            std::io::Error::other(format!("failed to initialize tracing subscriber: {e}"))
+        })?;
 
     tracing::info!(
         endpoint,
         service_name,
-        trace_queue = TRACE_BATCH_MAX_QUEUE_SIZE,
+        trace_queue,
         trace_batch = TRACE_BATCH_MAX_EXPORT_BATCH_SIZE,
-        log_queue = LOG_BATCH_MAX_QUEUE_SIZE,
+        log_queue,
         log_batch = LOG_BATCH_MAX_EXPORT_BATCH_SIZE,
         "OTEL initialised (traces + metrics + logs)"
     );
@@ -390,8 +419,117 @@ pub fn init_stderr_only() {
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,hyper=warn,h2=warn"));
 
-    tracing_subscriber::registry()
+    if let Err(e) = tracing_subscriber::registry()
         .with(env_filter)
         .with(tracing_subscriber::fmt::layer().with_target(true))
-        .init();
+        .try_init()
+    {
+        eprintln!("stderr tracing subscriber already initialized: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    const TEST_ENV_VARS: [&str; 3] = [
+        "OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "LOGFIRE_TOKEN",
+    ];
+
+    fn with_test_env(values: &[(&str, Option<&str>)], f: impl FnOnce()) {
+        let _guard = ENV_LOCK.lock().expect("env mutex must lock");
+        let snapshot: Vec<(&str, Option<String>)> = TEST_ENV_VARS
+            .iter()
+            .map(|key| (*key, std::env::var(key).ok()))
+            .collect();
+
+        for (key, value) in values {
+            match value {
+                Some(v) => unsafe { std::env::set_var(key, v) },
+                None => unsafe { std::env::remove_var(key) },
+            }
+        }
+
+        f();
+
+        for (key, value) in snapshot {
+            match value {
+                Some(v) => unsafe { std::env::set_var(key, v) },
+                None => unsafe { std::env::remove_var(key) },
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_config_prefers_otlp_endpoint() {
+        with_test_env(
+            &[
+                ("OTLP_ENDPOINT", Some("http://otlp:4318")),
+                ("OTEL_EXPORTER_OTLP_ENDPOINT", Some("http://other:4318")),
+                ("LOGFIRE_TOKEN", Some("abc123")),
+            ],
+            || {
+                let config = resolve_otel_config().expect("config should resolve");
+                assert_eq!(config.endpoint, "http://otlp:4318");
+                assert_eq!(config.endpoint_source.as_str(), "OTLP_ENDPOINT");
+                assert_eq!(config.logfire_token.as_deref(), Some("abc123"));
+            },
+        );
+    }
+
+    #[test]
+    fn resolve_config_uses_exporter_endpoint_when_otlp_missing() {
+        with_test_env(
+            &[
+                ("OTLP_ENDPOINT", None),
+                ("OTEL_EXPORTER_OTLP_ENDPOINT", Some("http://collector:4318")),
+                ("LOGFIRE_TOKEN", None),
+            ],
+            || {
+                let config = resolve_otel_config().expect("config should resolve");
+                assert_eq!(config.endpoint, "http://collector:4318");
+                assert_eq!(
+                    config.endpoint_source.as_str(),
+                    "OTEL_EXPORTER_OTLP_ENDPOINT"
+                );
+                assert_eq!(config.logfire_token, None);
+            },
+        );
+    }
+
+    #[test]
+    fn resolve_config_falls_back_to_logfire_token() {
+        with_test_env(
+            &[
+                ("OTLP_ENDPOINT", None),
+                ("OTEL_EXPORTER_OTLP_ENDPOINT", None),
+                ("LOGFIRE_TOKEN", Some("abc123")),
+            ],
+            || {
+                let config = resolve_otel_config().expect("config should resolve");
+                assert_eq!(config.endpoint, LOGFIRE_ENDPOINT);
+                assert_eq!(config.endpoint_source.as_str(), "LOGFIRE_TOKEN");
+                assert_eq!(config.logfire_token.as_deref(), Some("abc123"));
+            },
+        );
+    }
+
+    #[test]
+    fn resolve_config_ignores_empty_values() {
+        with_test_env(
+            &[
+                ("OTLP_ENDPOINT", Some("   ")),
+                ("OTEL_EXPORTER_OTLP_ENDPOINT", Some("")),
+                ("LOGFIRE_TOKEN", Some(" ")),
+            ],
+            || {
+                let config = resolve_otel_config();
+                assert!(config.is_none(), "all-empty env vars should disable OTEL");
+            },
+        );
+    }
 }

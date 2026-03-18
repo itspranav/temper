@@ -11,7 +11,7 @@ mod bootstrap;
 mod loader;
 mod storage;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -38,6 +38,7 @@ struct LoadedTenantSpecs {
     pub csdl_xml: String,
     pub ioa_sources: HashMap<String, String>,
     pub cross_invariants_toml: Option<String>,
+    pub cedar_policy_text: Option<String>,
 }
 
 /// Run the `temper serve` command.
@@ -59,15 +60,19 @@ pub async fn run(
     storage: StorageBackend,
     storage_explicit: bool,
     observe: bool,
+    verify_subprocess: bool,
 ) -> Result<()> {
     let _otel_guard = init_observability("temper-platform");
+    temper_authz::init_metrics();
+    temper_store_turso::init_metrics();
     let api_key = std::env::var("ANTHROPIC_API_KEY").ok();
 
     // Phase 1: Storage backend
     let (pg_pool, event_store) = bootstrap::init_storage(storage, storage_explicit).await?;
 
     // Phase 2: Registry (restore + disk apps)
-    let registry = bootstrap::build_registry(pg_pool.as_ref(), &event_store, &apps).await?;
+    let (registry, mut tenant_policy_seed) =
+        bootstrap::build_registry(pg_pool.as_ref(), &event_store, &apps).await?;
 
     // Assemble platform state
     let mut state = PlatformState::with_registry(registry, api_key);
@@ -80,12 +85,23 @@ pub async fn run(
     state.server.data_dir = data_dir.clone();
 
     // Phase 3: Auto-reload previously registered specs
-    let auto_reloaded = bootstrap::auto_reload_specs(&state, &data_dir);
+    let (auto_reloaded, auto_reloaded_policies) = bootstrap::auto_reload_specs(&state, &data_dir);
+    tenant_policy_seed.extend(auto_reloaded_policies);
+
+    seed_cedar_policies(&state, tenant_policy_seed);
     println!(
         "  Auto-reloaded {auto_reloaded} specs entries from {}",
         data_dir.join("specs-registry.json").display()
     );
     state.server.rebuild_reaction_dispatcher();
+
+    // Configure subprocess verification if requested.
+    if verify_subprocess {
+        let bin = std::env::current_exe() // determinism-ok: read once at startup
+            .unwrap_or_else(|_| std::path::PathBuf::from("temper"));
+        state.server.verify_subprocess_bin = Some(Arc::new(bin));
+        println!("  Verification mode: subprocess (30s timeout per entity)");
+    }
 
     // Phase 4: Webhooks
     state.server.webhook_dispatcher = bootstrap::load_webhooks(&apps);
@@ -137,17 +153,8 @@ pub async fn run(
     // Phase 8: Bootstrap system + agent tenants
     bootstrap::bootstrap_tenants(&state, &apps).await;
 
-    // Phase 8b: Install OS apps into default tenant (from --os-app flags)
-    for app_name in &os_apps {
-        match temper_platform::install_os_app(&state, "default", app_name).await {
-            Ok(entities) => {
-                println!("  OS app '{app_name}' installed: {}", entities.join(", "));
-            }
-            Err(e) => {
-                eprintln!("  Warning: failed to install OS app '{app_name}': {e}");
-            }
-        }
-    }
+    // Phase 8b: Restore persisted OS apps + apply CLI `--os-app` requests.
+    bootstrap::bootstrap_installed_os_apps(&state, &os_apps).await;
 
     // Phase 9: Bind, start background tasks, serve
     let router = build_platform_router(state.clone());
@@ -176,6 +183,24 @@ pub async fn run(
         .context("Server error")?;
 
     Ok(())
+}
+
+fn seed_cedar_policies(state: &PlatformState, tenant_policy_seed: BTreeMap<String, String>) {
+    for (tenant, policy_text) in &tenant_policy_seed {
+        if let Err(e) = state
+            .server
+            .authz
+            .reload_tenant_policies(tenant, policy_text)
+        {
+            eprintln!("  Warning: failed to load Cedar policies for tenant '{tenant}': {e}");
+            continue;
+        }
+    }
+    // Update in-memory text cache.
+    let mut policies = state.server.tenant_policies.write().unwrap(); // ci-ok: infallible lock
+    for (tenant, policy_text) in tenant_policy_seed {
+        policies.insert(tenant, policy_text);
+    }
 }
 
 fn spawn_optimization_loop(state: &PlatformState) {
@@ -469,15 +494,24 @@ async fn spawn_background_verification(state: &PlatformState, specs_dir: &str, t
 
             println!("  [verify] Starting verification for {entity}...");
 
-            // Run the cascade in a blocking task (CPU-intensive).
             let entity_clone = entity.clone();
-            let result = tokio::task::spawn_blocking(move || {
-                VerificationCascade::from_ioa(&ioa_source)
-                    .with_sim_seeds(5)
-                    .with_prop_test_cases(100)
-                    .run()
-            })
-            .await;
+
+            // Run the cascade: in subprocess (isolated) or in-process (default).
+            let result: Result<temper_verify::CascadeResult, String> = if let Some(bin) =
+                server.verify_subprocess_bin.as_deref()
+            {
+                temper_server::observe::subprocess_verify::verify_in_subprocess(bin, &ioa_source)
+                    .await
+            } else {
+                tokio::task::spawn_blocking(move || {
+                    VerificationCascade::from_ioa(&ioa_source)
+                        .with_sim_seeds(5)
+                        .with_prop_test_cases(100)
+                        .run()
+                })
+                .await
+                .map_err(|e| e.to_string())
+            };
 
             match result {
                 Ok(cascade_result) => {
@@ -591,14 +625,14 @@ async fn spawn_background_verification(state: &PlatformState, specs_dir: &str, t
                     }
                 }
                 Err(e) => {
-                    eprintln!("  [verify] {entity_clone}: verification task panicked: {e}");
+                    eprintln!("  [verify] {entity_clone}: verification failed: {e}");
 
                     let verification_result = EntityVerificationResult {
                         all_passed: false,
                         levels: vec![EntityLevelSummary {
                             level: "Error".to_string(),
                             passed: false,
-                            summary: format!("Verification task panicked: {e}"),
+                            summary: format!("Verification failed: {e}"),
                             details: None,
                         }],
                         verified_at: chrono::Utc::now().to_rfc3339(), // determinism-ok: CLI code
@@ -638,7 +672,7 @@ async fn spawn_background_verification(state: &PlatformState, specs_dir: &str, t
                             kind: "verify_done".to_string(),
                             entity_type: entity_clone,
                             tenant: tenant.clone(),
-                            summary: "Verification panicked".to_string(),
+                            summary: format!("Verification failed: {e}"),
                             level: None,
                             passed: Some(false),
                             timestamp: chrono::Utc::now().to_rfc3339(), // determinism-ok: CLI code

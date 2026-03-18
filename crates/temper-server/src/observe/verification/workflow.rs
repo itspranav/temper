@@ -105,12 +105,13 @@ async fn fetch_event_log(state: &ServerState) -> Vec<crate::state::DesignTimeEve
         }
     }
 
-    // Turso fallback.
-    if let Some(turso) = state.persistent_store() {
+    // Turso fallback: fan-out across all tenant stores.
+    let stores = state.collect_all_turso_stores().await;
+    let mut all_events = Vec::new();
+    for turso in &stores {
         match turso.list_design_time_events(None, 10_000).await {
-            Ok(rows) => rows
-                .into_iter()
-                .map(|r| crate::state::DesignTimeEvent {
+            Ok(rows) => {
+                all_events.extend(rows.into_iter().map(|r| crate::state::DesignTimeEvent {
                     kind: r.kind,
                     entity_type: r.entity_type,
                     tenant: r.tenant,
@@ -120,36 +121,21 @@ async fn fetch_event_log(state: &ServerState) -> Vec<crate::state::DesignTimeEve
                     timestamp: r.created_at,
                     step_number: r.step_number.map(|n| n as u8),
                     total_steps: r.total_steps.map(|n| n as u8),
-                })
-                .collect(),
+                }));
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "failed to read design_time_events from Turso");
-                Vec::new()
             }
         }
-    } else {
-        Vec::new()
     }
+    all_events
 }
 
-/// Fetch per-tenant trajectory counts from Turso.
+/// Fetch per-tenant trajectory counts from Turso using a SQL aggregate query.
+///
+/// Previously loaded up to 100,000 raw rows just to count them in Rust.
 async fn fetch_runtime_counts(state: &ServerState) -> std::collections::BTreeMap<String, u64> {
-    let Some(turso) = state.persistent_store() else {
-        return std::collections::BTreeMap::new();
-    };
-    match turso.load_recent_trajectories(100_000).await {
-        Ok(rows) => {
-            let mut counts = std::collections::BTreeMap::new();
-            for row in &rows {
-                *counts.entry(row.tenant.clone()).or_insert(0) += 1;
-            }
-            counts
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "failed to read trajectory counts from Turso");
-            std::collections::BTreeMap::new()
-        }
-    }
+    state.count_trajectories_by_tenant().await
 }
 
 /// Build a step from an event log entry matching a given kind.
