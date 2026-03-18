@@ -451,7 +451,8 @@ pub(super) async fn bootstrap_tenants(state: &PlatformState, apps: &[(String, St
     }
 
     let default_cache = load_verified_cache(state, "default").await;
-    let default_hashes = temper_platform::bootstrap_agent_specs(state, "default", &default_cache);
+    let default_hashes =
+        temper_platform::bootstrap_agent_specs(state, "default", false, &default_cache);
     if let Some(ref store) = state.server.event_store
         && let Some(turso) = store.turso_for_tenant("default").await
     {
@@ -460,7 +461,9 @@ pub(super) async fn bootstrap_tenants(state: &PlatformState, apps: &[(String, St
 
     for (tenant, _dir) in apps {
         let cache = load_verified_cache(state, tenant).await;
-        let hashes = temper_platform::bootstrap_agent_specs(state, tenant, &cache);
+        // App tenants already have user specs loaded in Phase 2; merge the
+        // built-in agent OS entities so we do not replace their entity-set map.
+        let hashes = temper_platform::bootstrap_agent_specs(state, tenant, true, &cache);
         if let Some(ref store) = state.server.event_store
             && let Some(turso) = store.turso_for_tenant(tenant).await
         {
@@ -476,7 +479,7 @@ pub(super) async fn bootstrap_tenants(state: &PlatformState, apps: &[(String, St
     {
         for tenant in tenant_router.connected_tenants().await {
             let cache = load_verified_cache(state, &tenant).await;
-            let hashes = temper_platform::bootstrap_agent_specs(state, &tenant, &cache);
+            let hashes = temper_platform::bootstrap_agent_specs(state, &tenant, true, &cache);
             if let Some(turso) = store.turso_for_tenant(&tenant).await {
                 temper_platform::persist_agent_verification(&turso, &tenant, &hashes).await;
             }
