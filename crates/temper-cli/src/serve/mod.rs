@@ -123,7 +123,7 @@ pub async fn run(
             .expect("TEMPER_VAULT_KEY must be valid base64");
         assert_eq!(key_bytes.len(), 32, "TEMPER_VAULT_KEY must be 32 bytes");
         let vault = temper_server::secrets::vault::SecretsVault::new(
-            key_bytes.as_slice().try_into().unwrap(),
+            key_bytes.as_slice().try_into().unwrap(), // ci-ok: length asserted == 32 above
         );
         state.server.secrets_vault = Some(std::sync::Arc::new(vault));
         println!("  Secrets vault: configured");
