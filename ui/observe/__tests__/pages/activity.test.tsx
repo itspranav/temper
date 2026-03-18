@@ -9,8 +9,13 @@ vi.mock("@/lib/api", () => ({
 }));
 
 vi.mock("@/lib/hooks", () => ({
-  usePolling: vi.fn(),
+  useSSERefresh: vi.fn(),
   useRelativeTime: vi.fn(),
+}));
+
+vi.mock("@/lib/sse-context", () => ({
+  useSSERefreshSubscribe: vi.fn(),
+  useSSEConnected: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock("next/link", () => ({
@@ -20,10 +25,10 @@ vi.mock("next/link", () => ({
 }));
 
 import { fetchTrajectories } from "@/lib/api";
-import { usePolling, useRelativeTime } from "@/lib/hooks";
+import { useSSERefresh, useRelativeTime } from "@/lib/hooks";
 
 const mockFetchTrajectories = vi.mocked(fetchTrajectories);
-const mockUsePolling = vi.mocked(usePolling);
+const mockUseSSERefresh = vi.mocked(useSSERefresh);
 const mockUseRelativeTime = vi.mocked(useRelativeTime);
 
 const sampleTrajectoryData = {
@@ -57,7 +62,7 @@ const sampleTrajectoryData = {
   ],
 };
 
-function setPollingReturn(trajectoryData: unknown, opts?: { error?: string; entities?: unknown[] }) {
+function setSSERefreshReturn(trajectoryData: unknown, opts?: { error?: string; entities?: unknown[] }) {
   let callIndex = 0;
   const results = [
     {
@@ -75,7 +80,7 @@ function setPollingReturn(trajectoryData: unknown, opts?: { error?: string; enti
       refresh: vi.fn(),
     },
   ];
-  mockUsePolling.mockImplementation(() => {
+  mockUseSSERefresh.mockImplementation(() => {
     const result = results[callIndex % 2];
     callIndex++;
     return result;
@@ -85,13 +90,13 @@ function setPollingReturn(trajectoryData: unknown, opts?: { error?: string; enti
 beforeEach(() => {
   vi.clearAllMocks();
   mockUseRelativeTime.mockReturnValue("5s ago");
-  setPollingReturn(sampleTrajectoryData);
+  setSSERefreshReturn(sampleTrajectoryData);
 });
 
 describe("Activity page", () => {
   it("shows loading skeleton initially", () => {
     mockFetchTrajectories.mockReturnValue(new Promise(() => {}));
-    setPollingReturn(null);
+    setSSERefreshReturn(null);
     const { container } = render(<ActivityPage />);
     expect(container.querySelector(".animate-pulse")).toBeTruthy();
   });
@@ -139,7 +144,7 @@ describe("Activity page", () => {
 
   it("shows error state when API fails", async () => {
     mockFetchTrajectories.mockRejectedValue(new Error("Network error"));
-    setPollingReturn(null);
+    setSSERefreshReturn(null);
     render(<ActivityPage />);
     await waitFor(() => {
       expect(screen.getByText("Cannot load activity")).toBeInTheDocument();

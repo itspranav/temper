@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { fetchWasmModules, fetchWasmInvocations } from "@/lib/api";
-import { usePolling, useRelativeTime } from "@/lib/hooks";
+import { useSSERefresh, useRelativeTime } from "@/lib/hooks";
 import type { WasmModulesResponse, WasmInvocationsResponse } from "@/lib/types";
 import ErrorDisplay from "@/components/ErrorDisplay";
 import StatCard from "@/components/StatCard";
@@ -30,18 +30,18 @@ export default function IntegrationsPage() {
     loadInitial();
   }, [loadInitial]);
 
-  const modulesPoll = usePolling<WasmModulesResponse>({
+  const modulesPoll = useSSERefresh<WasmModulesResponse>({
     fetcher: fetchWasmModules,
-    interval: 5000,
+    sseKinds: ["Entities"],
     enabled: !initialLoading && !initialError,
   });
 
-  const invocationsPoll = usePolling<WasmInvocationsResponse>({
+  const invocationsPoll = useSSERefresh<WasmInvocationsResponse>({
     fetcher: () =>
       fetchWasmInvocations(
         moduleFilter !== "all" ? { module_name: moduleFilter, limit: 100 } : { limit: 100 },
       ),
-    interval: 5000,
+    sseKinds: ["Entities"],
     enabled: !initialLoading && !initialError,
   });
 

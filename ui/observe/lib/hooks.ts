@@ -1,14 +1,9 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useSSERefreshSubscribe } from "./sse-context";
 
-interface UsePollingOptions<T> {
-  fetcher: () => Promise<T>;
-  interval: number;
-  enabled?: boolean;
-}
-
-interface UsePollingResult<T> {
+export interface UsePollingResult<T> {
   data: T | null;
   error: string | null;
   loading: boolean;
@@ -16,61 +11,65 @@ interface UsePollingResult<T> {
   refresh: () => Promise<void>;
 }
 
-export function usePolling<T>({
+interface UseSSERefreshOptions<T> {
+  fetcher: () => Promise<T>;
+  sseKinds: string[];
+  enabled?: boolean;
+}
+
+export function useSSERefresh<T>({
   fetcher,
-  interval,
+  sseKinds,
   enabled = true,
-}: UsePollingOptions<T>): UsePollingResult<T> {
+}: UseSSERefreshOptions<T>): UsePollingResult<T> {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fetcherRef = useRef(fetcher);
   const abortRef = useRef<AbortController | null>(null);
   fetcherRef.current = fetcher;
 
-  const doFetch = useCallback(async (showLoading = false) => {
-    // Cancel any in-flight request
+  const doFetch = useCallback(async (isInitial: boolean) => {
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
-
-    if (showLoading) setLoading(true);
     try {
+      if (isInitial) setLoading(true);
       const result = await fetcherRef.current();
       if (!controller.signal.aborted) {
         setData(result);
         setError(null);
         setLastUpdated(new Date());
+        if (isInitial) setLoading(false);
       }
     } catch (err) {
       if (!controller.signal.aborted) {
-        setError(err instanceof Error ? err.message : "Unknown error");
-      }
-    } finally {
-      if (!controller.signal.aborted) {
-        setLoading(false);
+        setError(err instanceof Error ? err.message : String(err));
+        if (isInitial) setLoading(false);
       }
     }
   }, []);
 
+  // Initial fetch
   useEffect(() => {
     if (!enabled) return;
     doFetch(true);
-    intervalRef.current = setInterval(() => doFetch(false), interval);
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      abortRef.current?.abort();
-    };
-  }, [doFetch, interval, enabled]);
+    return () => { abortRef.current?.abort(); };
+  }, [enabled, doFetch]);
 
-  const refresh = useCallback(() => doFetch(false), [doFetch]);
+  // SSE-driven refetch
+  useSSERefreshSubscribe(
+    enabled ? sseKinds : [],
+    () => { if (enabled) doFetch(false); }
+  );
+
+  const refresh = useCallback(async () => { await doFetch(false); }, [doFetch]);
 
   return { data, error, loading, lastUpdated, refresh };
 }
 
-export function useRelativeTime(date: Date | null): string {
+export function useRelativeTime(date: Date | string | null): string {
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -96,7 +95,9 @@ export function useRelativeTime(date: Date | null): string {
   }, []);
 
   if (!date) return "";
-  const seconds = Math.floor((now - date.getTime()) / 1000);
+  const d = typeof date === "string" ? new Date(date) : date;
+  if (isNaN(d.getTime())) return "";
+  const seconds = Math.floor((now - d.getTime()) / 1000);
   if (seconds < 5) return "just now";
   if (seconds < 60) return `${seconds}s ago`;
   const minutes = Math.floor(seconds / 60);

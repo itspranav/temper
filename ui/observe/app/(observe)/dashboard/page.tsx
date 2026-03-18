@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { fetchSpecs, fetchEntities, fetchVerificationStatus, subscribeDesignTimeEvents, subscribeEntityEvents } from "@/lib/api";
-import { usePolling, useRelativeTime } from "@/lib/hooks";
+import { useSSERefresh, useRelativeTime } from "@/lib/hooks";
 import type { SpecSummary, EntitySummary, AllVerificationStatus } from "@/lib/types";
 import SpecCard from "@/components/SpecCard";
 import ErrorDisplay from "@/components/ErrorDisplay";
@@ -151,27 +151,27 @@ export default function Dashboard() {
 
   const [tenantFilter, setTenantFilter] = useState<string>("all");
 
-  // Poll specs every 3s during build to pick up verification_status updates
-  const specPoll = usePolling<SpecSummary[]>({
+  // SSE-driven spec refresh
+  const specPoll = useSSERefresh<SpecSummary[]>({
     fetcher: fetchSpecs,
-    interval: 3000,
+    sseKinds: ["Specs"],
     enabled: !initialLoading && !initialError,
   });
   const specs = useMemo(() => specPoll.data ?? [], [specPoll.data]);
 
-  // Auto-refresh entities every 5s
-  const entityPoll = usePolling<EntitySummary[]>({
+  // SSE-driven entity refresh
+  const entityPoll = useSSERefresh<EntitySummary[]>({
     fetcher: fetchEntities,
-    interval: 5000,
+    sseKinds: ["Entities"],
     enabled: !initialLoading && !initialError,
   });
   const entities = useMemo(() => entityPoll.data ?? [], [entityPoll.data]);
   const lastUpdated = useRelativeTime(entityPoll.lastUpdated);
 
-  // Poll verification status every 2s during build
-  const verifyPoll = usePolling<AllVerificationStatus>({
+  // SSE-driven verification status refresh
+  const verifyPoll = useSSERefresh<AllVerificationStatus>({
     fetcher: fetchVerificationStatus,
-    interval: 2000,
+    sseKinds: ["Verification"],
     enabled: !initialLoading && !initialError,
   });
   const verificationStatus = verifyPoll.data;

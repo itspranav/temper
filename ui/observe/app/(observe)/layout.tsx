@@ -3,6 +3,7 @@ import ErrorBoundary from "@/components/ErrorBoundary";
 import Providers from "@/components/Providers";
 import { ConnectionProvider } from "@/lib/connection";
 import { DecisionNotifierProvider } from "@/lib/decision-notifier";
+import { SSERefreshProvider } from "@/lib/sse-context";
 export default function ObserveLayout({
   children,
 }: Readonly<{
@@ -10,6 +11,7 @@ export default function ObserveLayout({
 }>) {
   return (
     <Providers>
+      <SSERefreshProvider>
       <ConnectionProvider>
         <DecisionNotifierProvider>
           <div className="flex h-screen overflow-hidden">
@@ -25,6 +27,7 @@ export default function ObserveLayout({
           </div>
         </DecisionNotifierProvider>
       </ConnectionProvider>
+      </SSERefreshProvider>
     </Providers>
   );
 }

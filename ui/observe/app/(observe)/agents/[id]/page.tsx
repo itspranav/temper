@@ -4,7 +4,7 @@ import { useState, useMemo } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { fetchAgentHistory } from "@/lib/api";
-import { usePolling, useRelativeTime } from "@/lib/hooks";
+import { useSSERefresh, useRelativeTime } from "@/lib/hooks";
 import type { AgentHistoryResponse } from "@/lib/types";
 import ErrorDisplay from "@/components/ErrorDisplay";
 import StatCard from "@/components/StatCard";
@@ -14,13 +14,13 @@ export default function AgentDetailPage() {
   const agentId = decodeURIComponent(params.id as string);
   const [entityTypeFilter, setEntityTypeFilter] = useState<string>("all");
 
-  const historyPoll = usePolling<AgentHistoryResponse>({
+  const historyPoll = useSSERefresh<AgentHistoryResponse>({
     fetcher: () =>
       fetchAgentHistory(agentId, {
         entity_type: entityTypeFilter !== "all" ? entityTypeFilter : undefined,
         limit: 200,
       }),
-    interval: 5000,
+    sseKinds: ["Agents"],
     enabled: true,
   });
 

@@ -109,6 +109,10 @@ pub(crate) async fn handle_put_policies(
 
     persist_and_activate_policy(&state, &tenant, "primary", &policy_text, "api").await;
 
+    let _ = state
+        .observe_refresh_tx
+        .send(crate::state::ObserveRefreshHint::Policies);
+
     (
         StatusCode::OK,
         axum::Json(serde_json::json!({"tenant": tenant, "status": "loaded"})),
@@ -170,6 +174,10 @@ pub(crate) async fn handle_add_policy_rule(
     }
 
     persist_and_activate_policy(&state, &tenant, "primary", &new_tenant_text, "api").await;
+
+    let _ = state
+        .observe_refresh_tx
+        .send(crate::state::ObserveRefreshHint::Policies);
 
     (
         StatusCode::OK,
@@ -341,6 +349,10 @@ pub(crate) async fn handle_create_policy(
         policies.insert(tenant.clone(), prospective);
     }
 
+    let _ = state
+        .observe_refresh_tx
+        .send(crate::state::ObserveRefreshHint::Policies);
+
     (
         StatusCode::CREATED,
         axum::Json(serde_json::json!({
@@ -443,6 +455,10 @@ pub(crate) async fn handle_patch_policy(
     // Reload tenant policies from Turso to update in-memory state.
     reload_tenant_from_turso(&state, &tenant).await;
 
+    let _ = state
+        .observe_refresh_tx
+        .send(crate::state::ObserveRefreshHint::Policies);
+
     (
         StatusCode::OK,
         axum::Json(serde_json::json!({
@@ -486,6 +502,10 @@ pub(crate) async fn handle_delete_policy_entry(
 
     // Reload tenant policies from Turso to update in-memory state.
     reload_tenant_from_turso(&state, &tenant).await;
+
+    let _ = state
+        .observe_refresh_tx
+        .send(crate::state::ObserveRefreshHint::Policies);
 
     (
         StatusCode::OK,

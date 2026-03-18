@@ -164,17 +164,15 @@ export function DecisionNotifierProvider({
     return () => clearInterval(interval);
   }, [toasts.length]);
 
-  // Poll for pending count (SSE can't send admin headers so it fails with 403)
+  // Initial fetch for pending count
   useEffect(() => {
-    const poll = async () => {
+    const fetchInitial = async () => {
       try {
         const data = await fetchAllDecisions({ status: "pending" });
         setPendingCount(data.pending_count ?? data.decisions.length);
       } catch { /* ignore fetch errors */ }
     };
-    poll();
-    const interval = setInterval(poll, 5000);
-    return () => clearInterval(interval);
+    fetchInitial();
   }, []);
 
   // SSE subscription (best-effort — may fail without admin headers)

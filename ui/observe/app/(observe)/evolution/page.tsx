@@ -9,7 +9,7 @@ import {
   fetchRecordDetail,
   subscribeEvolutionEvents,
 } from "@/lib/api";
-import { usePolling } from "@/lib/hooks";
+import { useSSERefresh } from "@/lib/hooks";
 import type {
   EvolutionRecordsResponse,
   EvolutionInsightsResponse,
@@ -221,21 +221,21 @@ export default function EvolutionPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const recordsPoll = usePolling<EvolutionRecordsResponse>({
+  const recordsPoll = useSSERefresh<EvolutionRecordsResponse>({
     fetcher: fetchEvolutionRecords,
-    interval: 30000,
+    sseKinds: ["EvolutionRecords"],
     enabled: !initialLoading && !initialError,
   });
 
-  const insightsPoll = usePolling<EvolutionInsightsResponse>({
+  const insightsPoll = useSSERefresh<EvolutionInsightsResponse>({
     fetcher: fetchEvolutionInsights,
-    interval: 30000,
+    sseKinds: ["EvolutionInsights"],
     enabled: !initialLoading && !initialError,
   });
 
-  const unmetPoll = usePolling<UnmetIntentsResponse>({
+  const unmetPoll = useSSERefresh<UnmetIntentsResponse>({
     fetcher: fetchUnmetIntents,
-    interval: 30000,
+    sseKinds: ["UnmetIntents"],
     enabled: !initialLoading && !initialError,
   });
 

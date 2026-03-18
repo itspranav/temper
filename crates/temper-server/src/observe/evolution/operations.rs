@@ -262,6 +262,20 @@ pub(crate) async fn handle_sentinel_check(
     tracing::info!(insights_count = insights.len(), "evolution.insight");
     let insight_results = persist_insights(&state, &insights).await;
 
+    // Notify Observe UI that evolution data changed.
+    let _ = state
+        .observe_refresh_tx
+        .send(crate::state::ObserveRefreshHint::EvolutionRecords);
+    let _ = state
+        .observe_refresh_tx
+        .send(crate::state::ObserveRefreshHint::EvolutionInsights);
+    let _ = state
+        .observe_refresh_tx
+        .send(crate::state::ObserveRefreshHint::UnmetIntents);
+    let _ = state
+        .observe_refresh_tx
+        .send(crate::state::ObserveRefreshHint::FeatureRequests);
+
     Ok(Json(serde_json::json!({
         "alerts_count": alerts.len(),
         "alerts": results,
@@ -480,6 +494,10 @@ pub(crate) async fn handle_update_feature_request(
             tracing::error!(error = %e, "failed to update feature request");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
+
+    let _ = state
+        .observe_refresh_tx
+        .send(crate::state::ObserveRefreshHint::FeatureRequests);
 
     Ok(Json(serde_json::json!({
         "id": id,

@@ -3,7 +3,7 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import Link from "next/link";
 import { fetchTrajectories, fetchEntities, subscribeEntityEvents } from "@/lib/api";
-import { usePolling, useRelativeTime } from "@/lib/hooks";
+import { useSSERefresh, useRelativeTime } from "@/lib/hooks";
 import type { TrajectoryResponse, EntityStateChange, EntitySummary } from "@/lib/types";
 import ErrorDisplay from "@/components/ErrorDisplay";
 import StatCard from "@/components/StatCard";
@@ -49,9 +49,9 @@ export default function ActivityPage() {
     loadInitial();
   }, [loadInitial]);
 
-  const trajectoryPoll = usePolling<TrajectoryResponse>({
+  const trajectoryPoll = useSSERefresh<TrajectoryResponse>({
     fetcher: () => fetchTrajectories(filterType !== "all" ? { entity_type: filterType } : undefined),
-    interval: 5000,
+    sseKinds: ["Trajectories"],
     enabled: !initialLoading && !initialError,
   });
 
@@ -91,10 +91,10 @@ export default function ActivityPage() {
     return Array.from(set).sort();
   }, [data]);
 
-  // Entity polling
-  const entityPoll = usePolling<EntitySummary[]>({
+  // Entity refresh via SSE
+  const entityPoll = useSSERefresh<EntitySummary[]>({
     fetcher: fetchEntities,
-    interval: 5000,
+    sseKinds: ["Entities"],
     enabled: !initialLoading && !initialError,
   });
 

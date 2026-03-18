@@ -2,11 +2,9 @@
 
 use std::sync::OnceLock;
 
-use temper_runtime::scheduler::sim_now;
 use temper_runtime::tenant::TenantId;
 
 use crate::state::ServerState;
-use crate::state::trajectory::{TrajectoryEntry, TrajectorySource};
 
 fn env_usize(name: &str, default: usize) -> usize {
     std::env::var(name) // determinism-ok: read once at startup
@@ -99,33 +97,10 @@ pub(super) fn resolve_entity_set_name(
 /// Record a trajectory entry for an EntitySetNotFound error.
 pub(super) async fn record_entity_set_not_found(state: &ServerState, tenant: &str, set_name: &str) {
     tracing::warn!(tenant = %tenant, entity_set = %set_name, "entity set not found");
-    let entry = TrajectoryEntry {
-        timestamp: sim_now().to_rfc3339(),
-        tenant: tenant.to_string(),
-        entity_type: set_name.to_string(),
-        entity_id: "".to_string(),
-        action: "EntitySetLookup".to_string(),
-        success: false,
-        from_status: None,
-        to_status: None,
-        error: Some(format!(
-            "EntitySetNotFound: entity set '{}' not found",
-            set_name
-        )),
-        agent_id: None,
-        session_id: None,
-        authz_denied: None,
-        denied_resource: None,
-        denied_module: None,
-        source: Some(TrajectorySource::Platform),
-        spec_governed: None,
-        agent_type: None,
-        request_body: None,
-        intent: None,
-    };
-    if let Err(e) = state.persist_trajectory_entry(&entry).await {
-        tracing::error!(error = %e, "failed to persist entity-set-not-found trajectory");
-    }
+    // Intentionally no trajectory write: read-only operations must not write to the database.
+    // Previously this wrote a TrajectoryEntry on every failed EntitySetLookup, creating
+    // unbounded junk rows (4,269 rows, 83% of all trajectories) from phantom entity polling.
+    let _ = state; // suppress unused warning
 }
 
 #[cfg(test)]

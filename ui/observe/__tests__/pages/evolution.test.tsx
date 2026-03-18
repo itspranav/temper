@@ -16,8 +16,13 @@ vi.mock("@/lib/api", async (importOriginal) => {
 });
 
 vi.mock("@/lib/hooks", () => ({
-  usePolling: vi.fn(),
+  useSSERefresh: vi.fn(),
   useRelativeTime: vi.fn(),
+}));
+
+vi.mock("@/lib/sse-context", () => ({
+  useSSERefreshSubscribe: vi.fn(),
+  useSSEConnected: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock("next/link", () => ({
@@ -27,11 +32,11 @@ vi.mock("next/link", () => ({
 }));
 
 import { fetchEvolutionRecords, triggerSentinelCheck } from "@/lib/api";
-import { usePolling, useRelativeTime } from "@/lib/hooks";
+import { useSSERefresh, useRelativeTime } from "@/lib/hooks";
 
 const mockFetchRecords = vi.mocked(fetchEvolutionRecords);
 const mockTriggerSentinel = vi.mocked(triggerSentinelCheck);
-const mockUsePolling = vi.mocked(usePolling);
+const mockUseSSERefresh = vi.mocked(useSSERefresh);
 const mockUseRelativeTime = vi.mocked(useRelativeTime);
 
 const sampleRecords = {
@@ -63,7 +68,7 @@ const sampleInsights = {
 
 const sampleUnmetIntents = { intents: [], open_count: 0, resolved_count: 0 };
 
-function setPollingReturns(records: unknown, insights: unknown, unmet?: unknown) {
+function setSSERefreshReturns(records: unknown, insights: unknown, unmet?: unknown) {
   let callIndex = 0;
   const results = [
     {
@@ -88,7 +93,7 @@ function setPollingReturns(records: unknown, insights: unknown, unmet?: unknown)
       refresh: vi.fn(),
     },
   ];
-  mockUsePolling.mockImplementation(() => {
+  mockUseSSERefresh.mockImplementation(() => {
     const result = results[callIndex % results.length];
     callIndex++;
     return result;
@@ -98,13 +103,13 @@ function setPollingReturns(records: unknown, insights: unknown, unmet?: unknown)
 beforeEach(() => {
   vi.clearAllMocks();
   mockUseRelativeTime.mockReturnValue("5s ago");
-  setPollingReturns(sampleRecords, sampleInsights);
+  setSSERefreshReturns(sampleRecords, sampleInsights);
 });
 
 describe("Evolution page", () => {
   it("shows loading skeleton initially", () => {
     mockFetchRecords.mockReturnValue(new Promise(() => {}));
-    setPollingReturns(null, null);
+    setSSERefreshReturns(null, null);
     const { container } = render(<EvolutionPage />);
     expect(container.querySelector(".animate-pulse")).toBeTruthy();
   });
@@ -161,7 +166,7 @@ describe("Evolution page", () => {
 
   it("shows empty state when no records", async () => {
     mockFetchRecords.mockResolvedValue(sampleRecords);
-    setPollingReturns(
+    setSSERefreshReturns(
       { records: [], total_observations: 0, total_problems: 0, total_analyses: 0, total_decisions: 0, total_insights: 0 },
       { insights: [], total: 0 },
     );
@@ -173,7 +178,7 @@ describe("Evolution page", () => {
 
   it("shows error state when API fails", async () => {
     mockFetchRecords.mockRejectedValue(new Error("Server error"));
-    setPollingReturns(null, null);
+    setSSERefreshReturns(null, null);
     render(<EvolutionPage />);
     await waitFor(() => {
       expect(screen.getByText("Cannot load evolution data")).toBeInTheDocument();

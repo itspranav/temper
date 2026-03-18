@@ -10,7 +10,7 @@ import {
   subscribeAllPendingDecisions,
   fetchSpecs,
 } from "@/lib/api";
-import { usePolling, useRelativeTime } from "@/lib/hooks";
+import { useSSERefresh, useRelativeTime } from "@/lib/hooks";
 import type {
   DecisionsResponse,
   PendingDecision,
@@ -264,7 +264,7 @@ export default function DecisionsPage() {
     loadInitial();
   }, [loadInitial]);
 
-  const decisionsPoll = usePolling<DecisionsResponse>({
+  const decisionsPoll = useSSERefresh<DecisionsResponse>({
     fetcher: () =>
       tenant === ALL_TENANTS
         ? fetchAllDecisions(
@@ -274,7 +274,7 @@ export default function DecisionsPage() {
             tenant,
             statusFilter !== "all" ? { status: statusFilter } : undefined,
           ),
-    interval: 5000,
+    sseKinds: ["Decisions"],
     enabled: !initialLoading && !initialError,
   });
 
