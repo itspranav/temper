@@ -186,7 +186,7 @@ impl RuntimeContext {
             Err(e) => {
                 builder.add_message(OTSMessage::new(
                     MessageRole::Assistant,
-                    OTSMessageContent::text(&e.to_string()),
+                    OTSMessageContent::text(e.to_string()),
                     now,
                 ));
                 (
