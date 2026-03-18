@@ -209,6 +209,7 @@ pub fn bootstrap_system_tenant(
 pub fn bootstrap_agent_specs(
     state: &PlatformState,
     tenant: &str,
+    merge: bool,
     verified_cache: &BTreeMap<String, (String, bool)>,
 ) -> Vec<(String, String)> {
     bootstrap_tenant_specs(
@@ -216,7 +217,7 @@ pub fn bootstrap_agent_specs(
         tenant,
         AGENT_CSDL,
         AGENT_SPECS,
-        false,
+        merge,
         "Agent",
         verified_cache,
     )
@@ -502,7 +503,7 @@ mod tests {
     #[test]
     fn test_bootstrap_agent_specs_registers_tenant() {
         let state = PlatformState::new(None);
-        bootstrap_agent_specs(&state, "test-agent", &BTreeMap::new());
+        bootstrap_agent_specs(&state, "test-agent", false, &BTreeMap::new());
         let registry = state.registry.read().unwrap();
         let tenant = TenantId::new("test-agent");
         assert!(registry.get_tenant(&tenant).is_some());
@@ -511,6 +512,61 @@ mod tests {
         assert!(registry.get_table(&tenant, "Plan").is_some());
         assert!(registry.get_table(&tenant, "Task").is_some());
         assert!(registry.get_table(&tenant, "ToolCall").is_some());
+    }
+
+    #[test]
+    fn test_bootstrap_agent_specs_merge_preserves_existing_app_entity_sets() {
+        let state = PlatformState::new(None);
+        let tenant = TenantId::new("app-tenant");
+        let custom_csdl = r#"<?xml version="1.0" encoding="UTF-8"?>
+<edmx:Edmx Version="4.0"
+  xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Temper.Example"
+      xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Widget">
+        <Key><PropertyRef Name="Id"/></Key>
+        <Property Name="Id" Type="Edm.Guid" Nullable="false"/>
+      </EntityType>
+      <EntityContainer Name="ExampleService">
+        <EntitySet Name="Widgets" EntityType="Temper.Example.Widget"/>
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+        let custom_ioa = r#"
+[automaton]
+name = "Widget"
+states = ["Created"]
+initial = "Created"
+"#;
+
+        {
+            let mut registry = state.registry.write().unwrap();
+            registry.register_tenant(
+                tenant.clone(),
+                parse_csdl(custom_csdl).unwrap(),
+                custom_csdl.to_string(),
+                &[("Widget", custom_ioa)],
+            );
+        }
+
+        bootstrap_agent_specs(&state, "app-tenant", true, &BTreeMap::new());
+
+        let registry = state.registry.read().unwrap();
+        assert!(
+            registry.get_table(&tenant, "Widget").is_some(),
+            "custom app entity should survive merged agent bootstrap"
+        );
+        assert!(
+            registry.get_table(&tenant, "Agent").is_some(),
+            "agent entities should be added during merged bootstrap"
+        );
+        assert_eq!(
+            registry.resolve_entity_type(&tenant, "Widgets").as_deref(),
+            Some("Widget"),
+            "existing app entity-set mapping should survive merged bootstrap"
+        );
     }
 
     #[test]
