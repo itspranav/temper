@@ -513,6 +513,13 @@ pub(super) async fn bootstrap_tenants(state: &PlatformState, apps: &[(String, St
             }
         }
     }
+
+    // Auto-register operator credential for the global API key (ADR-0033).
+    // This ensures the bearer auth middleware resolves the global key as a
+    // verified "operator" identity instead of falling through as anonymous.
+    if let Some(ref api_key) = state.api_token {
+        temper_platform::bootstrap_operator_credential(state, api_key, "default").await;
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -30,8 +30,8 @@ pub mod tenant_api;
 
 // Re-export primary types at crate root.
 pub use bootstrap::{
-    bootstrap_agent_specs, bootstrap_system_tenant, persist_agent_verification,
-    persist_system_verification,
+    bootstrap_agent_specs, bootstrap_operator_credential, bootstrap_system_tenant,
+    persist_agent_verification, persist_system_verification,
 };
 pub use os_apps::{InstallResult, install_os_app, list_os_apps};
 pub use protocol::{PlatformEvent, VerifyStepStatus};

@@ -166,8 +166,13 @@ pub async fn handle_odata_post(
         Ok(t) => t,
         Err(e) => return e.into_response(),
     };
-    let agent_ctx = extract_agent_context(&headers);
+    let mut agent_ctx = extract_agent_context(&headers);
     let resolved_identity = resolved_id.map(|Extension(id)| id);
+    // Enrich agent context with credential-resolved identity (ADR-0033).
+    if let Some(ref identity) = resolved_identity {
+        agent_ctx.agent_id = Some(identity.agent_instance_id.clone());
+        agent_ctx.agent_type = Some(identity.agent_type_name.clone());
+    }
     let await_integration = query_params
         .get("await_integration")
         .map(|v| v == "true")

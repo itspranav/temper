@@ -312,6 +312,80 @@ pub async fn persist_agent_verification(
     persist_bootstrap_verification(store, tenant, AGENT_SPECS, AGENT_CSDL, hashes).await;
 }
 
+/// Auto-register an `AgentCredential` for the global API key on bootstrap.
+///
+/// When the platform boots with a `TEMPER_API_KEY` configured, this function
+/// ensures a corresponding `AgentType` ("operator") and `AgentCredential`
+/// exist in the default tenant so the bearer auth middleware can resolve
+/// the global key as a verified identity instead of falling back to
+/// unverified/anonymous access.
+///
+/// This is idempotent: if the entities already exist (e.g., from a previous
+/// boot), the actions are no-ops (entity already in target state).
+pub async fn bootstrap_operator_credential(state: &PlatformState, api_key: &str, tenant: &str) {
+    use temper_server::identity::hash_token;
+
+    let tenant_id = temper_runtime::tenant::TenantId::new(tenant);
+    let agent_ctx = temper_server::request_context::AgentContext::system();
+    let agent_type_id = "operator-type";
+    let instance_id = "operator";
+
+    // Step 1: Ensure AgentType "operator-type" exists and is Active.
+    // Create the entity first (starts in Draft state).
+    let _ = state
+        .server
+        .dispatch_tenant_action(
+            &tenant_id,
+            "AgentType",
+            agent_type_id,
+            "Define",
+            serde_json::json!({
+                "name": "operator",
+                "system_prompt": "Platform operator — global API key access",
+                "tool_set": "local",
+                "model": "none",
+                "max_turns": "0",
+                "adapter_config": "{}",
+                "default_budget_cents": "0"
+            }),
+            &agent_ctx,
+        )
+        .await;
+
+    // Step 2: Create and issue AgentCredential for the API key hash.
+    let key_hash = hash_token(api_key);
+    let key_prefix = if api_key.len() >= 8 {
+        &api_key[..8]
+    } else {
+        api_key
+    };
+
+    let _ = state
+        .server
+        .dispatch_tenant_action(
+            &tenant_id,
+            "AgentCredential",
+            &key_hash,
+            "Issue",
+            serde_json::json!({
+                "agent_type_id": agent_type_id,
+                "agent_instance_id": instance_id,
+                "key_hash": key_hash,
+                "key_prefix": key_prefix,
+                "description": "Auto-registered credential for global TEMPER_API_KEY",
+                "created_by": "bootstrap",
+                "expires_at": ""
+            }),
+            &agent_ctx,
+        )
+        .await;
+
+    tracing::info!(
+        "Operator credential bootstrapped for tenant '{tenant}' (key_hash={}...)",
+        &key_hash[..8]
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

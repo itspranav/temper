@@ -142,19 +142,20 @@ async fn mcp_initialize_handshake() {
     assert_eq!(response["result"]["serverInfo"]["name"], MCP_SERVER_NAME);
     assert!(response["result"]["capabilities"]["tools"].is_object());
 
-    // clientInfo should have been applied to the runtime context.
-    assert_eq!(ctx.agent_type.as_deref(), Some("claude-code"));
+    // Without api_key set, no credential resolution occurs.
+    // agent_id and agent_type remain None (no legacy fallback).
     assert!(
-        ctx.agent_id
-            .as_deref()
-            .is_some_and(|id| id.starts_with("cc-")),
-        "agent_id should be derived with cc- prefix, got: {:?}",
-        ctx.agent_id,
+        ctx.agent_id.is_none(),
+        "agent_id should be None without api_key"
+    );
+    assert!(
+        ctx.agent_type.is_none(),
+        "agent_type should be None without api_key"
     );
 }
 
 #[tokio::test]
-async fn mcp_initialize_derives_codex_identity() {
+async fn mcp_initialize_without_api_key_no_identity() {
     let mut ctx = ctx_for_port(3001);
 
     let _response = rpc(
@@ -174,45 +175,9 @@ async fn mcp_initialize_derives_codex_identity() {
     )
     .await;
 
-    assert_eq!(ctx.agent_type.as_deref(), Some("codex-cli"));
-    assert!(
-        ctx.agent_id
-            .as_deref()
-            .is_some_and(|id| id.starts_with("cx-")),
-        "Codex agent_id should have cx- prefix, got: {:?}",
-        ctx.agent_id,
-    );
-}
-
-#[tokio::test]
-async fn mcp_initialize_unknown_client() {
-    let mut ctx = ctx_for_port(3001);
-
-    let _response = rpc(
-        &mut ctx,
-        json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "clientInfo": {
-                    "name": "cursor",
-                    "version": "2.0.0"
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(ctx.agent_type.as_deref(), Some("cursor"));
-    assert!(
-        ctx.agent_id
-            .as_deref()
-            .is_some_and(|id| id.starts_with("mc-")),
-        "unknown client should get mc- prefix, got: {:?}",
-        ctx.agent_id,
-    );
+    // Without api_key, no credential resolution — identity stays None.
+    assert!(ctx.agent_id.is_none());
+    assert!(ctx.agent_type.is_none());
 }
 
 #[tokio::test]
