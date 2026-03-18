@@ -212,54 +212,82 @@ pub async fn install_os_app(
     updated.sort();
     skipped.sort();
 
-    // Combine Cedar policy statements for this OS app into one entry.
-    let os_app_policy = if !bundle.cedar_policies.is_empty() {
-        Some(bundle.cedar_policies.join("\n"))
+    // Build the full Cedar policy text for this tenant (existing + new).
+    let combined_policy = if !bundle.cedar_policies.is_empty() {
+        let combined: String = bundle.cedar_policies.join("\n");
+        let policies = state.server.tenant_policies.read().unwrap(); // ci-ok: infallible lock
+        let existing = policies.get(tenant).cloned().unwrap_or_default();
+        let full_text = if existing.is_empty() {
+            combined
+        } else {
+            format!("{existing}\n{combined}")
+        };
+        Some(full_text)
     } else {
         None
     };
 
     // ── Step 1: Persist to Turso FIRST (if available). ──────────────
     // If any write fails, bail before touching in-memory state.
-    // Specs and policies go to the per-tenant store; the app installation
-    // record goes to the platform store (cross-tenant boot index).
-    if let Some(ref store) = state.server.event_store {
-        if let Some(tenant_turso) = store.turso_for_tenant(tenant).await {
-            let mut spec_sources: BTreeMap<String, String> = tenant_turso
-                .load_specs()
-                .await
-                .map_err(|e| format!("Failed to load existing specs for tenant '{tenant}': {e}"))?
-                .into_iter()
-                .filter(|row| row.tenant == tenant)
-                .map(|row| (row.entity_type, row.ioa_source))
-                .collect();
+    if let Some(ref store) = state.server.event_store
+        && let Some(turso) = store.platform_turso_store()
+    {
+        let mut spec_sources: BTreeMap<String, String> = turso
+            .load_specs()
+            .await
+            .map_err(|e| format!("Failed to load existing specs for tenant '{tenant}': {e}"))?
+            .into_iter()
+            .filter(|row| row.tenant == tenant)
+            .map(|row| (row.entity_type, row.ioa_source))
+            .collect();
 
-            for (entity_type, ioa_source) in bundle.specs {
-                spec_sources.insert((*entity_type).to_string(), (*ioa_source).to_string());
-            }
+        for (entity_type, ioa_source) in bundle.specs {
+            spec_sources.insert((*entity_type).to_string(), (*ioa_source).to_string());
+        }
 
-            for (entity_type, ioa_source) in spec_sources {
-                let hash = temper_store_turso::spec_content_hash(&ioa_source);
-                tenant_turso
-                    .upsert_spec(tenant, &entity_type, &ioa_source, &merged_csdl, &hash)
-                    .await
-                    .map_err(|e| format!("Failed to persist spec {entity_type}: {e}"))?;
-            }
-            if let Some(ref policy_text) = os_app_policy {
-                let policy_id = format!("os-app:{app_name}");
-                tenant_turso
-                    .save_policy(tenant, &policy_id, policy_text, "system")
-                    .await
-                    .map_err(|e| format!("Failed to persist Cedar policy: {e}"))?;
-            }
-        }
-        // App installation record stays on platform store (cross-tenant boot index).
-        if let Some(platform_turso) = store.platform_turso_store() {
-            platform_turso
-                .record_installed_app(tenant, app_name)
+        for (entity_type, ioa_source) in spec_sources {
+            let hash = temper_store_turso::spec_content_hash(&ioa_source);
+            turso
+                .upsert_spec(tenant, &entity_type, &ioa_source, &merged_csdl, &hash)
                 .await
-                .map_err(|e| format!("Failed to record app installation: {e}"))?;
+                .map_err(|e| format!("Failed to persist spec {entity_type}: {e}"))?;
         }
+        if let Some(ref policy_text) = combined_policy {
+            turso
+                .upsert_tenant_policy(tenant, policy_text)
+                .await
+                .map_err(|e| format!("Failed to persist Cedar policy: {e}"))?;
+        }
+        turso
+            .record_installed_app(tenant, app_name)
+            .await
+            .map_err(|e| format!("Failed to record app installation: {e}"))?;
+        // Commit all specs atomically after all writes succeed.
+        turso
+            .commit_specs(tenant)
+            .await
+            .map_err(|e| format!("Failed to commit specs: {e}"))?;
+    } else if let Some(ref store) = state.server.event_store
+        && let Some(ps) = store.platform_store()
+    {
+        for (entity_type, ioa_source) in bundle.specs {
+            let hash = temper_store_turso::spec_content_hash(ioa_source);
+            ps.upsert_spec(tenant, entity_type, ioa_source, &merged_csdl, &hash)
+                .await
+                .map_err(|e| format!("Failed to persist spec {entity_type}: {e}"))?;
+        }
+        if let Some(ref policy_text) = combined_policy {
+            ps.upsert_tenant_policy(tenant, policy_text)
+                .await
+                .map_err(|e| format!("Failed to persist Cedar policy: {e}"))?;
+        }
+        ps.record_installed_app(tenant, app_name)
+            .await
+            .map_err(|e| format!("Failed to record app installation: {e}"))?;
+        // Commit all specs atomically after all writes succeed.
+        ps.commit_specs(tenant)
+            .await
+            .map_err(|e| format!("Failed to commit specs: {e}"))?;
     }
 
     // ── Step 2: Bootstrap into memory (verification + registry). ────
@@ -274,12 +302,16 @@ pub async fn install_os_app(
 
     if !specs_to_bootstrap.is_empty() {
         let verified_cache = if let Some(ref store) = state.server.event_store
-            && let Some(turso) = store.turso_for_tenant(tenant).await
+            && let Some(turso) = store.platform_turso_store()
         {
             turso
                 .load_verification_cache(tenant)
                 .await
                 .unwrap_or_default()
+        } else if let Some(ref store) = state.server.event_store
+            && let Some(ps) = store.platform_store()
+        {
+            ps.load_verification_cache(tenant).await.unwrap_or_default()
         } else {
             std::collections::BTreeMap::new()
         };
@@ -294,34 +326,19 @@ pub async fn install_os_app(
         );
     }
 
-    // ── Step 3: Reload Cedar policies from Turso into memory. ──────
-    // Re-read all enabled policies for this tenant so the in-memory map
-    // and Cedar engine reflect the newly-persisted OS app policy.
-    if os_app_policy.is_some()
-        && let Some(ref store) = state.server.event_store
-        && let Some(turso) = store.turso_for_tenant(tenant).await
-    {
-        let rows = turso
-            .load_policies_for_tenant(tenant)
-            .await
-            .unwrap_or_default();
-        let mut combined = String::new();
-        for row in &rows {
-            if !row.enabled {
-                continue;
-            }
-            if !combined.is_empty() {
-                combined.push('\n');
-            }
-            combined.push_str(&row.cedar_text);
+    // ── Step 3: Load Cedar policies into memory. ────────────────────
+    if let Some(ref policy_text) = combined_policy {
+        let mut policies = state.server.tenant_policies.write().unwrap(); // ci-ok: infallible lock
+        policies.insert(tenant.to_string(), policy_text.clone());
+        // Rebuild the authorization engine with all policies.
+        let mut all_policies = String::new();
+        for text in policies.values() {
+            all_policies.push_str(text);
+            all_policies.push('\n');
         }
-        // Reload per-tenant Cedar policy set.
-        if let Err(e) = state.server.authz.reload_tenant_policies(tenant, &combined) {
+        if let Err(e) = state.server.authz.reload_policies(&all_policies) {
             tracing::warn!("Failed to reload Cedar policies after OS app install: {e}");
         }
-        // Update in-memory text cache for backward compat.
-        let mut policies = state.server.tenant_policies.write().unwrap(); // ci-ok: infallible lock
-        policies.insert(tenant.to_string(), combined);
     }
 
     tracing::info!(
