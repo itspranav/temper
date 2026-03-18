@@ -212,17 +212,9 @@ pub async fn install_os_app(
     updated.sort();
     skipped.sort();
 
-    // Build the full Cedar policy text for this tenant (existing + new).
-    let combined_policy = if !bundle.cedar_policies.is_empty() {
-        let combined: String = bundle.cedar_policies.join("\n");
-        let policies = state.server.tenant_policies.read().unwrap(); // ci-ok: infallible lock
-        let existing = policies.get(tenant).cloned().unwrap_or_default();
-        let full_text = if existing.is_empty() {
-            combined
-        } else {
-            format!("{existing}\n{combined}")
-        };
-        Some(full_text)
+    // Combine Cedar policy statements for this OS app into one entry.
+    let os_app_policy = if !bundle.cedar_policies.is_empty() {
+        Some(bundle.cedar_policies.join("\n"))
     } else {
         None
     };
@@ -253,9 +245,10 @@ pub async fn install_os_app(
                     .await
                     .map_err(|e| format!("Failed to persist spec {entity_type}: {e}"))?;
             }
-            if let Some(ref policy_text) = combined_policy {
+            if let Some(ref policy_text) = os_app_policy {
+                let policy_id = format!("os-app:{app_name}");
                 tenant_turso
-                    .upsert_tenant_policy(tenant, policy_text)
+                    .save_policy(tenant, &policy_id, policy_text, "system")
                     .await
                     .map_err(|e| format!("Failed to persist Cedar policy: {e}"))?;
             }
@@ -301,19 +294,34 @@ pub async fn install_os_app(
         );
     }
 
-    // ── Step 3: Load Cedar policies into memory. ────────────────────
-    if let Some(ref policy_text) = combined_policy {
-        let mut policies = state.server.tenant_policies.write().unwrap(); // ci-ok: infallible lock
-        policies.insert(tenant.to_string(), policy_text.clone());
-        // Rebuild the authorization engine with all policies.
-        let mut all_policies = String::new();
-        for text in policies.values() {
-            all_policies.push_str(text);
-            all_policies.push('\n');
+    // ── Step 3: Reload Cedar policies from Turso into memory. ──────
+    // Re-read all enabled policies for this tenant so the in-memory map
+    // and Cedar engine reflect the newly-persisted OS app policy.
+    if os_app_policy.is_some()
+        && let Some(ref store) = state.server.event_store
+        && let Some(turso) = store.turso_for_tenant(tenant).await
+    {
+        let rows = turso
+            .load_policies_for_tenant(tenant)
+            .await
+            .unwrap_or_default();
+        let mut combined = String::new();
+        for row in &rows {
+            if !row.enabled {
+                continue;
+            }
+            if !combined.is_empty() {
+                combined.push('\n');
+            }
+            combined.push_str(&row.cedar_text);
         }
-        if let Err(e) = state.server.authz.reload_policies(&all_policies) {
+        // Reload per-tenant Cedar policy set.
+        if let Err(e) = state.server.authz.reload_tenant_policies(tenant, &combined) {
             tracing::warn!("Failed to reload Cedar policies after OS app install: {e}");
         }
+        // Update in-memory text cache for backward compat.
+        let mut policies = state.server.tenant_policies.write().unwrap(); // ci-ok: infallible lock
+        policies.insert(tenant.to_string(), combined);
     }
 
     tracing::info!(

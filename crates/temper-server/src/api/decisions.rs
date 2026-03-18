@@ -129,8 +129,8 @@ pub(crate) async fn handle_approve_decision(
     let generated_policy = decision.generate_policy_from_matrix(&scope);
     let evolution_record_id = decision.evolution_record_id.clone();
 
-    // Build prospective tenant text and validate+reload via shared helper.
-    let new_tenant_text = {
+    // Validate the generated policy combined with existing enabled policies.
+    let prospective = {
         let policies = state.tenant_policies.read().unwrap(); // ci-ok: infallible lock
         let existing = policies.get(&tenant).cloned().unwrap_or_default();
         if existing.is_empty() {
@@ -139,42 +139,11 @@ pub(crate) async fn handle_approve_decision(
             format!("{existing}\n{generated_policy}")
         }
     };
-
-    // Validate + reload Cedar engine with the prospective policy.
-    if let Err(resp) = super::validate_and_reload_policies(&state, &tenant, &new_tenant_text) {
+    if let Err(resp) = super::validate_and_reload_policies(&state, &tenant, &prospective) {
         return resp;
     }
 
-    // Persist to Turso FIRST — if fails, roll back Cedar engine and return 500.
-    if let Some(turso) = state.persistent_store_for_tenant(&tenant).await
-        && let Err(e) = turso.upsert_tenant_policy(&tenant, &new_tenant_text).await
-    {
-        // Roll back: reload engine from current HashMap (without the new policy).
-        let rollback = {
-            let p = state.tenant_policies.read().unwrap(); // ci-ok: infallible lock
-            let mut all = String::new();
-            for text in p.values() {
-                all.push_str(text);
-                all.push('\n');
-            }
-            all
-        };
-        let _ = state.authz.reload_policies(&rollback);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to persist Cedar policy: {e}"),
-        )
-            .into_response();
-    }
-
-    // Commit the validated policy to in-memory HashMap.
-    {
-        let mut policies = state.tenant_policies.write().unwrap(); // ci-ok: infallible lock
-        policies.insert(tenant.clone(), new_tenant_text.clone());
-    }
-
-    // Persist to Turso `policies` table: one entry per approved decision for
-    // fine-grained auditing and hash-based change detection.
+    // Persist the individual policy to the granular `policies` table.
     let decided_by_ref = body.decided_by.as_deref().unwrap_or("unknown");
     persist_and_activate_policy(
         &state,
@@ -184,6 +153,12 @@ pub(crate) async fn handle_approve_decision(
         decided_by_ref,
     )
     .await;
+
+    // Update in-memory map to reflect the new policy.
+    {
+        let mut policies = state.tenant_policies.write().unwrap(); // ci-ok: infallible lock
+        policies.insert(tenant.clone(), prospective);
+    }
 
     // Mark decision approved only after policy reload succeeds.
     decision.status = DecisionStatus::Approved;

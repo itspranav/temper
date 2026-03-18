@@ -342,28 +342,27 @@ pub(super) async fn recover_cedar_policies(state: &PlatformState) {
         }
     }
 
-    // Legacy pass: populate from old `tenant_policies` table.
+    // Legacy pass: populate from old `tenant_policies` table (per-tenant reload).
     if !all_policy_rows.is_empty() {
-        let mut policies = state.server.tenant_policies.write().unwrap(); // ci-ok: infallible lock
         let mut loaded_count = 0usize;
         for (tenant, policy_text) in &all_policy_rows {
             // Validate each tenant's policies individually so one bad tenant
             // doesn't prevent all others from loading.
-            if temper_authz::AuthzEngine::new(policy_text).is_err() {
-                eprintln!("  Warning: skipping invalid Cedar policies for tenant '{tenant}'");
+            if let Err(e) = state
+                .server
+                .authz
+                .reload_tenant_policies(tenant, policy_text)
+            {
+                eprintln!("  Warning: skipping invalid Cedar policies for tenant '{tenant}': {e}");
                 continue;
             }
-            policies.insert(tenant.clone(), policy_text.clone());
+            // Update in-memory text cache.
+            if let Ok(mut policies) = state.server.tenant_policies.write() {
+                policies.insert(tenant.clone(), policy_text.clone());
+            }
             loaded_count += 1;
         }
-        let mut combined = String::new();
-        for text in policies.values() {
-            combined.push_str(text);
-            combined.push('\n');
-        }
-        if let Err(e) = state.server.authz.reload_policies(&combined) {
-            eprintln!("  Warning: failed to reload Cedar policies: {e}");
-        } else if loaded_count > 0 {
+        if loaded_count > 0 {
             println!("  Restored Cedar policies for {loaded_count} tenants.");
         }
     }
