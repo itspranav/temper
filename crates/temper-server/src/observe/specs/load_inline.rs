@@ -268,21 +268,22 @@ pub(crate) async fn handle_load_inline(
         if let Err(e) = cedar_text.parse::<cedar_policy::PolicySet>() {
             tracing::warn!(error = %e, "bundled Cedar policies failed to parse, skipping");
         } else {
-            let Ok(mut policies) = state.tenant_policies.write() else {
-                tracing::error!("tenant_policies lock poisoned, skipping Cedar merge");
-                return result;
-            };
-            let entry = policies.entry(tenant.clone()).or_default();
-            if !entry.is_empty() {
-                entry.push('\n');
+            // Update the in-memory text cache.
+            if let Ok(mut policies) = state.tenant_policies.write() {
+                let entry = policies.entry(tenant.clone()).or_default();
+                if !entry.is_empty() {
+                    entry.push('\n');
+                }
+                entry.push_str(cedar_text);
             }
-            entry.push_str(cedar_text);
-            let mut combined = String::new();
-            for text in policies.values() {
-                combined.push_str(text);
-                combined.push('\n');
-            }
-            if let Err(e) = state.authz.reload_policies(&combined) {
+            // Reload the per-tenant Cedar policy set.
+            let full_text = state
+                .tenant_policies
+                .read()
+                .ok()
+                .and_then(|p| p.get(&tenant).cloned())
+                .unwrap_or_default();
+            if let Err(e) = state.authz.reload_tenant_policies(&tenant, &full_text) {
                 tracing::error!(error = %e, "failed to reload policies with bundled Cedar");
             } else {
                 tracing::info!(tenant = %tenant, "bundled Cedar policies loaded successfully");
