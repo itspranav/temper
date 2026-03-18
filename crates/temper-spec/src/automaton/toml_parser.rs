@@ -429,41 +429,56 @@ fn flush_all(
 pub(super) fn parse_guard_clause(value: &str) -> Result<Guard, AutomatonParseError> {
     let trimmed = value.trim();
 
-    // Infix forms: "<var> > <n>" and "<var> < <n>".
-    if let Some((lhs, rhs)) = trimmed.split_once('>') {
-        let var = lhs.trim();
-        let raw = rhs.trim();
-        if var.is_empty() || raw.is_empty() {
-            return Err(AutomatonParseError::Validation(format!(
-                "invalid guard '{trimmed}' (expected '<var> > <n>')"
-            )));
+    // Infix forms: "<var> >= <n>", "<var> > <n>", "<var> <= <n>", "<var> < <n>".
+    // Check two-char operators before one-char to avoid mis-splitting ">=" on ">".
+    let infix_ops: &[(&str, bool)] = &[
+        (">=", true), // (operator, is_min_guard)
+        ("<=", false),
+        (">", true),
+        ("<", false),
+    ];
+    for &(op_str, is_min) in infix_ops {
+        if let Some(pos) = trimmed.find(op_str) {
+            let var = trimmed[..pos].trim();
+            let raw = trimmed[pos + op_str.len()..].trim();
+            if var.is_empty() || raw.is_empty() {
+                return Err(AutomatonParseError::Validation(format!(
+                    "invalid guard '{trimmed}' (expected '<var> {op_str} <n>')"
+                )));
+            }
+            let n: usize = raw.parse().map_err(|_| {
+                AutomatonParseError::Validation(format!(
+                    "invalid guard '{trimmed}' (right side must be an integer)"
+                ))
+            })?;
+            if is_min {
+                // ">=" → MinCount { min: n }, ">" → MinCount { min: n + 1 }
+                let min = if op_str == ">=" { n } else { n + 1 };
+                return Ok(Guard::MinCount {
+                    var: var.to_string(),
+                    min,
+                });
+            } else {
+                // "<=" → MaxCount { max: n + 1 }, "<" → MaxCount { max: n }
+                let max = if op_str == "<=" { n + 1 } else { n };
+                return Ok(Guard::MaxCount {
+                    var: var.to_string(),
+                    max,
+                });
+            }
         }
-        let n: usize = raw.parse().map_err(|_| {
-            AutomatonParseError::Validation(format!(
-                "invalid guard '{trimmed}' (right side must be an integer)"
-            ))
-        })?;
-        return Ok(Guard::MinCount {
-            var: var.to_string(),
-            min: n + 1,
-        });
     }
-    if let Some((lhs, rhs)) = trimmed.split_once('<') {
-        let var = lhs.trim();
-        let raw = rhs.trim();
-        if var.is_empty() || raw.is_empty() {
+
+    // Negation prefix: "!var" → IsFalse { var }
+    if let Some(rest) = trimmed.strip_prefix('!') {
+        let var = rest.trim();
+        if var.is_empty() || var.contains(' ') {
             return Err(AutomatonParseError::Validation(format!(
-                "invalid guard '{trimmed}' (expected '<var> < <n>')"
+                "invalid guard '{trimmed}' (expected '!<var>')"
             )));
         }
-        let max: usize = raw.parse().map_err(|_| {
-            AutomatonParseError::Validation(format!(
-                "invalid guard '{trimmed}' (right side must be an integer)"
-            ))
-        })?;
-        return Ok(Guard::MaxCount {
+        return Ok(Guard::IsFalse {
             var: var.to_string(),
-            max,
         });
     }
 
@@ -471,6 +486,7 @@ pub(super) fn parse_guard_clause(value: &str) -> Result<Guard, AutomatonParseErr
     // - "min <var> <n>"
     // - "max <var> <n>"
     // - "is_true <var>"
+    // - "is_false <var>"
     // - "list_contains <var> <value>"
     // - "list_length_min <var> <n>"
     let parts: Vec<&str> = trimmed.split_whitespace().collect();
@@ -523,6 +539,16 @@ pub(super) fn parse_guard_clause(value: &str) -> Result<Guard, AutomatonParseErr
                 var: parts[1].to_string(),
             })
         }
+        "is_false" => {
+            if parts.len() != 2 {
+                return Err(AutomatonParseError::Validation(format!(
+                    "invalid guard '{trimmed}' (expected 'is_false <var>')"
+                )));
+            }
+            Ok(Guard::IsFalse {
+                var: parts[1].to_string(),
+            })
+        }
         "list_contains" => {
             if parts.len() < 3 {
                 return Err(AutomatonParseError::Validation(format!(
@@ -548,6 +574,12 @@ pub(super) fn parse_guard_clause(value: &str) -> Result<Guard, AutomatonParseErr
             Ok(Guard::ListLengthMin {
                 var: parts[1].to_string(),
                 min,
+            })
+        }
+        // Bare identifier: single word with no operators → IsTrue { var }
+        _ if parts.len() == 1 && parts[0].chars().all(|c| c.is_alphanumeric() || c == '_') => {
+            Ok(Guard::IsTrue {
+                var: parts[0].to_string(),
             })
         }
         _ => Err(AutomatonParseError::Validation(format!(
@@ -706,6 +738,10 @@ fn parse_guard_array(value: &str, guards: &mut Vec<Guard>) -> Result<(), Automat
             "is_true" => {
                 let var = fields.get("var").cloned().unwrap_or_default();
                 guards.push(Guard::IsTrue { var });
+            }
+            "is_false" => {
+                let var = fields.get("var").cloned().unwrap_or_default();
+                guards.push(Guard::IsFalse { var });
             }
             "list_contains" => {
                 let var = fields.get("var").cloned().unwrap_or_default();
@@ -885,103 +921,5 @@ fn join_multiline_arrays(input: &str) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    // ── parse_kv ──────────────────────────────────────────────
-
-    #[test]
-    fn parse_kv_simple() {
-        let (key, val) = parse_kv("name = \"Order\"").unwrap();
-        assert_eq!(key, "name");
-        assert_eq!(val, "Order");
-    }
-
-    #[test]
-    fn parse_kv_no_equals() {
-        assert!(parse_kv("no_equals_here").is_none());
-    }
-
-    #[test]
-    fn parse_kv_trims_whitespace() {
-        let (key, val) = parse_kv("  key  =  \"value\"  ").unwrap();
-        assert_eq!(key, "key");
-        assert_eq!(val, "value");
-    }
-
-    // ── parse_string_array ────────────────────────────────────
-
-    #[test]
-    fn parse_string_array_simple() {
-        let arr = parse_string_array("[\"Draft\", \"Active\", \"Done\"]");
-        assert_eq!(arr, vec!["Draft", "Active", "Done"]);
-    }
-
-    #[test]
-    fn parse_string_array_single_value() {
-        let arr = parse_string_array("\"Active\"");
-        assert_eq!(arr, vec!["Active"]);
-    }
-
-    #[test]
-    fn parse_string_array_empty_brackets() {
-        let arr = parse_string_array("[]");
-        assert!(arr.is_empty());
-    }
-
-    // ── split_inline_tables ───────────────────────────────────
-
-    #[test]
-    fn split_inline_tables_two_items() {
-        let result = split_inline_tables("{a = 1}, {b = 2}");
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], "{a = 1}");
-        assert_eq!(result[1], "{b = 2}");
-    }
-
-    #[test]
-    fn split_inline_tables_empty() {
-        let result = split_inline_tables("");
-        assert!(result.is_empty());
-    }
-
-    // ── parse_inline_fields ───────────────────────────────────
-
-    #[test]
-    fn parse_inline_fields_simple() {
-        let map = parse_inline_fields("type = \"schedule\", action = \"Refresh\"");
-        assert_eq!(map.get("type").unwrap(), "schedule");
-        assert_eq!(map.get("action").unwrap(), "Refresh");
-    }
-
-    #[test]
-    fn parse_inline_fields_empty() {
-        let map = parse_inline_fields("");
-        assert!(map.is_empty());
-    }
-
-    // ── join_multiline_arrays ─────────────────────────────────
-
-    #[test]
-    fn join_multiline_single_line() {
-        let result = join_multiline_arrays("key = [\"a\", \"b\"]");
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0], "key = [\"a\", \"b\"]");
-    }
-
-    #[test]
-    fn join_multiline_continuation() {
-        let input = "effect = [\n  { var = \"x\" },\n]";
-        let result = join_multiline_arrays(input);
-        assert_eq!(result.len(), 1);
-        assert!(result[0].contains("effect = ["));
-        assert!(result[0].contains("]"));
-    }
-
-    #[test]
-    fn join_multiline_no_brackets() {
-        let input = "name = \"Test\"\ninitial = \"Draft\"";
-        let result = join_multiline_arrays(input);
-        assert_eq!(result.len(), 2);
-    }
-}
+#[path = "toml_parser_tests.rs"]
+mod tests;
