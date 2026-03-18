@@ -31,7 +31,7 @@ const TEST_TENANT: &str = "identity-test";
 fn identity_test_state() -> PlatformState {
     let state = PlatformState::new(None);
     bootstrap_system_tenant(&state, &BTreeMap::new());
-    bootstrap_agent_specs(&state, TEST_TENANT, &BTreeMap::new());
+    bootstrap_agent_specs(&state, TEST_TENANT, false, &BTreeMap::new());
     state
 }
 
