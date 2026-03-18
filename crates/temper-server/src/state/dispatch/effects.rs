@@ -179,7 +179,8 @@ impl crate::state::ServerState {
                     "unmet_intent"
                 );
             }
-            tokio::spawn(async move { // determinism-ok: external side-effect, no simulation-visible state
+            tokio::spawn(async move {
+                // determinism-ok: external side-effect, no simulation-visible state
                 dispatcher.dispatch(&entry);
             });
         }
@@ -205,7 +206,8 @@ impl crate::state::ServerState {
             let action = sched.action.clone();
             let ctx = agent_ctx.clone();
             let delay = std::time::Duration::from_secs(sched.delay_seconds);
-            tokio::spawn( // determinism-ok: timer delivery is a background side-effect
+            tokio::spawn(
+                // determinism-ok: timer delivery is a background side-effect
                 async move {
                     tokio::time::sleep(delay).await; // determinism-ok: scheduled delay
                     let _ = state
