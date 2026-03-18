@@ -444,9 +444,7 @@ impl WasmHost for SimWasmHost {
         self.spec_eval_responses
             .get(&(hash, action.to_string()))
             .cloned()
-            .ok_or_else(|| {
-                format!("sim: no canned response for action '{action}'")
-            })
+            .ok_or_else(|| format!("sim: no canned response for action '{action}'"))
     }
 }
 

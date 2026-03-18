@@ -554,21 +554,30 @@ pub(super) fn link_host_functions(linker: &mut Linker<HostState>) -> Result<(), 
 
                 // Read IOA source
                 let mut ioa_buf = vec![0u8; ioa_len as usize];
-                if memory.read(&caller, ioa_ptr as usize, &mut ioa_buf).is_err() {
+                if memory
+                    .read(&caller, ioa_ptr as usize, &mut ioa_buf)
+                    .is_err()
+                {
                     return -1;
                 }
                 let ioa_source = String::from_utf8_lossy(&ioa_buf).to_string();
 
                 // Read current state
                 let mut state_buf = vec![0u8; state_len as usize];
-                if memory.read(&caller, state_ptr as usize, &mut state_buf).is_err() {
+                if memory
+                    .read(&caller, state_ptr as usize, &mut state_buf)
+                    .is_err()
+                {
                     return -1;
                 }
                 let current_state = String::from_utf8_lossy(&state_buf).to_string();
 
                 // Read action
                 let mut action_buf = vec![0u8; action_len as usize];
-                if memory.read(&caller, action_ptr as usize, &mut action_buf).is_err() {
+                if memory
+                    .read(&caller, action_ptr as usize, &mut action_buf)
+                    .is_err()
+                {
                     return -1;
                 }
                 let action = String::from_utf8_lossy(&action_buf).to_string();
@@ -576,7 +585,10 @@ pub(super) fn link_host_functions(linker: &mut Linker<HostState>) -> Result<(), 
                 // Read params JSON
                 let params_json = if params_len > 0 {
                     let mut params_buf = vec![0u8; params_len as usize];
-                    if memory.read(&caller, params_ptr as usize, &mut params_buf).is_err() {
+                    if memory
+                        .read(&caller, params_ptr as usize, &mut params_buf)
+                        .is_err()
+                    {
                         return -1;
                     }
                     String::from_utf8_lossy(&params_buf).to_string()
