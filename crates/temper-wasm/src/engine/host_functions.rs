@@ -577,11 +577,12 @@ pub(super) fn link_host_functions(linker: &mut Linker<HostState>) -> Result<(), 
                 };
 
                 // Call host evaluate_spec (synchronous — no async bridge needed)
-                let result_json = match caller
-                    .data()
-                    .host
-                    .evaluate_spec(&ioa_source, &current_state, &action, &params_json)
-                {
+                let result_json = match caller.data().host.evaluate_spec(
+                    &ioa_source,
+                    &current_state,
+                    &action,
+                    &params_json,
+                ) {
                     Ok(json) => json,
                     Err(e) => {
                         format!(r#"{{"success": false, "error": "{e}"}}"#)
@@ -596,9 +597,7 @@ pub(super) fn link_host_functions(linker: &mut Linker<HostState>) -> Result<(), 
                 result_bytes.len() as i32
             },
         )
-        .map_err(|e| {
-            WasmError::Compilation(format!("failed to link host_evaluate_spec: {e}"))
-        })?;
+        .map_err(|e| WasmError::Compilation(format!("failed to link host_evaluate_spec: {e}")))?;
 
     Ok(())
 }

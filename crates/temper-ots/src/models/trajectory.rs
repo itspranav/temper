@@ -295,12 +295,16 @@ mod tests {
     #[test]
     fn test_metadata_serialization() {
         let now = sim_now();
-        let metadata =
-            OTSMetadata::new("Complete user query", "agent_123", OutcomeType::Success, now)
-                .with_domain("customer_support")
-                .with_framework("langchain")
-                .with_tag("high_priority")
-                .with_feedback_score(0.9);
+        let metadata = OTSMetadata::new(
+            "Complete user query",
+            "agent_123",
+            OutcomeType::Success,
+            now,
+        )
+        .with_domain("customer_support")
+        .with_framework("langchain")
+        .with_tag("high_priority")
+        .with_feedback_score(0.9);
 
         let json_str = serde_json::to_string(&metadata).unwrap();
         let parsed: OTSMetadata = serde_json::from_str(&json_str).unwrap();

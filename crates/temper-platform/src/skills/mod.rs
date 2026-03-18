@@ -30,11 +30,9 @@ pub struct InstallResult {
 // ── Project Management Skill ──────────────────────────────────────
 
 const PM_ISSUE_IOA: &str = include_str!("../../../../skills/project-management/issue.ioa.toml");
-const PM_PROJECT_IOA: &str =
-    include_str!("../../../../skills/project-management/project.ioa.toml");
+const PM_PROJECT_IOA: &str = include_str!("../../../../skills/project-management/project.ioa.toml");
 const PM_CYCLE_IOA: &str = include_str!("../../../../skills/project-management/cycle.ioa.toml");
-const PM_COMMENT_IOA: &str =
-    include_str!("../../../../skills/project-management/comment.ioa.toml");
+const PM_COMMENT_IOA: &str = include_str!("../../../../skills/project-management/comment.ioa.toml");
 const PM_LABEL_IOA: &str = include_str!("../../../../skills/project-management/label.ioa.toml");
 const PM_CSDL: &str = include_str!("../../../../skills/project-management/model.csdl.xml");
 const PM_CEDAR_ISSUE: &str =
@@ -56,8 +54,7 @@ const FS_CEDAR_WASM: &str = include_str!("../../../../skills/temper-fs/policies/
 
 // ── Evolution Skill ──────────────────────────────────────────────
 
-const EVO_RUN_IOA: &str =
-    include_str!("../../../../skills/evolution/evolution_run.ioa.toml");
+const EVO_RUN_IOA: &str = include_str!("../../../../skills/evolution/evolution_run.ioa.toml");
 const EVO_SENTINEL_IOA: &str =
     include_str!("../../../../skills/evolution/sentinel_monitor.ioa.toml");
 const EVO_CSDL: &str = include_str!("../../../../skills/evolution/model.csdl.xml");

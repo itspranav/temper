@@ -121,8 +121,11 @@ impl ReflectiveDataset {
 
     /// Sort triplets by score (worst first) for LLM focus.
     pub fn sort_by_score(&mut self) {
-        self.triplets
-            .sort_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
+        self.triplets.sort_by(|a, b| {
+            a.score
+                .partial_cmp(&b.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
 
     /// Get the number of failure triplets (score < 0.5).
@@ -159,7 +162,11 @@ impl ReflectiveDataset {
         ));
 
         for (i, triplet) in self.triplets.iter().enumerate() {
-            out.push_str(&format!("### Trace {} (score: {:.2})\n", i + 1, triplet.score));
+            out.push_str(&format!(
+                "### Trace {} (score: {:.2})\n",
+                i + 1,
+                triplet.score
+            ));
             if let Some(action) = &triplet.action {
                 out.push_str(&format!("**Action**: {}\n", action));
             }
@@ -232,13 +239,25 @@ mod tests {
         let mut dataset = ReflectiveDataset::new("pm".into(), "Issue".into());
 
         dataset.add_triplet(ReflectiveTriplet::new(
-            "a".into(), "b".into(), "c".into(), 0.1, "t1".into(),
+            "a".into(),
+            "b".into(),
+            "c".into(),
+            0.1,
+            "t1".into(),
         ));
         dataset.add_triplet(ReflectiveTriplet::new(
-            "d".into(), "e".into(), "f".into(), 0.3, "t2".into(),
+            "d".into(),
+            "e".into(),
+            "f".into(),
+            0.3,
+            "t2".into(),
         ));
         dataset.add_triplet(ReflectiveTriplet::new(
-            "g".into(), "h".into(), "i".into(), 0.9, "t3".into(),
+            "g".into(),
+            "h".into(),
+            "i".into(),
+            0.9,
+            "t3".into(),
         ));
 
         assert_eq!(dataset.failure_count(), 2);

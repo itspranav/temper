@@ -76,11 +76,7 @@ impl SimPlatformHarness {
     }
 
     /// Install a skill using PRODUCTION code.
-    pub async fn install_skill(
-        &self,
-        tenant: &str,
-        app_name: &str,
-    ) -> Result<Vec<String>, String> {
+    pub async fn install_skill(&self, tenant: &str, app_name: &str) -> Result<Vec<String>, String> {
         install_skill(&self.platform_state, tenant, app_name)
             .await
             .map(|r| {

@@ -362,7 +362,14 @@ mod tests {
             ots_alert.is_some(),
             "ots_trajectory_failure_cluster should trigger with 6 failures"
         );
-        assert!(ots_alert.expect("checked above").record.observed_value.expect("should have value") >= 5.0);
+        assert!(
+            ots_alert
+                .expect("checked above")
+                .record
+                .observed_value
+                .expect("should have value")
+                >= 5.0
+        );
     }
 
     #[test]

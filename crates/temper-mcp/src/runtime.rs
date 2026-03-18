@@ -224,7 +224,11 @@ impl RuntimeContext {
         };
 
         let url = format!("{}/api/ots/trajectories", self.base_url);
-        let mut request = self.http.post(&url).body(json).header("Content-Type", "application/json");
+        let mut request = self
+            .http
+            .post(&url)
+            .body(json)
+            .header("Content-Type", "application/json");
 
         if let Some(ref agent_id) = self.agent_id {
             request = request.header("X-Agent-Id", agent_id);

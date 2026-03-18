@@ -17,7 +17,7 @@ pub mod models;
 // Re-exports for convenience
 pub use builder::TrajectoryBuilder;
 pub use models::{
-    DecisionType, EvaluatorType, MessageRole, OTSAnnotation, OTSChoice, OTSConsequence,
-    OTSContext, OTSDecision, OTSEntity, OTSEvaluator, OTSMessage, OTSMessageContent,
-    OTSMetadata, OTSResource, OTSSystemMessage, OTSTrajectory, OTSTurn, OTSUser, OutcomeType,
+    DecisionType, EvaluatorType, MessageRole, OTSAnnotation, OTSChoice, OTSConsequence, OTSContext,
+    OTSDecision, OTSEntity, OTSEvaluator, OTSMessage, OTSMessageContent, OTSMetadata, OTSResource,
+    OTSSystemMessage, OTSTrajectory, OTSTurn, OTSUser, OutcomeType,
 };

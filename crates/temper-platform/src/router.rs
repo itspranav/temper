@@ -209,11 +209,7 @@ mod tests {
     async fn test_get_observe_skills_returns_200() {
         let app = build_platform_router(test_state());
         let response = app
-            .oneshot(
-                Request::get("/observe/skills")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::get("/observe/skills").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
