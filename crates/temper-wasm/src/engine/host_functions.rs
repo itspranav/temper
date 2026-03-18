@@ -525,5 +525,80 @@ pub(super) fn link_host_functions(linker: &mut Linker<HostState>) -> Result<(), 
         )
         .map_err(|e| WasmError::Compilation(format!("failed to link host_hash_stream: {e}")))?;
 
+    // host_evaluate_spec(ioa_ptr, ioa_len, state_ptr, state_len,
+    //                    action_ptr, action_len, params_ptr, params_len,
+    //                    result_buf_ptr, result_buf_len) -> i32
+    // Evaluates a single transition against an IOA spec on the host side.
+    // Returns: bytes written to result_buf (JSON), or -1 on error, -2 if buf too small.
+    #[allow(clippy::too_many_arguments)]
+    linker
+        .func_wrap(
+            "env",
+            "host_evaluate_spec",
+            |mut caller: Caller<'_, HostState>,
+             ioa_ptr: i32,
+             ioa_len: i32,
+             state_ptr: i32,
+             state_len: i32,
+             action_ptr: i32,
+             action_len: i32,
+             params_ptr: i32,
+             params_len: i32,
+             result_buf_ptr: i32,
+             result_buf_len: i32|
+             -> i32 {
+                let memory = caller.get_export("memory").and_then(|e| e.into_memory());
+                let Some(memory) = memory else {
+                    return -1;
+                };
+
+                // Read IOA source
+                let mut ioa_buf = vec![0u8; ioa_len as usize];
+                let _ = memory.read(&caller, ioa_ptr as usize, &mut ioa_buf);
+                let ioa_source = String::from_utf8_lossy(&ioa_buf).to_string();
+
+                // Read current state
+                let mut state_buf = vec![0u8; state_len as usize];
+                let _ = memory.read(&caller, state_ptr as usize, &mut state_buf);
+                let current_state = String::from_utf8_lossy(&state_buf).to_string();
+
+                // Read action
+                let mut action_buf = vec![0u8; action_len as usize];
+                let _ = memory.read(&caller, action_ptr as usize, &mut action_buf);
+                let action = String::from_utf8_lossy(&action_buf).to_string();
+
+                // Read params JSON
+                let params_json = if params_len > 0 {
+                    let mut params_buf = vec![0u8; params_len as usize];
+                    let _ = memory.read(&caller, params_ptr as usize, &mut params_buf);
+                    String::from_utf8_lossy(&params_buf).to_string()
+                } else {
+                    "{}".to_string()
+                };
+
+                // Call host evaluate_spec (synchronous — no async bridge needed)
+                let result_json = match caller
+                    .data()
+                    .host
+                    .evaluate_spec(&ioa_source, &current_state, &action, &params_json)
+                {
+                    Ok(json) => json,
+                    Err(e) => {
+                        format!(r#"{{"success": false, "error": "{e}"}}"#)
+                    }
+                };
+
+                let result_bytes = result_json.as_bytes();
+                if result_bytes.len() > result_buf_len as usize {
+                    return -2; // buffer too small
+                }
+                let _ = memory.write(&mut caller, result_buf_ptr as usize, result_bytes);
+                result_bytes.len() as i32
+            },
+        )
+        .map_err(|e| {
+            WasmError::Compilation(format!("failed to link host_evaluate_spec: {e}"))
+        })?;
+
     Ok(())
 }

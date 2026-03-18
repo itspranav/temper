@@ -523,13 +523,13 @@ pub(super) async fn bootstrap_tenants(state: &PlatformState, apps: &[(String, St
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum OsAppBootstrapSource {
+enum SkillBootstrapSource {
     Persisted,
     Cli,
 }
 
-fn tenant_has_os_app_specs(state: &PlatformState, tenant: &str, app_name: &str) -> bool {
-    let Some(bundle) = temper_platform::os_apps::get_os_app(app_name) else {
+fn tenant_has_skill_specs(state: &PlatformState, tenant: &str, app_name: &str) -> bool {
+    let Some(bundle) = temper_platform::skills::get_skill(app_name) else {
         return false;
     };
     let tenant_id = TenantId::new(tenant);
@@ -540,16 +540,16 @@ fn tenant_has_os_app_specs(state: &PlatformState, tenant: &str, app_name: &str) 
         .all(|(entity_type, _)| registry.get_table(&tenant_id, entity_type).is_some())
 }
 
-/// Phase 8b: Restore persisted OS apps and apply `--os-app` requests.
+/// Phase 8b: Restore persisted skills and apply `--skill` requests.
 ///
 /// Why this exists:
 /// - agent bootstrap (Phase 8) can replace tenant specs;
-/// - OS app installs are durably tracked in `tenant_installed_apps`.
+/// - Skill installs are durably tracked in `tenant_installed_apps`.
 ///
-/// This phase replays persisted installs so app entities remain available
+/// This phase replays persisted installs so skill entities remain available
 /// after restart, and then applies explicit CLI installs for `default`.
-pub(super) async fn bootstrap_installed_os_apps(state: &PlatformState, os_apps: &[String]) {
-    let mut requested: BTreeMap<(String, String), OsAppBootstrapSource> = BTreeMap::new();
+pub(super) async fn bootstrap_installed_skills(state: &PlatformState, skills: &[String]) {
+    let mut requested: BTreeMap<(String, String), SkillBootstrapSource> = BTreeMap::new();
 
     if let Some(ref store) = state.server.event_store
         && let Some(turso) = store.platform_turso_store()
@@ -557,29 +557,29 @@ pub(super) async fn bootstrap_installed_os_apps(state: &PlatformState, os_apps: 
         match turso.list_all_installed_apps().await {
             Ok(installed) => {
                 for (tenant, app_name) in installed {
-                    requested.insert((tenant, app_name), OsAppBootstrapSource::Persisted);
+                    requested.insert((tenant, app_name), SkillBootstrapSource::Persisted);
                 }
             }
             Err(e) => {
-                eprintln!("  Warning: failed to load installed OS apps: {e}");
+                eprintln!("  Warning: failed to load installed skills: {e}");
             }
         }
     }
 
-    for app_name in os_apps {
+    for skill_name in skills {
         requested
-            .entry(("default".to_string(), app_name.clone()))
-            .and_modify(|source| *source = OsAppBootstrapSource::Cli)
-            .or_insert(OsAppBootstrapSource::Cli);
+            .entry(("default".to_string(), skill_name.clone()))
+            .and_modify(|source| *source = SkillBootstrapSource::Cli)
+            .or_insert(SkillBootstrapSource::Cli);
     }
 
     for ((tenant, app_name), source) in requested {
-        if tenant_has_os_app_specs(state, &tenant, &app_name) {
+        if tenant_has_skill_specs(state, &tenant, &app_name) {
             continue;
         }
-        match temper_platform::install_os_app(state, &tenant, &app_name).await {
+        match temper_platform::install_skill(state, &tenant, &app_name).await {
             Ok(result) => match source {
-                OsAppBootstrapSource::Persisted => {
+                SkillBootstrapSource::Persisted => {
                     let all: Vec<String> = result
                         .added
                         .iter()
@@ -588,11 +588,11 @@ pub(super) async fn bootstrap_installed_os_apps(state: &PlatformState, os_apps: 
                         .cloned()
                         .collect();
                     println!(
-                        "  Restored OS app '{app_name}' for '{tenant}': {}",
+                        "  Restored skill '{app_name}' for '{tenant}': {}",
                         all.join(", ")
                     );
                 }
-                OsAppBootstrapSource::Cli => {
+                SkillBootstrapSource::Cli => {
                     let all: Vec<String> = result
                         .added
                         .iter()
@@ -601,13 +601,13 @@ pub(super) async fn bootstrap_installed_os_apps(state: &PlatformState, os_apps: 
                         .cloned()
                         .collect();
                     println!(
-                        "  OS app '{app_name}' installed for '{tenant}': {}",
+                        "  Skill '{app_name}' installed for '{tenant}': {}",
                         all.join(", ")
                     );
                 }
             },
             Err(e) => {
-                eprintln!("  Warning: failed to install OS app '{app_name}' for '{tenant}': {e}");
+                eprintln!("  Warning: failed to install skill '{app_name}' for '{tenant}': {e}");
             }
         }
     }

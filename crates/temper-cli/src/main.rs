@@ -88,9 +88,9 @@ enum Commands {
         /// Tenant name (used with --specs-dir to load user specs)
         #[arg(long, default_value = "default")]
         tenant: String,
-        /// Install an OS app into the default tenant at startup (repeatable)
-        #[arg(long)]
-        os_app: Vec<String>,
+        /// Install a skill into the default tenant at startup (repeatable)
+        #[arg(long, alias = "os-app")]
+        skill: Vec<String>,
         /// Run spec verification in an isolated subprocess (panics/hangs won't crash the server).
         ///
         /// Each entity's IOA source is written to stdin of `temper verify-ioa`;
@@ -147,7 +147,7 @@ async fn main() -> anyhow::Result<()> {
             no_observe,
             specs_dir,
             tenant,
-            os_app,
+            skill,
             verify_subprocess,
         } => {
             let storage_explicit =
@@ -169,7 +169,7 @@ async fn main() -> anyhow::Result<()> {
             serve::run(
                 port,
                 apps,
-                os_app,
+                skill,
                 storage,
                 storage_explicit,
                 !no_observe,
@@ -343,32 +343,44 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_parse_serve_with_os_app() {
-        let cli = Cli::parse_from(["temper", "serve", "--os-app", "project-management"]);
+    fn test_cli_parse_serve_with_skill() {
+        let cli = Cli::parse_from(["temper", "serve", "--skill", "project-management"]);
         match cli.command {
-            Commands::Serve { os_app, .. } => {
-                assert_eq!(os_app.len(), 1);
-                assert_eq!(os_app[0], "project-management");
+            Commands::Serve { skill, .. } => {
+                assert_eq!(skill.len(), 1);
+                assert_eq!(skill[0], "project-management");
             }
             _ => panic!("expected Serve command"),
         }
     }
 
     #[test]
-    fn test_cli_parse_serve_with_multiple_os_apps() {
+    fn test_cli_parse_serve_with_os_app_alias() {
+        let cli = Cli::parse_from(["temper", "serve", "--os-app", "project-management"]);
+        match cli.command {
+            Commands::Serve { skill, .. } => {
+                assert_eq!(skill.len(), 1);
+                assert_eq!(skill[0], "project-management");
+            }
+            _ => panic!("expected Serve command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_serve_with_multiple_skills() {
         let cli = Cli::parse_from([
             "temper",
             "serve",
-            "--os-app",
+            "--skill",
             "project-management",
-            "--os-app",
+            "--skill",
             "crm",
         ]);
         match cli.command {
-            Commands::Serve { os_app, .. } => {
-                assert_eq!(os_app.len(), 2);
-                assert_eq!(os_app[0], "project-management");
-                assert_eq!(os_app[1], "crm");
+            Commands::Serve { skill, .. } => {
+                assert_eq!(skill.len(), 2);
+                assert_eq!(skill[0], "project-management");
+                assert_eq!(skill[1], "crm");
             }
             _ => panic!("expected Serve command"),
         }

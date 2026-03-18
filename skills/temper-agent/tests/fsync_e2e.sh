@@ -9,7 +9,7 @@
 #   - Valid anthropic_api_key stored in secrets vault
 #
 # Usage:
-#   bash os-apps/temper-agent/tests/fsync_e2e.sh
+#   bash skills/temper-agent/tests/fsync_e2e.sh
 #
 # The test creates an agent that writes files via write tool and bash tool,
 # then verifies that:

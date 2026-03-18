@@ -5603,6 +5603,8 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
+ "temper-ots",
  "temper-runtime",
  "temper-sandbox",
  "temper-server",
@@ -5658,6 +5660,18 @@ dependencies = [
  "temper-runtime",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "temper-ots"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "temper-runtime",
+ "tokio-test",
+ "uuid",
 ]
 
 [[package]]

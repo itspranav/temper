@@ -2,11 +2,15 @@
 resolver = "2"
 exclude = [
     "wasm-modules/http-fetch",
+    "wasm-modules/gepa-replay",
+    "wasm-modules/gepa-score",
+    "wasm-modules/gepa-pareto",
+    "wasm-modules/gepa-reflective",
     "crates/temper-wasm/tests/fixtures/echo-integration-src",
-    "os-apps/temper-agent/wasm/llm_caller",
-    "os-apps/temper-agent/wasm/tool_runner",
-    "os-apps/temper-agent/wasm/sandbox_provisioner",
-    "os-apps/temper-fs/wasm/blob_adapter",
+    "skills/temper-agent/wasm/llm_caller",
+    "skills/temper-agent/wasm/tool_runner",
+    "skills/temper-agent/wasm/sandbox_provisioner",
+    "skills/temper-fs/wasm/blob_adapter",
 ]
 members = [
     "crates/temper-macros",
@@ -32,6 +36,7 @@ members = [
     "crates/temper-wasm-sdk",
     "crates/temper-sdk",
     "crates/temper-sandbox",
+    "crates/temper-ots",
     "reference-apps/ecommerce",
     "reference-apps/oncall",
 ]
@@ -136,6 +141,7 @@ temper-wasm = { path = "crates/temper-wasm" }
 temper-wasm-sdk = { path = "crates/temper-wasm-sdk" }
 temper-sdk = { path = "crates/temper-sdk" }
 temper-sandbox = { path = "crates/temper-sandbox" }
+temper-ots = { path = "crates/temper-ots" }
 
 # WASM runtime
 wasmtime = { version = "29", features = ["component-model"] }

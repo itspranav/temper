@@ -93,9 +93,9 @@ fn test_agent_orchestration_specs_verify() {
 }
 
 #[test]
-fn test_list_os_apps_returns_catalog() {
-    let apps = list_os_apps();
-    assert_eq!(apps.len(), 4);
+fn test_list_skills_returns_catalog() {
+    let apps = list_skills();
+    assert_eq!(apps.len(), 5);
     assert_eq!(apps[0].name, "project-management");
     assert_eq!(apps[0].entity_types.len(), 5);
     assert_eq!(apps[1].name, "temper-fs");
@@ -104,11 +104,14 @@ fn test_list_os_apps_returns_catalog() {
     assert_eq!(apps[2].entity_types.len(), 3);
     assert_eq!(apps[3].name, "temper-agent");
     assert_eq!(apps[3].entity_types.len(), 1);
+    assert_eq!(apps[4].name, "evolution");
+    assert_eq!(apps[4].entity_types.len(), 2);
+    assert!(apps[4].skill_guide.is_some());
 }
 
 #[test]
-fn test_get_os_app_project_management() {
-    let bundle = get_os_app("project-management");
+fn test_get_skill_project_management() {
+    let bundle = get_skill("project-management");
     assert!(bundle.is_some());
     let bundle = bundle.unwrap();
     assert_eq!(bundle.specs.len(), 5);
@@ -167,8 +170,8 @@ fn test_agent_specs_verify() {
 }
 
 #[test]
-fn test_get_os_app_agent_orchestration() {
-    let bundle = get_os_app("agent-orchestration");
+fn test_get_skill_agent_orchestration() {
+    let bundle = get_skill("agent-orchestration");
     assert!(bundle.is_some());
     let bundle = bundle.unwrap();
     assert_eq!(bundle.specs.len(), 3);
@@ -177,8 +180,8 @@ fn test_get_os_app_agent_orchestration() {
 }
 
 #[test]
-fn test_get_os_app_temper_agent() {
-    let bundle = get_os_app("temper-agent");
+fn test_get_skill_temper_agent() {
+    let bundle = get_skill("temper-agent");
     assert!(bundle.is_some());
     let bundle = bundle.unwrap();
     assert_eq!(bundle.specs.len(), 1);
@@ -187,14 +190,14 @@ fn test_get_os_app_temper_agent() {
 }
 
 #[test]
-fn test_get_os_app_nonexistent() {
-    assert!(get_os_app("nonexistent").is_none());
+fn test_get_skill_nonexistent() {
+    assert!(get_skill("nonexistent").is_none());
 }
 
 #[tokio::test]
-async fn test_install_os_app_registers_entities() {
+async fn test_install_skill_registers_entities() {
     let state = PlatformState::new(None);
-    let result = install_os_app(&state, "test-pm", "project-management").await;
+    let result = install_skill(&state, "test-pm", "project-management").await;
     assert!(result.is_ok());
     let result = result.unwrap();
     // Fresh tenant — all 5 specs should be new.
@@ -223,9 +226,9 @@ async fn test_install_os_app_registers_entities() {
 }
 
 #[tokio::test]
-async fn test_install_agent_orchestration_registers_entities() {
+async fn test_install_skill_agent_orchestration_registers_entities() {
     let state = PlatformState::new(None);
-    let result = install_os_app(&state, "test-ao", "agent-orchestration").await;
+    let result = install_skill(&state, "test-ao", "agent-orchestration").await;
     assert!(result.is_ok());
     let result = result.unwrap();
     assert_eq!(
@@ -248,23 +251,23 @@ async fn test_install_agent_orchestration_registers_entities() {
 }
 
 #[tokio::test]
-async fn test_install_os_app_nonexistent_returns_error() {
+async fn test_install_skill_nonexistent_returns_error() {
     let state = PlatformState::new(None);
-    let result = install_os_app(&state, "test", "nonexistent").await;
+    let result = install_skill(&state, "test", "nonexistent").await;
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("not found in catalog"));
 }
 
 #[tokio::test]
-async fn test_install_multiple_os_apps_merges_and_is_idempotent() {
+async fn test_install_multiple_skills_merges_and_is_idempotent() {
     let state = PlatformState::new(None);
     let tenant = TenantId::new("test-merge");
 
-    install_os_app(&state, "test-merge", "project-management")
+    install_skill(&state, "test-merge", "project-management")
         .await
         .expect("install project-management");
 
-    install_os_app(&state, "test-merge", "agent-orchestration")
+    install_skill(&state, "test-merge", "agent-orchestration")
         .await
         .expect("install agent-orchestration");
 
@@ -299,7 +302,7 @@ async fn test_install_multiple_os_apps_merges_and_is_idempotent() {
         );
     }
 
-    let reinstall = install_os_app(&state, "test-merge", "project-management")
+    let reinstall = install_skill(&state, "test-merge", "project-management")
         .await
         .expect("reinstall project-management");
 
@@ -349,7 +352,7 @@ async fn test_install_multiple_os_apps_merges_and_is_idempotent() {
 /// 4. Restore registry from Turso.
 /// 5. Verify specs survived the "restart".
 #[tokio::test]
-async fn test_os_app_install_survives_restart() {
+async fn test_skill_install_survives_restart() {
     use std::sync::Arc;
     use temper_server::event_store::ServerEventStore;
     use temper_server::registry_bootstrap::restore_registry_from_turso;
@@ -364,7 +367,7 @@ async fn test_os_app_install_survives_restart() {
     let mut state = PlatformState::new(None);
     state.server.event_store = Some(Arc::new(ServerEventStore::Turso(turso)));
 
-    let result = install_os_app(&state, "test-ws", "project-management").await;
+    let result = install_skill(&state, "test-ws", "project-management").await;
     assert!(result.is_ok(), "install failed: {:?}", result.err());
     let result = result.unwrap();
     assert_eq!(result.added.len(), 5);

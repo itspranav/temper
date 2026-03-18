@@ -1,6 +1,6 @@
 //! Boot-cycle DST test suite.
 //!
-//! Tests the full platform lifecycle: install OS app -> create entities ->
+//! Tests the full platform lifecycle: install skill -> create entities ->
 //! dispatch actions -> restart -> verify invariants. Uses the
 //! `SimPlatformHarness` with production code paths and simulated storage.
 //!
@@ -28,11 +28,11 @@ async fn dst_boot_cycle_full_lifecycle() {
         let (_guard, _clock, _id_gen) = install_deterministic_context(seed);
         let mut harness = SimPlatformHarness::no_faults(seed);
 
-        // Install the project-management OS app.
+        // Install the project-management skill.
         let entity_types = harness
-            .install_os_app(TENANT, "project-management")
+            .install_skill(TENANT, "project-management")
             .await
-            .unwrap_or_else(|e| panic!("seed {seed}: install_os_app failed: {e}"));
+            .unwrap_or_else(|e| panic!("seed {seed}: install_skill failed: {e}"));
         assert!(
             !entity_types.is_empty(),
             "seed {seed}: no entity types installed"
@@ -90,7 +90,7 @@ async fn dst_boot_cycle_with_store_faults() {
         );
 
         // Install PM app — no platform faults, so this should succeed.
-        let install_result = harness.install_os_app(TENANT, "project-management").await;
+        let install_result = harness.install_skill(TENANT, "project-management").await;
         if install_result.is_err() {
             // Failed install should leave no orphaned state.
             let prev_event = harness.sim_event_store.disable_faults();
@@ -146,8 +146,8 @@ async fn dst_boot_cycle_with_platform_faults() {
             SimPlatformFaultConfig::heavy(),
         );
 
-        // OS app install may fail due to spec/policy write faults.
-        let install_result = harness.install_os_app(TENANT, "project-management").await;
+        // Skill install may fail due to spec/policy write faults.
+        let install_result = harness.install_skill(TENANT, "project-management").await;
 
         if install_result.is_err() {
             // Install failed due to platform faults — disable faults for clean restart.
@@ -203,7 +203,7 @@ async fn dst_boot_cycle_idempotent() {
 
         // First install.
         let types_1 = harness
-            .install_os_app(TENANT, "project-management")
+            .install_skill(TENANT, "project-management")
             .await
             .unwrap_or_else(|e| panic!("seed {seed}: first install failed: {e}"));
 
@@ -212,7 +212,7 @@ async fn dst_boot_cycle_idempotent() {
 
         // Second install of the same app — should be idempotent.
         let types_2 = harness
-            .install_os_app(TENANT, "project-management")
+            .install_skill(TENANT, "project-management")
             .await
             .unwrap_or_else(|e| panic!("seed {seed}: second install failed: {e}"));
 
@@ -249,7 +249,7 @@ async fn dst_boot_cycle_multi_tenant() {
 
         // Install PM for tenant-a.
         let types_a = harness
-            .install_os_app(tenant_a, "project-management")
+            .install_skill(tenant_a, "project-management")
             .await
             .unwrap_or_else(|e| panic!("seed {seed}: install PM for tenant-a failed: {e}"));
         assert!(
@@ -259,7 +259,7 @@ async fn dst_boot_cycle_multi_tenant() {
 
         // Install temper-fs for tenant-b.
         let types_b = harness
-            .install_os_app(tenant_b, "temper-fs")
+            .install_skill(tenant_b, "temper-fs")
             .await
             .unwrap_or_else(|e| panic!("seed {seed}: install temper-fs for tenant-b failed: {e}"));
         assert!(
@@ -329,7 +329,7 @@ async fn dst_boot_cycle_determinism_canary() {
             let mut harness = SimPlatformHarness::no_faults(seed);
 
             harness
-                .install_os_app(TENANT, "project-management")
+                .install_skill(TENANT, "project-management")
                 .await
                 .unwrap_or_else(|e| panic!("seed {seed}: install failed: {e}"));
 
@@ -386,8 +386,8 @@ async fn dst_boot_cycle_combined_faults() {
             SimPlatformFaultConfig::heavy(),
         );
 
-        // OS app install may fail due to faults on either store layer.
-        let install_result = harness.install_os_app(TENANT, "project-management").await;
+        // Skill install may fail due to faults on either store layer.
+        let install_result = harness.install_skill(TENANT, "project-management").await;
 
         if install_result.is_err() {
             // Install failed due to combined faults — disable faults for clean restart.

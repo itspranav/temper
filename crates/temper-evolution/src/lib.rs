@@ -10,6 +10,7 @@
 //! from anomaly detection to deployed change.
 
 pub mod chain;
+pub mod gepa;
 pub mod insight;
 pub mod pg_store;
 pub mod records;

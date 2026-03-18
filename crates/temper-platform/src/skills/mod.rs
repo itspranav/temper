@@ -1,10 +1,10 @@
-//! OS App Catalog — agent-installable pre-built application specs.
+//! Skill Catalog — agent-installable pre-built application specs.
 //!
-//! OS apps are spec bundles (IOA TOML + CSDL + Cedar policies) that ship
-//! embedded in the binary. Agents discover them via `list_apps()` / `install_app()`
-//! and developers can pre-load them with `--os-app <name>`.
+//! Skills are spec bundles (IOA TOML + CSDL + Cedar policies) that ship
+//! embedded in the binary. Agents discover them via `list_skills()` / `install_skill()`
+//! and developers can pre-load them with `--skill <name>`.
 //!
-//! Install reuses [`crate::bootstrap::bootstrap_tenant_specs`] so every OS app
+//! Install reuses [`crate::bootstrap::bootstrap_tenant_specs`] so every skill
 //! goes through the same verification cascade as system specs.
 
 use std::collections::BTreeMap;
@@ -16,7 +16,7 @@ use temper_spec::csdl::{emit_csdl_xml, merge_csdl, parse_csdl};
 use crate::bootstrap;
 use crate::state::PlatformState;
 
-/// Result of an OS app installation, categorising each spec by what happened.
+/// Result of a skill installation, categorising each spec by what happened.
 #[derive(Debug, Clone, Serialize)]
 pub struct InstallResult {
     /// Entity types registered for the first time.
@@ -27,69 +27,82 @@ pub struct InstallResult {
     pub skipped: Vec<String>,
 }
 
-// ── Project Management OS App ──────────────────────────────────────
+// ── Project Management Skill ──────────────────────────────────────
 
-const PM_ISSUE_IOA: &str = include_str!("../../../../os-apps/project-management/issue.ioa.toml");
+const PM_ISSUE_IOA: &str = include_str!("../../../../skills/project-management/issue.ioa.toml");
 const PM_PROJECT_IOA: &str =
-    include_str!("../../../../os-apps/project-management/project.ioa.toml");
-const PM_CYCLE_IOA: &str = include_str!("../../../../os-apps/project-management/cycle.ioa.toml");
+    include_str!("../../../../skills/project-management/project.ioa.toml");
+const PM_CYCLE_IOA: &str = include_str!("../../../../skills/project-management/cycle.ioa.toml");
 const PM_COMMENT_IOA: &str =
-    include_str!("../../../../os-apps/project-management/comment.ioa.toml");
-const PM_LABEL_IOA: &str = include_str!("../../../../os-apps/project-management/label.ioa.toml");
-const PM_CSDL: &str = include_str!("../../../../os-apps/project-management/model.csdl.xml");
+    include_str!("../../../../skills/project-management/comment.ioa.toml");
+const PM_LABEL_IOA: &str = include_str!("../../../../skills/project-management/label.ioa.toml");
+const PM_CSDL: &str = include_str!("../../../../skills/project-management/model.csdl.xml");
 const PM_CEDAR_ISSUE: &str =
-    include_str!("../../../../os-apps/project-management/policies/issue.cedar");
+    include_str!("../../../../skills/project-management/policies/issue.cedar");
 
-// ── Temper FS OS App ───────────────────────────────────────────────
+// ── Temper FS Skill ───────────────────────────────────────────────
 
-const FS_FILE_IOA: &str = include_str!("../../../../os-apps/temper-fs/specs/file.ioa.toml");
-const FS_DIR_IOA: &str = include_str!("../../../../os-apps/temper-fs/specs/directory.ioa.toml");
+const FS_FILE_IOA: &str = include_str!("../../../../skills/temper-fs/specs/file.ioa.toml");
+const FS_DIR_IOA: &str = include_str!("../../../../skills/temper-fs/specs/directory.ioa.toml");
 const FS_VERSION_IOA: &str =
-    include_str!("../../../../os-apps/temper-fs/specs/file_version.ioa.toml");
+    include_str!("../../../../skills/temper-fs/specs/file_version.ioa.toml");
 const FS_WORKSPACE_IOA: &str =
-    include_str!("../../../../os-apps/temper-fs/specs/workspace.ioa.toml");
-const FS_CSDL: &str = include_str!("../../../../os-apps/temper-fs/specs/model.csdl.xml");
-const FS_CEDAR_FILE: &str = include_str!("../../../../os-apps/temper-fs/policies/file.cedar");
+    include_str!("../../../../skills/temper-fs/specs/workspace.ioa.toml");
+const FS_CSDL: &str = include_str!("../../../../skills/temper-fs/specs/model.csdl.xml");
+const FS_CEDAR_FILE: &str = include_str!("../../../../skills/temper-fs/policies/file.cedar");
 const FS_CEDAR_WORKSPACE: &str =
-    include_str!("../../../../os-apps/temper-fs/policies/workspace.cedar");
-const FS_CEDAR_WASM: &str = include_str!("../../../../os-apps/temper-fs/policies/wasm.cedar");
+    include_str!("../../../../skills/temper-fs/policies/workspace.cedar");
+const FS_CEDAR_WASM: &str = include_str!("../../../../skills/temper-fs/policies/wasm.cedar");
 
-// ── Agent Orchestration OS App ────────────────────────────────────
+// ── Evolution Skill ──────────────────────────────────────────────
+
+const EVO_RUN_IOA: &str =
+    include_str!("../../../../skills/evolution/evolution_run.ioa.toml");
+const EVO_SENTINEL_IOA: &str =
+    include_str!("../../../../skills/evolution/sentinel_monitor.ioa.toml");
+const EVO_CSDL: &str = include_str!("../../../../skills/evolution/model.csdl.xml");
+const EVO_CEDAR: &str = include_str!("../../../../skills/evolution/policies/evolution.cedar");
+const EVO_SKILL_MD: &str = include_str!("../../../../skills/evolution/skill.md");
+
+// ── Agent Orchestration Skill ────────────────────────────────────
 
 const AO_HEARTBEAT_IOA: &str =
-    include_str!("../../../../os-apps/agent-orchestration/specs/heartbeat_run.ioa.toml");
+    include_str!("../../../../skills/agent-orchestration/specs/heartbeat_run.ioa.toml");
 const AO_ORG_IOA: &str =
-    include_str!("../../../../os-apps/agent-orchestration/specs/organization.ioa.toml");
+    include_str!("../../../../skills/agent-orchestration/specs/organization.ioa.toml");
 const AO_BUDGET_IOA: &str =
-    include_str!("../../../../os-apps/agent-orchestration/specs/budget_ledger.ioa.toml");
-const AO_CSDL: &str = include_str!("../../../../os-apps/agent-orchestration/specs/model.csdl.xml");
+    include_str!("../../../../skills/agent-orchestration/specs/budget_ledger.ioa.toml");
+const AO_CSDL: &str = include_str!("../../../../skills/agent-orchestration/specs/model.csdl.xml");
 const AO_CEDAR: &str =
-    include_str!("../../../../os-apps/agent-orchestration/policies/orchestration.cedar");
+    include_str!("../../../../skills/agent-orchestration/policies/orchestration.cedar");
 
-// ── Temper Agent OS App ──────────────────────────────────────────────
+// ── Temper Agent Skill ──────────────────────────────────────────────
 
 const TEMPER_AGENT_IOA: &str =
-    include_str!("../../../../os-apps/temper-agent/specs/temper_agent.ioa.toml");
+    include_str!("../../../../skills/temper-agent/specs/temper_agent.ioa.toml");
 const TEMPER_AGENT_CSDL: &str =
-    include_str!("../../../../os-apps/temper-agent/specs/model.csdl.xml");
+    include_str!("../../../../skills/temper-agent/specs/model.csdl.xml");
 const TEMPER_AGENT_CEDAR: &str =
-    include_str!("../../../../os-apps/temper-agent/policies/agent.cedar");
+    include_str!("../../../../skills/temper-agent/policies/agent.cedar");
 
-/// Metadata for an OS app in the catalog.
+/// Metadata for a skill in the catalog.
 #[derive(Debug, Clone, Serialize)]
-pub struct OsAppEntry {
+pub struct SkillEntry {
     /// Short name used in CLI flags and API calls (e.g. `"project-management"`).
     pub name: &'static str,
     /// Human-readable description.
     pub description: &'static str,
-    /// Entity types included in the app.
+    /// Entity types included in the skill.
     pub entity_types: &'static [&'static str],
     /// Semantic version.
     pub version: &'static str,
+    /// Full skill guide markdown (from `skill.md`), if available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_guide: Option<&'static str>,
 }
 
-/// Full spec bundle for an OS app.
-pub struct OsAppBundle {
+/// Full spec bundle for a skill.
+pub struct SkillBundle {
     /// IOA spec sources as `(entity_type, ioa_toml_source)` pairs.
     pub specs: &'static [(&'static str, &'static str)],
     /// CSDL XML source.
@@ -97,6 +110,10 @@ pub struct OsAppBundle {
     /// Cedar policy sources (may be empty).
     pub cedar_policies: &'static [&'static str],
 }
+
+// Backward-compatible type aliases.
+pub type OsAppEntry = SkillEntry;
+pub type OsAppBundle = SkillBundle;
 
 /// Project Management app specs.
 const PM_SPECS: &[(&str, &str)] = &[
@@ -125,67 +142,110 @@ const AO_SPECS: &[(&str, &str)] = &[
 /// Temper Agent app specs.
 const TEMPER_AGENT_SPECS: &[(&str, &str)] = &[("TemperAgent", TEMPER_AGENT_IOA)];
 
-/// All available OS apps.
-static OS_APP_CATALOG: &[OsAppEntry] = &[
-    OsAppEntry {
+/// Evolution skill specs.
+const EVO_SPECS: &[(&str, &str)] = &[
+    ("EvolutionRun", EVO_RUN_IOA),
+    ("SentinelMonitor", EVO_SENTINEL_IOA),
+];
+
+/// All available skills.
+static SKILL_CATALOG: &[SkillEntry] = &[
+    SkillEntry {
         name: "project-management",
         description: "Issue tracking with projects, cycles, labels, and comments",
         entity_types: &["Issue", "Project", "Cycle", "Comment", "Label"],
         version: "0.1.0",
+        skill_guide: None,
     },
-    OsAppEntry {
+    SkillEntry {
         name: "temper-fs",
         description: "Governed filesystem with workspaces, directories, files, and versioning",
         entity_types: &["File", "Directory", "FileVersion", "Workspace"],
         version: "0.1.0",
+        skill_guide: None,
     },
-    OsAppEntry {
+    SkillEntry {
         name: "agent-orchestration",
         description: "Agent heartbeat orchestration with organizations and budget ledgering",
         entity_types: &["HeartbeatRun", "Organization", "BudgetLedger"],
         version: "0.1.0",
+        skill_guide: None,
     },
-    OsAppEntry {
+    SkillEntry {
         name: "temper-agent",
         description: "Spec-driven agent with LLM loop, sandbox tools, and TemperFS conversation storage",
         entity_types: &["TemperAgent"],
         version: "0.1.0",
+        skill_guide: None,
+    },
+    SkillEntry {
+        name: "evolution",
+        description: "GEPA-based self-improvement loop for Temper skills",
+        entity_types: &["EvolutionRun", "SentinelMonitor"],
+        version: "0.1.0",
+        skill_guide: Some(EVO_SKILL_MD),
     },
 ];
 
-/// List all available OS apps.
-pub fn list_os_apps() -> &'static [OsAppEntry] {
-    OS_APP_CATALOG
+/// List all available skills.
+pub fn list_skills() -> &'static [SkillEntry] {
+    SKILL_CATALOG
 }
 
-/// Get the full spec bundle for an OS app by name.
-pub fn get_os_app(name: &str) -> Option<OsAppBundle> {
+/// Backward-compatible alias.
+pub fn list_os_apps() -> &'static [SkillEntry] {
+    list_skills()
+}
+
+/// Get the full spec bundle for a skill by name.
+pub fn get_skill(name: &str) -> Option<SkillBundle> {
     match name {
-        "project-management" => Some(OsAppBundle {
+        "project-management" => Some(SkillBundle {
             specs: PM_SPECS,
             csdl: PM_CSDL,
             cedar_policies: &[PM_CEDAR_ISSUE],
         }),
-        "temper-fs" => Some(OsAppBundle {
+        "temper-fs" => Some(SkillBundle {
             specs: FS_SPECS,
             csdl: FS_CSDL,
             cedar_policies: &[FS_CEDAR_FILE, FS_CEDAR_WORKSPACE, FS_CEDAR_WASM],
         }),
-        "agent-orchestration" => Some(OsAppBundle {
+        "agent-orchestration" => Some(SkillBundle {
             specs: AO_SPECS,
             csdl: AO_CSDL,
             cedar_policies: &[AO_CEDAR],
         }),
-        "temper-agent" => Some(OsAppBundle {
+        "temper-agent" => Some(SkillBundle {
             specs: TEMPER_AGENT_SPECS,
             csdl: TEMPER_AGENT_CSDL,
             cedar_policies: &[TEMPER_AGENT_CEDAR],
+        }),
+        "evolution" => Some(SkillBundle {
+            specs: EVO_SPECS,
+            csdl: EVO_CSDL,
+            cedar_policies: &[EVO_CEDAR],
         }),
         _ => None,
     }
 }
 
-/// Install an OS app into a tenant (workspace).
+/// Backward-compatible alias.
+pub fn get_os_app(name: &str) -> Option<SkillBundle> {
+    get_skill(name)
+}
+
+/// Get the full skill guide markdown for a skill by name.
+///
+/// Returns the parsed `skill.md` content (TOML frontmatter stripped),
+/// or `None` if the skill has no guide.
+pub fn get_skill_guide(name: &str) -> Option<&'static str> {
+    SKILL_CATALOG
+        .iter()
+        .find(|e| e.name == name)
+        .and_then(|e| e.skill_guide)
+}
+
+/// Install a skill into a tenant (workspace).
 ///
 /// Runs the verification cascade and registers specs in the SpecRegistry,
 /// loads Cedar policies, and **persists everything to the platform DB** so
@@ -194,13 +254,13 @@ pub fn get_os_app(name: &str) -> Option<OsAppBundle> {
 /// **Write ordering:** Turso first, then memory. If Turso persistence fails
 /// the operation returns an error *before* touching in-memory state, so the
 /// registry and Cedar engine stay consistent with the durable store.
-pub async fn install_os_app(
+pub async fn install_skill(
     state: &PlatformState,
     tenant: &str,
-    app_name: &str,
+    skill_name: &str,
 ) -> Result<InstallResult, String> {
-    let bundle =
-        get_os_app(app_name).ok_or_else(|| format!("OS app '{app_name}' not found in catalog"))?;
+    let bundle = get_skill(skill_name)
+        .ok_or_else(|| format!("Skill '{skill_name}' not found in catalog"))?;
     let tenant_id = TenantId::new(tenant);
 
     // Classify each bundle spec as added / updated / skipped, and compute the
@@ -226,10 +286,10 @@ pub async fn install_os_app(
                 }
             }
         }
-        // OS app installs must preserve existing tenant types.
+        // Skill installs must preserve existing tenant types.
         let merged_csdl = if let Some(existing) = registry.get_tenant(&tenant_id) {
             let incoming = parse_csdl(bundle.csdl)
-                .map_err(|e| format!("Failed to parse CSDL for OS app '{app_name}': {e}"))?;
+                .map_err(|e| format!("Failed to parse CSDL for skill '{skill_name}': {e}"))?;
             emit_csdl_xml(&merge_csdl(&existing.csdl, &incoming))
         } else {
             bundle.csdl.to_string()
@@ -288,9 +348,9 @@ pub async fn install_os_app(
                 .map_err(|e| format!("Failed to persist Cedar policy: {e}"))?;
         }
         turso
-            .record_installed_app(tenant, app_name)
+            .record_installed_app(tenant, skill_name)
             .await
-            .map_err(|e| format!("Failed to record app installation: {e}"))?;
+            .map_err(|e| format!("Failed to record skill installation: {e}"))?;
         // Commit all specs atomically after all writes succeed.
         turso
             .commit_specs(tenant)
@@ -310,9 +370,9 @@ pub async fn install_os_app(
                 .await
                 .map_err(|e| format!("Failed to persist Cedar policy: {e}"))?;
         }
-        ps.record_installed_app(tenant, app_name)
+        ps.record_installed_app(tenant, skill_name)
             .await
-            .map_err(|e| format!("Failed to record app installation: {e}"))?;
+            .map_err(|e| format!("Failed to record skill installation: {e}"))?;
         // Commit all specs atomically after all writes succeed.
         ps.commit_specs(tenant)
             .await
@@ -350,7 +410,7 @@ pub async fn install_os_app(
             &merged_csdl,
             &specs_to_bootstrap,
             true,
-            &format!("OS-App({app_name})"),
+            &format!("Skill({skill_name})"),
             &verified_cache,
         );
     }
@@ -366,12 +426,12 @@ pub async fn install_os_app(
             all_policies.push('\n');
         }
         if let Err(e) = state.server.authz.reload_policies(&all_policies) {
-            tracing::warn!("Failed to reload Cedar policies after OS app install: {e}");
+            tracing::warn!("Failed to reload Cedar policies after skill install: {e}");
         }
     }
 
     tracing::info!(
-        "Installed OS app '{app_name}' for tenant '{tenant}': \
+        "Installed skill '{skill_name}' for tenant '{tenant}': \
          added={:?} updated={:?} skipped={:?}",
         added,
         updated,
@@ -383,6 +443,15 @@ pub async fn install_os_app(
         updated,
         skipped,
     })
+}
+
+/// Backward-compatible alias.
+pub async fn install_os_app(
+    state: &PlatformState,
+    tenant: &str,
+    app_name: &str,
+) -> Result<InstallResult, String> {
+    install_skill(state, tenant, app_name).await
 }
 
 #[cfg(test)]

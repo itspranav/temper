@@ -24,6 +24,7 @@ import type {
   ExtendedSentinelCheckResponse,
   FeatureRequest,
   FeatureRequestDisposition,
+  SkillsResponse,
   OsAppsResponse,
   PoliciesResponse,
   AllPoliciesResponse,
@@ -489,23 +490,28 @@ export async function fetchFeatureRequests(disposition?: FeatureRequestDispositi
   return data.feature_requests;
 }
 
-/** Fetch available OS apps from the catalog */
-export async function fetchOsApps(): Promise<OsAppsResponse> {
-  const res = await fetchWithRetry(`${API_BASE}/observe/os-apps`, { cache: "no-store" });
-  if (!res.ok) throw new ApiError(`Failed to fetch OS apps: ${res.status}`, res.status);
+/** Fetch available skills from the catalog */
+export async function fetchSkills(): Promise<SkillsResponse> {
+  const res = await fetchWithRetry(`${API_BASE}/observe/skills`, { cache: "no-store" });
+  if (!res.ok) throw new ApiError(`Failed to fetch skills: ${res.status}`, res.status);
   return res.json();
 }
 
-/** Install an OS app into a tenant */
-export async function installOsApp(name: string, tenant: string): Promise<Record<string, unknown>> {
-  const res = await fetchWithRetry(`${API_BASE}/observe/os-apps/${encodeURIComponent(name)}/install`, {
+/** Install a skill into a tenant */
+export async function installSkill(name: string, tenant: string): Promise<Record<string, unknown>> {
+  const res = await fetchWithRetry(`${API_BASE}/observe/skills/${encodeURIComponent(name)}/install`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ tenant }),
   });
-  if (!res.ok) throw new ApiError(`Failed to install OS app: ${res.status}`, res.status);
+  if (!res.ok) throw new ApiError(`Failed to install skill: ${res.status}`, res.status);
   return res.json();
 }
+
+/** @deprecated Use fetchSkills instead */
+export const fetchOsApps = fetchSkills;
+/** @deprecated Use installSkill instead */
+export const installOsApp = installSkill;
 
 /** Delete a tenant */
 export async function deleteTenant(tenantId: string): Promise<Record<string, unknown>> {

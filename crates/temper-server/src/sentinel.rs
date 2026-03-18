@@ -134,6 +134,44 @@ pub fn default_rules() -> Vec<SentinelRule> {
                 }
             }),
         },
+        SentinelRule {
+            name: "ots_trajectory_failure_cluster".to_string(),
+            source: "sentinel:ots_failures".to_string(),
+            classification: ObservationClass::StateMachine,
+            threshold_field: "failure_cluster_count".to_string(),
+            threshold_value: 5.0,
+            check: Box::new(|_state, entries| {
+                // Detect clusters of trajectory failures on the same entity type.
+                // Triggers when >5 failures occur for any single entity type.
+                if entries.is_empty() {
+                    return None;
+                }
+
+                // Aggregate failures per entity type.
+                let mut failures_per_type: BTreeMap<String, u64> = BTreeMap::new();
+                for entry in entries.iter() {
+                    if !entry.success {
+                        *failures_per_type
+                            .entry(entry.entity_type.clone())
+                            .or_insert(0) += 1;
+                    }
+                }
+
+                // Find worst cluster.
+                let mut worst_count = 0u64;
+                for &count in failures_per_type.values() {
+                    if count > worst_count {
+                        worst_count = count;
+                    }
+                }
+
+                if worst_count >= 5 {
+                    Some(worst_count as f64)
+                } else {
+                    None
+                }
+            }),
+        },
     ]
 }
 
@@ -240,7 +278,7 @@ mod tests {
     #[test]
     fn test_default_rules_count() {
         let rules = default_rules();
-        assert_eq!(rules.len(), 3);
+        assert_eq!(rules.len(), 4);
     }
 
     #[tokio::test]
@@ -284,6 +322,87 @@ mod tests {
         let record = &error_alert.expect("checked above").record;
         assert!(record.header.id.starts_with("O-"));
         assert!(record.observed_value.expect("should have value") > 0.10);
+    }
+
+    #[test]
+    fn test_ots_failure_cluster_triggers() {
+        let state = test_state_with_registry();
+        let rules = default_rules();
+
+        // Create trajectory entries with 6 failures on the same entity type.
+        let entries: Vec<crate::state::TrajectoryEntry> = (0..6)
+            .map(|i| crate::state::TrajectoryEntry {
+                entity_type: "Issue".to_string(),
+                entity_id: format!("issue-{i}"),
+                action: "Reassign".to_string(),
+                success: false,
+                timestamp: sim_now().to_rfc3339(),
+                tenant: "test".to_string(),
+                from_status: None,
+                to_status: None,
+                error: Some("action not found".to_string()),
+                agent_id: None,
+                session_id: None,
+                authz_denied: None,
+                denied_resource: None,
+                denied_module: None,
+                source: None,
+                spec_governed: None,
+                agent_type: None,
+                request_body: None,
+                intent: None,
+            })
+            .collect();
+
+        let alerts = check_rules(&rules, &state, &entries);
+        let ots_alert = alerts
+            .iter()
+            .find(|a| a.rule_name == "ots_trajectory_failure_cluster");
+        assert!(
+            ots_alert.is_some(),
+            "ots_trajectory_failure_cluster should trigger with 6 failures"
+        );
+        assert!(ots_alert.expect("checked above").record.observed_value.expect("should have value") >= 5.0);
+    }
+
+    #[test]
+    fn test_ots_failure_cluster_below_threshold() {
+        let state = test_state_with_registry();
+        let rules = default_rules();
+
+        // Only 3 failures — below the threshold of 5.
+        let entries: Vec<crate::state::TrajectoryEntry> = (0..3)
+            .map(|i| crate::state::TrajectoryEntry {
+                entity_type: "Issue".to_string(),
+                entity_id: format!("issue-{i}"),
+                action: "Reassign".to_string(),
+                success: false,
+                timestamp: sim_now().to_rfc3339(),
+                tenant: "test".to_string(),
+                from_status: None,
+                to_status: None,
+                error: Some("action not found".to_string()),
+                agent_id: None,
+                session_id: None,
+                authz_denied: None,
+                denied_resource: None,
+                denied_module: None,
+                source: None,
+                spec_governed: None,
+                agent_type: None,
+                request_body: None,
+                intent: None,
+            })
+            .collect();
+
+        let alerts = check_rules(&rules, &state, &entries);
+        let ots_alert = alerts
+            .iter()
+            .find(|a| a.rule_name == "ots_trajectory_failure_cluster");
+        assert!(
+            ots_alert.is_none(),
+            "ots_trajectory_failure_cluster should NOT trigger with only 3 failures"
+        );
     }
 
     #[test]

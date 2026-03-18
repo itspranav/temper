@@ -2,6 +2,11 @@
 
 use anyhow::{Result, bail};
 use monty::MontyObject;
+use temper_ots::{
+    DecisionType, MessageRole, OTSChoice, OTSConsequence, OTSContext, OTSDecision, OTSMessage,
+    OTSMessageContent, OTSMetadata, OutcomeType, TrajectoryBuilder,
+};
+use temper_runtime::scheduler::sim_now;
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use super::McpConfig;
@@ -43,6 +48,8 @@ pub(crate) struct RuntimeContext {
     pub(crate) api_key: Option<String>,
     pub(crate) identity_tenant: String,
     sandbox: temper_sandbox::runner::PersistentSandbox,
+    /// OTS trajectory builder for capturing agent execution traces.
+    pub(crate) trajectory: Option<TrajectoryBuilder>,
 }
 
 impl RuntimeContext {
@@ -70,6 +77,7 @@ impl RuntimeContext {
                 .filter(|v| !v.trim().is_empty())
                 .unwrap_or_else(|| "default".to_string()), // determinism-ok: startup config
             sandbox: temper_sandbox::runner::PersistentSandbox::new(&[("temper", "Temper", 1)]),
+            trajectory: None,
         })
     }
 
@@ -135,6 +143,113 @@ impl RuntimeContext {
         }
 
         resp.json::<ResolvedIdentityResponse>().await.ok()
+    }
+
+    /// Initialize OTS trajectory capture after the MCP handshake completes.
+    pub(crate) fn init_trajectory(&mut self) {
+        let now = sim_now(); // determinism-ok: sim_now is DST-safe
+        let agent_id = self.agent_id.as_deref().unwrap_or("unknown");
+        let metadata = OTSMetadata::new("mcp-session", agent_id, OutcomeType::Success, now);
+
+        let context = OTSContext::new();
+
+        self.trajectory = Some(TrajectoryBuilder::new(metadata, context));
+    }
+
+    /// Record an execute tool call as an OTS turn with a decision.
+    pub(crate) fn record_execute_turn(&mut self, code: &str, result: &Result<String>) {
+        let Some(ref mut builder) = self.trajectory else {
+            return;
+        };
+
+        let now = sim_now(); // determinism-ok: sim_now is DST-safe
+        builder.start_turn(now);
+
+        // User message: the Python code submitted
+        builder.add_message(OTSMessage::new(
+            MessageRole::User,
+            OTSMessageContent::text(code),
+            now,
+        ));
+
+        // Decision: the execution outcome
+        let (outcome_str, consequence) = match result {
+            Ok(text) => {
+                // Assistant message: the execution result
+                builder.add_message(OTSMessage::new(
+                    MessageRole::Assistant,
+                    OTSMessageContent::text(text),
+                    now,
+                ));
+                ("success", OTSConsequence::success())
+            }
+            Err(e) => {
+                builder.add_message(OTSMessage::new(
+                    MessageRole::Assistant,
+                    OTSMessageContent::text(&e.to_string()),
+                    now,
+                ));
+                (
+                    "failure",
+                    OTSConsequence::failure().with_error_type(e.to_string()),
+                )
+            }
+        };
+
+        let decision = OTSDecision::new(
+            DecisionType::ToolSelection,
+            OTSChoice::new(format!("execute: {}", &code[..code.len().min(100)])),
+            consequence,
+        );
+        builder.add_decision(decision);
+
+        builder.end_turn(now);
+
+        tracing::debug!(outcome = outcome_str, "ots.trajectory.turn_recorded");
+    }
+
+    /// Finalize and POST the trajectory to the server.
+    pub(crate) async fn finalize_trajectory(&mut self) {
+        let Some(builder) = self.trajectory.take() else {
+            return;
+        };
+
+        let trajectory = builder.build();
+        let json = match serde_json::to_string(&trajectory) {
+            Ok(j) => j,
+            Err(e) => {
+                tracing::warn!(error = %e, "ots.trajectory.serialize_failed");
+                return;
+            }
+        };
+
+        let url = format!("{}/api/ots/trajectories", self.base_url);
+        let mut request = self.http.post(&url).body(json).header("Content-Type", "application/json");
+
+        if let Some(ref agent_id) = self.agent_id {
+            request = request.header("X-Agent-Id", agent_id);
+        }
+        if let Some(ref session_id) = self.session_id {
+            request = request.header("X-Session-Id", session_id);
+        }
+        if let Some(ref api_key) = self.api_key {
+            request = request.header("Authorization", format!("Bearer {api_key}"));
+        }
+
+        match request.send().await {
+            Ok(resp) if resp.status().is_success() => {
+                tracing::info!("ots.trajectory.uploaded");
+            }
+            Ok(resp) => {
+                tracing::warn!(
+                    status = resp.status().as_u16(),
+                    "ots.trajectory.upload_failed"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "ots.trajectory.upload_failed");
+            }
+        }
     }
 
     pub(crate) async fn run_execute(&mut self, code: &str) -> Result<String> {
@@ -225,6 +340,9 @@ pub async fn run_stdio_server(config: McpConfig) -> Result<()> {
             stdout.flush().await?;
         }
     }
+
+    // Finalize and upload OTS trajectory on session close.
+    ctx.finalize_trajectory().await;
 
     Ok(())
 }

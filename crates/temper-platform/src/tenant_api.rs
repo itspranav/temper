@@ -76,8 +76,12 @@ pub fn tenant_api_router() -> Router<PlatformState> {
             "/tenants/{id}/users/{user_id}",
             routing::delete(remove_user),
         )
-        .route("/os-apps", routing::get(list_os_apps))
-        .route("/os-apps/{name}/install", routing::post(install_os_app))
+        .route("/skills", routing::get(list_skills))
+        .route("/skills/{name}", routing::get(get_skill_guide))
+        .route("/skills/{name}/install", routing::post(install_skill))
+        // Backward-compatible aliases
+        .route("/os-apps", routing::get(list_skills))
+        .route("/os-apps/{name}/install", routing::post(install_skill))
 }
 
 /// `POST /api/tenants` — provision a new tenant database.
@@ -301,29 +305,50 @@ async fn remove_user(
     }
 }
 
-// ── OS App Catalog Endpoints ───────────────────────────────────────
+// ── Skill Catalog Endpoints ───────────────────────────────────────
 
-/// `GET /api/os-apps` — list available OS apps.
-pub(crate) async fn list_os_apps() -> impl IntoResponse {
-    let apps = crate::os_apps::list_os_apps();
+/// `GET /api/skills` — list available skills.
+pub(crate) async fn list_skills() -> impl IntoResponse {
+    let apps = crate::skills::list_skills();
     Json(serde_json::json!({ "apps": apps }))
 }
 
-/// Request body for `POST /api/os-apps/:name/install`.
+/// `GET /api/skills/:name` — get skill guide markdown.
+pub(crate) async fn get_skill_guide(
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    match crate::skills::get_skill_guide(&name) {
+        Some(guide) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "name": name,
+                "guide": guide,
+            })),
+        ),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!("No skill guide found for '{name}'"),
+            })),
+        ),
+    }
+}
+
+/// Request body for `POST /api/skills/:name/install`.
 #[derive(Debug, Deserialize)]
-pub struct InstallOsAppRequest {
+pub struct InstallSkillRequest {
     pub tenant: String,
 }
 
-/// `POST /api/os-apps/:name/install` — install an OS app into a tenant.
+/// `POST /api/skills/:name/install` — install a skill into a tenant.
 ///
 /// Ensures the tenant is registered in persistence (Turso) before loading
 /// specs into the in-memory registry. Without this, actors would fail to
 /// persist events because the storage layer rejects unknown tenants.
-pub(crate) async fn install_os_app(
+pub(crate) async fn install_skill(
     State(state): State<PlatformState>,
-    axum::extract::Path(app_name): axum::extract::Path<String>,
-    Json(req): Json<InstallOsAppRequest>,
+    axum::extract::Path(skill_name): axum::extract::Path<String>,
+    Json(req): Json<InstallSkillRequest>,
 ) -> impl IntoResponse {
     // Ensure tenant exists in persistence before loading specs.
     if let Some(ref store) = state.server.event_store
@@ -338,11 +363,11 @@ pub(crate) async fn install_os_app(
         );
     }
 
-    match crate::os_apps::install_os_app(&state, &req.tenant, &app_name).await {
+    match crate::skills::install_skill(&state, &req.tenant, &skill_name).await {
         Ok(result) => (
             StatusCode::OK,
             Json(serde_json::json!({
-                "app": app_name,
+                "app": skill_name,
                 "tenant": req.tenant,
                 "added": result.added,
                 "updated": result.updated,
