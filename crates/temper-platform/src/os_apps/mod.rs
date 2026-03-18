@@ -62,8 +62,7 @@ const AO_ORG_IOA: &str =
     include_str!("../../../../os-apps/agent-orchestration/specs/organization.ioa.toml");
 const AO_BUDGET_IOA: &str =
     include_str!("../../../../os-apps/agent-orchestration/specs/budget_ledger.ioa.toml");
-const AO_CSDL: &str =
-    include_str!("../../../../os-apps/agent-orchestration/specs/model.csdl.xml");
+const AO_CSDL: &str = include_str!("../../../../os-apps/agent-orchestration/specs/model.csdl.xml");
 const AO_CEDAR: &str =
     include_str!("../../../../os-apps/agent-orchestration/policies/orchestration.cedar");
 
