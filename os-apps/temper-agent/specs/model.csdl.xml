@@ -22,6 +22,7 @@
         <Property Name="ErrorMessage" Type="Edm.String"/>
         <Property Name="SandboxUrl" Type="Edm.String"/>
         <Property Name="SandboxId" Type="Edm.String"/>
+        <Property Name="FileManifestId" Type="Edm.String"/>
         <Property Name="Workdir" Type="Edm.String"/>
         <Property Name="ToolsEnabled" Type="Edm.String"/>
         <Property Name="SystemPrompt" Type="Edm.String"/>
@@ -53,6 +54,7 @@
         <Parameter Name="sandbox_id" Type="Edm.String" Nullable="false"/>
         <Parameter Name="workspace_id" Type="Edm.String" Nullable="true"/>
         <Parameter Name="conversation_file_id" Type="Edm.String" Nullable="true"/>
+        <Parameter Name="file_manifest_id" Type="Edm.String" Nullable="true"/>
         <ReturnType Type="Temper.Agent.TemperAgent"/>
       </Action>
 
@@ -78,6 +80,16 @@
         <Parameter Name="conversation" Type="Edm.String" Nullable="true"/>
         <Parameter Name="input_tokens" Type="Edm.Int64" Nullable="true"/>
         <Parameter Name="output_tokens" Type="Edm.Int64" Nullable="true"/>
+        <ReturnType Type="Temper.Agent.TemperAgent"/>
+      </Action>
+
+      <Action Name="Resume" IsBound="true">
+        <Parameter Name="bindingParameter" Type="Temper.Agent.TemperAgent"/>
+        <Parameter Name="sandbox_url" Type="Edm.String" Nullable="false"/>
+        <Parameter Name="sandbox_id" Type="Edm.String" Nullable="false"/>
+        <Parameter Name="workspace_id" Type="Edm.String" Nullable="false"/>
+        <Parameter Name="conversation_file_id" Type="Edm.String" Nullable="false"/>
+        <Parameter Name="file_manifest_id" Type="Edm.String" Nullable="false"/>
         <ReturnType Type="Temper.Agent.TemperAgent"/>
       </Action>
 

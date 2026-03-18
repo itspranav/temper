@@ -20,11 +20,7 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
         let ctx = Context::from_host()?;
         ctx.log("info", "sandbox_provisioner: starting");
 
-        let fields = ctx
-            .entity_state
-            .get("fields")
-            .cloned()
-            .unwrap_or(json!({}));
+        let fields = ctx.entity_state.get("fields").cloned().unwrap_or(json!({}));
 
         let user_message = fields
             .get("user_message")
@@ -60,18 +56,18 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
 
         let tenant = &ctx.tenant;
 
-        let fs_result = create_conversation_storage(
-            &ctx,
-            &temper_api_url,
-            tenant,
-            entity_id,
-        );
+        let fs_result = create_conversation_storage(&ctx, &temper_api_url, tenant, entity_id);
 
-        let (workspace_id, conversation_file_id) = match fs_result {
-            Ok((ws, f)) => (ws, f),
+        let (workspace_id, conversation_file_id, file_manifest_id) = match fs_result {
+            Ok((ws, conv, manifest)) => (ws, conv, manifest),
             Err(e) => {
-                ctx.log("warn", &format!("sandbox_provisioner: TemperFS setup failed: {e}, falling back to inline"));
-                (String::new(), String::new())
+                ctx.log(
+                    "warn",
+                    &format!(
+                        "sandbox_provisioner: TemperFS setup failed: {e}, falling back to inline"
+                    ),
+                );
+                (String::new(), String::new(), String::new())
             }
         };
 
@@ -83,6 +79,7 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
                 "sandbox_id": sandbox_result.sandbox_id,
                 "workspace_id": workspace_id,
                 "conversation_file_id": conversation_file_id,
+                "file_manifest_id": file_manifest_id,
             }),
         );
 
@@ -104,11 +101,7 @@ struct SandboxResult {
 /// 1. sandbox_url from entity state (set via Configure action) or integration config
 /// 2. E2B REST API (requires e2b_api_key in integration config)
 fn provision_sandbox(ctx: &Context) -> Result<SandboxResult, String> {
-    let fields = ctx
-        .entity_state
-        .get("fields")
-        .cloned()
-        .unwrap_or(json!({}));
+    let fields = ctx.entity_state.get("fields").cloned().unwrap_or(json!({}));
 
     // Priority 1: sandbox_url from entity state (set at Configure time) or config.
     let static_url = fields
@@ -129,7 +122,10 @@ fn provision_sandbox(ctx: &Context) -> Result<SandboxResult, String> {
                 .map(|s| s.to_string())
         });
     if let Some(url) = static_url {
-        ctx.log("info", &format!("sandbox_provisioner: using static sandbox_url: {url}"));
+        ctx.log(
+            "info",
+            &format!("sandbox_provisioner: using static sandbox_url: {url}"),
+        );
         return Ok(SandboxResult {
             sandbox_url: url,
             sandbox_id: "static-sandbox".to_string(),
@@ -137,18 +133,12 @@ fn provision_sandbox(ctx: &Context) -> Result<SandboxResult, String> {
     }
 
     // Priority 2: E2B REST API (requires e2b_api_key).
-    let e2b_api_key = ctx
-        .config
-        .get("e2b_api_key")
-        .cloned()
-        .unwrap_or_default();
+    let e2b_api_key = ctx.config.get("e2b_api_key").cloned().unwrap_or_default();
 
     if e2b_api_key.is_empty() || e2b_api_key.contains("{secret:") {
-        return Err(
-            "no sandbox_url configured and no e2b_api_key available — \
+        return Err("no sandbox_url configured and no e2b_api_key available — \
              set sandbox_url via Configure or store e2b_api_key secret"
-                .to_string(),
-        );
+            .to_string());
     }
 
     ctx.log("info", "sandbox_provisioner: provisioning via E2B API");
@@ -212,9 +202,7 @@ fn provision_sandbox(ctx: &Context) -> Result<SandboxResult, String> {
         .or_else(|| parsed.get("url"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .unwrap_or_else(|| {
-            format!("https://49983-{sandbox_id}.e2b.app")
-        });
+        .unwrap_or_else(|| format!("https://49983-{sandbox_id}.e2b.app"));
 
     ctx.log(
         "info",
@@ -229,14 +217,14 @@ fn provision_sandbox(ctx: &Context) -> Result<SandboxResult, String> {
     })
 }
 
-/// Create a TemperFS Workspace and File for conversation storage.
-/// Returns (workspace_entity_id, file_entity_id).
+/// Create a TemperFS Workspace, conversation File, and manifest File.
+/// Returns (workspace_entity_id, conversation_file_id, manifest_file_id).
 fn create_conversation_storage(
     ctx: &Context,
     temper_api_url: &str,
     tenant: &str,
     agent_id: &str,
-) -> Result<(String, String), String> {
+) -> Result<(String, String, String), String> {
     let headers = vec![
         ("content-type".to_string(), "application/json".to_string()),
         ("x-tenant-id".to_string(), tenant.to_string()),
@@ -255,7 +243,11 @@ fn create_conversation_storage(
     let ws_resp = ctx.http_call("POST", &ws_url, &headers, &ws_body.to_string())?;
 
     if ws_resp.status < 200 || ws_resp.status >= 300 {
-        return Err(format!("Workspace creation failed (HTTP {}): {}", ws_resp.status, &ws_resp.body[..ws_resp.body.len().min(300)]));
+        return Err(format!(
+            "Workspace creation failed (HTTP {}): {}",
+            ws_resp.status,
+            &ws_resp.body[..ws_resp.body.len().min(300)]
+        ));
     }
 
     let ws_parsed: Value = serde_json::from_str(&ws_resp.body)
@@ -266,7 +258,10 @@ fn create_conversation_storage(
         .unwrap_or("")
         .to_string();
 
-    ctx.log("info", &format!("sandbox_provisioner: created workspace {workspace_id}"));
+    ctx.log(
+        "info",
+        &format!("sandbox_provisioner: created workspace {workspace_id}"),
+    );
 
     // 2. Create File for conversation
     let file_body = json!({
@@ -281,18 +276,25 @@ fn create_conversation_storage(
     let file_resp = ctx.http_call("POST", &file_url, &headers, &file_body.to_string())?;
 
     if file_resp.status < 200 || file_resp.status >= 300 {
-        return Err(format!("File creation failed (HTTP {}): {}", file_resp.status, &file_resp.body[..file_resp.body.len().min(300)]));
+        return Err(format!(
+            "File creation failed (HTTP {}): {}",
+            file_resp.status,
+            &file_resp.body[..file_resp.body.len().min(300)]
+        ));
     }
 
-    let file_parsed: Value = serde_json::from_str(&file_resp.body)
-        .map_err(|e| format!("parse file response: {e}"))?;
+    let file_parsed: Value =
+        serde_json::from_str(&file_resp.body).map_err(|e| format!("parse file response: {e}"))?;
     let file_id = file_parsed
         .get("entity_id")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
 
-    ctx.log("info", &format!("sandbox_provisioner: created conversation file {file_id}"));
+    ctx.log(
+        "info",
+        &format!("sandbox_provisioner: created conversation file {file_id}"),
+    );
 
     // 3. Write initial empty conversation
     let init_conv = json!({"messages": []}).to_string();
@@ -305,8 +307,62 @@ fn create_conversation_storage(
     let value_resp = ctx.http_call("PUT", &value_url, &value_headers, &init_conv)?;
 
     if value_resp.status < 200 || value_resp.status >= 300 {
-        ctx.log("warn", &format!("sandbox_provisioner: initial $value write failed (HTTP {})", value_resp.status));
+        ctx.log(
+            "warn",
+            &format!(
+                "sandbox_provisioner: initial $value write failed (HTTP {})",
+                value_resp.status
+            ),
+        );
     }
 
-    Ok((workspace_id, file_id))
+    // 4. Create manifest File for sandbox fsync
+    let manifest_body = json!({
+        "FileId": format!("manifest-{agent_id}"),
+        "workspace_id": workspace_id,
+        "name": "file_manifest.json",
+        "mime_type": "application/json",
+        "path": "/file_manifest.json"
+    });
+
+    let manifest_resp = ctx.http_call("POST", &file_url, &headers, &manifest_body.to_string())?;
+
+    if manifest_resp.status < 200 || manifest_resp.status >= 300 {
+        return Err(format!(
+            "Manifest File creation failed (HTTP {}): {}",
+            manifest_resp.status,
+            &manifest_resp.body[..manifest_resp.body.len().min(300)]
+        ));
+    }
+
+    let manifest_parsed: Value = serde_json::from_str(&manifest_resp.body)
+        .map_err(|e| format!("parse manifest response: {e}"))?;
+    let manifest_id = manifest_parsed
+        .get("entity_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    ctx.log(
+        "info",
+        &format!("sandbox_provisioner: created manifest file {manifest_id}"),
+    );
+
+    // 5. Write initial empty manifest
+    let init_manifest = json!({"files": {}, "synced_at_turn": 0}).to_string();
+    let manifest_value_url = format!("{temper_api_url}/tdata/Files('{manifest_id}')/$value");
+    let manifest_value_resp =
+        ctx.http_call("PUT", &manifest_value_url, &value_headers, &init_manifest)?;
+
+    if manifest_value_resp.status < 200 || manifest_value_resp.status >= 300 {
+        ctx.log(
+            "warn",
+            &format!(
+                "sandbox_provisioner: initial manifest $value write failed (HTTP {})",
+                manifest_value_resp.status
+            ),
+        );
+    }
+
+    Ok((workspace_id, file_id, manifest_id))
 }

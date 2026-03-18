@@ -14,7 +14,7 @@ permit(
 
 permit(
   principal,
-  action in [Action::"create", Action::"Configure", Action::"Provision"],
+  action in [Action::"create", Action::"Configure", Action::"Provision", Action::"Resume"],
   resource is TemperAgent
 ) when {
   ["supervisor", "human"].contains(principal.agent_type)
@@ -52,7 +52,7 @@ permit(
   action == Action::"http_call",
   resource is HttpEndpoint
 ) when {
-  ["sandbox_provisioner", "llm_caller", "tool_runner"].contains(context.module)
+  ["sandbox_provisioner", "llm_caller", "tool_runner", "workspace_restorer"].contains(context.module)
 };
 
 // Allow agent WASM modules to access secrets
@@ -61,7 +61,7 @@ permit(
   action == Action::"access_secret",
   resource is Secret
 ) when {
-  ["sandbox_provisioner", "llm_caller", "tool_runner"].contains(context.module)
+  ["sandbox_provisioner", "llm_caller", "tool_runner", "workspace_restorer"].contains(context.module)
 };
 
 // --- Failure and cancellation: supervisors, humans, and system ---

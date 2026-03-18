@@ -92,6 +92,11 @@ type = "string"
 initial = ""
 
 [[state]]
+name = "file_manifest_id"
+type = "string"
+initial = ""
+
+[[state]]
 name = "workdir"
 type = "string"
 initial = "/workspace"
@@ -138,8 +143,8 @@ name = "SandboxReady"
 kind = "input"
 from = ["Provisioning"]
 to = "Thinking"
-params = ["sandbox_url", "sandbox_id", "workspace_id", "conversation_file_id"]
-hint = "Callback from sandbox provisioner. Sets sandbox connection, TemperFS workspace/file, and starts think loop."
+params = ["sandbox_url", "sandbox_id", "workspace_id", "conversation_file_id", "file_manifest_id"]
+hint = "Callback from sandbox provisioner. Sets sandbox connection, TemperFS workspace/file/manifest, and starts think loop."
 effect = [{ type = "trigger", name = "call_llm" }]
 
 [[action]]
@@ -195,6 +200,15 @@ kind = "input"
 from = ["Created", "Provisioning", "Thinking", "Executing"]
 to = "Cancelled"
 hint = "Cancel agent execution."
+
+[[action]]
+name = "Resume"
+kind = "input"
+from = ["Created"]
+to = "Provisioning"
+params = ["sandbox_url", "sandbox_id", "workspace_id", "conversation_file_id", "file_manifest_id"]
+hint = "Resume agent from saved state. Transitions to Provisioning for workspace restore."
+effect = [{ type = "trigger", name = "restore_workspace" }]
 
 # --- Invariants ---
 
@@ -254,6 +268,18 @@ name = "run_tools"
 trigger = "run_tools"
 type = "wasm"
 module = "tool_runner"
+on_failure = "Fail"
+
+[integration.config]
+temper_api_url = "http://localhost:3000"
+max_sync_file_bytes = "61440"
+sync_exclude = "__pycache__,node_modules,.git"
+
+[[integration]]
+name = "restore_workspace"
+trigger = "restore_workspace"
+type = "wasm"
+module = "workspace_restorer"
 on_failure = "Fail"
 
 [integration.config]

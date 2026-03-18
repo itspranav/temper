@@ -20,11 +20,7 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
         ctx.log("info", "llm_caller: starting");
 
         // Read entity state
-        let fields = ctx
-            .entity_state
-            .get("fields")
-            .cloned()
-            .unwrap_or(json!({}));
+        let fields = ctx.entity_state.get("fields").cloned().unwrap_or(json!({}));
 
         // Check turn budget
         let turn_count = fields
@@ -78,11 +74,7 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
             .unwrap_or("/workspace");
 
         // Get API key from integration config (resolved from {secret:anthropic_api_key})
-        let api_key = ctx
-            .config
-            .get("api_key")
-            .cloned()
-            .unwrap_or_default();
+        let api_key = ctx.config.get("api_key").cloned().unwrap_or_default();
 
         if api_key.is_empty() {
             return Err("missing api_key in integration config".to_string());
@@ -108,7 +100,13 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
         }
         let first_turn_content = user_message;
         let mut messages: Vec<Value> = if !conversation_file_id.is_empty() {
-            read_conversation_from_temperfs(&ctx, &temper_api_url, tenant, conversation_file_id, first_turn_content)?
+            read_conversation_from_temperfs(
+                &ctx,
+                &temper_api_url,
+                tenant,
+                conversation_file_id,
+                first_turn_content,
+            )?
         } else {
             let conversation_json = fields
                 .get("conversation")
@@ -117,8 +115,9 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
             if conversation_json.is_empty() {
                 vec![json!({ "role": "user", "content": first_turn_content })]
             } else {
-                serde_json::from_str(conversation_json)
-                    .unwrap_or_else(|_| vec![json!({ "role": "user", "content": first_turn_content })])
+                serde_json::from_str(conversation_json).unwrap_or_else(|_| {
+                    vec![json!({ "role": "user", "content": first_turn_content })]
+                })
             }
         };
 
@@ -127,15 +126,16 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
 
         // Call LLM API
         let response = match provider {
-            "anthropic" => {
-                call_anthropic(&ctx, &api_key, model, system_prompt, &messages, &tools)?
-            }
+            "anthropic" => call_anthropic(&ctx, &api_key, model, system_prompt, &messages, &tools)?,
             other => return Err(format!("unsupported LLM provider: {other}")),
         };
 
         ctx.log(
             "info",
-            &format!("llm_caller: got response, stop_reason={}", response.stop_reason),
+            &format!(
+                "llm_caller: got response, stop_reason={}",
+                response.stop_reason
+            ),
         );
 
         // Append assistant response to conversation
@@ -173,9 +173,7 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
                     .as_array()
                     .unwrap_or(&vec![])
                     .iter()
-                    .filter(|block| {
-                        block.get("type").and_then(|v| v.as_str()) == Some("tool_use")
-                    })
+                    .filter(|block| block.get("type").and_then(|v| v.as_str()) == Some("tool_use"))
                     .cloned()
                     .collect();
 
@@ -254,17 +252,28 @@ fn call_anthropic(
     // Detect OAuth token (sk-ant-oat-*) vs standard API key
     let is_oauth = api_key.contains("sk-ant-oat");
 
-    // For OAuth tokens, the system prompt MUST include Claude Code identity
-    let effective_system = if is_oauth && !system_prompt.contains("Claude Code") {
-        format!("You are Claude Code, Anthropic's official CLI for Claude.\n\n{system_prompt}")
+    // OAuth tokens enforce a fixed system prompt when tools are present.
+    // Custom system instructions are prepended to the first user message instead.
+    let (effective_system, effective_messages) = if is_oauth {
+        let oauth_system = "You are Claude Code, Anthropic's official CLI for Claude.".to_string();
+        let mut msgs = messages.to_vec();
+        if !system_prompt.is_empty() {
+            if let Some(first) = msgs.first_mut() {
+                if let Some(content) = first.get("content").and_then(|v| v.as_str()) {
+                    let combined = format!("[System instructions: {system_prompt}]\n\n{content}");
+                    first["content"] = json!(combined);
+                }
+            }
+        }
+        (oauth_system, msgs)
     } else {
-        system_prompt.to_string()
+        (system_prompt.to_string(), messages.to_vec())
     };
 
     let mut body = json!({
         "model": model,
         "max_tokens": 4096,
-        "messages": messages,
+        "messages": effective_messages,
     });
 
     if !effective_system.is_empty() {
@@ -275,16 +284,26 @@ fn call_anthropic(
         body["tools"] = json!(tools);
     }
 
-    let body_str = serde_json::to_string(&body).map_err(|e| format!("JSON serialize error: {e}"))?;
+    let body_str =
+        serde_json::to_string(&body).map_err(|e| format!("JSON serialize error: {e}"))?;
 
-    ctx.log("info", &format!("llm_caller: calling Anthropic API, model={model}, oauth={is_oauth}, messages={}", messages.len()));
+    ctx.log(
+        "info",
+        &format!(
+            "llm_caller: calling Anthropic API, model={model}, oauth={is_oauth}, messages={}",
+            messages.len()
+        ),
+    );
 
     // Build auth headers — OAuth tokens use Bearer + beta header
     let headers = if is_oauth {
         vec![
             ("authorization".to_string(), format!("Bearer {api_key}")),
             ("anthropic-version".to_string(), "2023-06-01".to_string()),
-            ("anthropic-beta".to_string(), "oauth-2025-04-20".to_string()),
+            (
+                "anthropic-beta".to_string(),
+                "oauth-2025-04-20,computer-use-2025-01-24".to_string(),
+            ),
             ("content-type".to_string(), "application/json".to_string()),
             ("user-agent".to_string(), "claude-cli/2.1.75".to_string()),
             ("x-app".to_string(), "cli".to_string()),
@@ -302,7 +321,13 @@ fn call_anthropic(
     let mut resp = None;
     for attempt in 0..5 {
         if attempt > 0 {
-            ctx.log("warn", &format!("llm_caller: retrying (attempt {}/5), last error: {last_err}", attempt + 1));
+            ctx.log(
+                "warn",
+                &format!(
+                    "llm_caller: retrying (attempt {}/5), last error: {last_err}",
+                    attempt + 1
+                ),
+            );
         }
         match ctx.http_call(
             "POST",
@@ -338,8 +363,8 @@ fn call_anthropic(
     }
     let resp = resp.ok_or_else(|| format!("Anthropic API failed after 5 attempts: {last_err}"))?;
 
-    let parsed: Value =
-        serde_json::from_str(&resp.body).map_err(|e| format!("failed to parse LLM response: {e}"))?;
+    let parsed: Value = serde_json::from_str(&resp.body)
+        .map_err(|e| format!("failed to parse LLM response: {e}"))?;
 
     let stop_reason = parsed
         .get("stop_reason")
@@ -457,8 +482,7 @@ fn read_conversation_from_temperfs(
 
     match ctx.http_call("GET", &url, &headers, "") {
         Ok(resp) if resp.status == 200 => {
-            let parsed: Value = serde_json::from_str(&resp.body)
-                .unwrap_or(json!({"messages": []}));
+            let parsed: Value = serde_json::from_str(&resp.body).unwrap_or(json!({"messages": []}));
             let messages = parsed
                 .get("messages")
                 .and_then(|v| v.as_array())
@@ -473,15 +497,27 @@ fn read_conversation_from_temperfs(
         }
         Ok(resp) if resp.status == 404 => {
             // File has no content yet — first turn
-            ctx.log("info", "llm_caller: TemperFS file has no content, initializing");
+            ctx.log(
+                "info",
+                "llm_caller: TemperFS file has no content, initializing",
+            );
             Ok(vec![json!({ "role": "user", "content": user_message })])
         }
         Ok(resp) => {
-            ctx.log("warn", &format!("llm_caller: TemperFS read failed (HTTP {}), falling back to inline", resp.status));
+            ctx.log(
+                "warn",
+                &format!(
+                    "llm_caller: TemperFS read failed (HTTP {}), falling back to inline",
+                    resp.status
+                ),
+            );
             Ok(vec![json!({ "role": "user", "content": user_message })])
         }
         Err(e) => {
-            ctx.log("warn", &format!("llm_caller: TemperFS read error: {e}, falling back to inline"));
+            ctx.log(
+                "warn",
+                &format!("llm_caller: TemperFS read error: {e}, falling back to inline"),
+            );
             Ok(vec![json!({ "role": "user", "content": user_message })])
         }
     }
@@ -507,9 +543,19 @@ fn write_conversation_to_temperfs(
 
     let resp = ctx.http_call("PUT", &url, &headers, &body)?;
     if resp.status >= 200 && resp.status < 300 {
-        ctx.log("info", &format!("llm_caller: wrote conversation to TemperFS ({} bytes)", body.len()));
+        ctx.log(
+            "info",
+            &format!(
+                "llm_caller: wrote conversation to TemperFS ({} bytes)",
+                body.len()
+            ),
+        );
         Ok(())
     } else {
-        Err(format!("TemperFS $value write failed (HTTP {}): {}", resp.status, &resp.body[..resp.body.len().min(200)]))
+        Err(format!(
+            "TemperFS $value write failed (HTTP {}): {}",
+            resp.status,
+            &resp.body[..resp.body.len().min(200)]
+        ))
     }
 }
