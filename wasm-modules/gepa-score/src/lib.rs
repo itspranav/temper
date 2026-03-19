@@ -1,10 +1,7 @@
 //! GEPA Score WASM module.
 //!
-//! Computes multi-objective scores from replay results. Produces
-//! success_rate, guard_pass_rate, and coverage metrics, plus a
-//! weighted sum for single-value comparison.
-//!
-//! Build: `cargo build -p gepa-score-module --target wasm32-unknown-unknown --release`
+//! Computes multi-objective scores from replay results and emits a normalized
+//! score payload that downstream Pareto update can consume directly.
 
 use temper_wasm_sdk::prelude::*;
 
@@ -12,72 +9,136 @@ temper_module! {
     fn run(ctx: Context) -> Result<Value> {
         ctx.log("info", "gepa-score: computing objective scores");
 
-        // Read replay result from trigger params (passed by RecordVerificationPass callback)
-        let replay = ctx.trigger_params
-            .get("replay_result")
-            .or_else(|| ctx.trigger_params.get("result"))
-            .unwrap_or(&ctx.trigger_params);
+        let fields = ctx.entity_state.get("fields").unwrap_or(&ctx.entity_state);
+        let replay = read_replay_result(&ctx, fields);
 
-        let actions_attempted = replay.get("actions_attempted")
+        let actions_attempted = replay
+            .get("actions_attempted")
             .and_then(Value::as_u64)
             .unwrap_or(0);
-        let succeeded = replay.get("succeeded")
+        let succeeded = replay
+            .get("succeeded")
             .and_then(Value::as_u64)
             .unwrap_or(0);
-        let guard_rejections = replay.get("guard_rejections")
+        let guard_rejections = replay
+            .get("guard_rejections")
             .and_then(Value::as_u64)
             .unwrap_or(0);
-        let unknown_actions = replay.get("unknown_actions")
+        let unknown_actions = replay
+            .get("unknown_actions")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let invalid_transitions = replay
+            .get("invalid_transitions")
             .and_then(Value::as_u64)
             .unwrap_or(0);
 
-        let mut scores = json!({});
-
+        let mut scores = serde_json::Map::<String, Value>::new();
         if actions_attempted > 0 {
-            // Success rate: fraction of attempted actions that succeeded
             let success_rate = succeeded as f64 / actions_attempted as f64;
-            scores["success_rate"] = json!(success_rate);
-
-            // Guard pass rate: 1.0 - (guard rejections / attempted)
             let guard_pass_rate = 1.0 - (guard_rejections as f64 / actions_attempted as f64);
-            scores["guard_pass_rate"] = json!(guard_pass_rate);
+            let transition_validity = 1.0 - (invalid_transitions as f64 / actions_attempted as f64);
+
+            scores.insert("success_rate".into(), json!(success_rate));
+            scores.insert("guard_pass_rate".into(), json!(guard_pass_rate));
+            scores.insert("transition_validity".into(), json!(transition_validity));
+        } else {
+            scores.insert("success_rate".into(), json!(0.0));
+            scores.insert("guard_pass_rate".into(), json!(0.0));
+            scores.insert("transition_validity".into(), json!(0.0));
         }
 
-        // Coverage: fraction of unique actions that are known
-        let total_unique = succeeded + guard_rejections + unknown_actions;
-        if total_unique > 0 {
-            let coverage = 1.0 - (unknown_actions as f64 / total_unique as f64);
-            scores["coverage"] = json!(coverage);
-        }
+        let coverage = if actions_attempted > 0 {
+            1.0 - (unknown_actions as f64 / actions_attempted as f64)
+        } else {
+            0.0
+        };
+        scores.insert("coverage".into(), json!(coverage));
 
-        // Read scoring weights from entity state (or use defaults)
-        let weights = ctx.entity_state.get("scoring_weights").cloned().unwrap_or(json!({
-            "success_rate": 1.0,
-            "coverage": 0.8,
-            "guard_pass_rate": 0.6,
-        }));
+        let weights = fields
+            .get("ScoringWeights")
+            .or_else(|| fields.get("scoring_weights"))
+            .cloned()
+            .unwrap_or(json!({
+                "success_rate": 1.0,
+                "coverage": 0.8,
+                "guard_pass_rate": 0.6,
+                "transition_validity": 0.5,
+            }));
 
-        // Compute weighted sum
-        let mut total = 0.0_f64;
-        let mut weight_sum = 0.0_f64;
-
-        if let Some(weights_obj) = weights.as_object() {
-            for (objective, weight_val) in weights_obj {
+        let mut weighted_sum = 0.0_f64;
+        let mut total_weight = 0.0_f64;
+        if let Some(weight_obj) = weights.as_object() {
+            for (objective, weight_val) in weight_obj {
                 let weight = weight_val.as_f64().unwrap_or(0.0);
-                if let Some(score) = scores.get(objective).and_then(Value::as_f64) {
-                    total += score * weight;
-                    weight_sum += weight;
-                }
+                let score = scores.get(objective).and_then(Value::as_f64).unwrap_or(0.0);
+                weighted_sum += score * weight;
+                total_weight += weight;
             }
         }
+        if total_weight > 0.0 {
+            weighted_sum /= total_weight;
+        }
 
-        let weighted_sum = if weight_sum > 0.0 { total / weight_sum } else { 0.0 };
-        scores["weighted_sum"] = json!(weighted_sum);
+        let threshold = fields
+            .get("AcceptanceThreshold")
+            .or_else(|| fields.get("acceptance_threshold"))
+            .and_then(Value::as_f64)
+            .unwrap_or(0.60);
+        let is_acceptable = weighted_sum >= threshold && actions_attempted > 0;
 
-        ctx.log("info", &format!("gepa-score: weighted_sum={weighted_sum:.3}"));
+        scores.insert("weighted_sum".into(), json!(weighted_sum));
+        scores.insert("is_acceptable".into(), json!(is_acceptable));
+
+        let candidate_id = fields
+            .get("CandidateId")
+            .and_then(Value::as_str)
+            .or_else(|| ctx.trigger_params.get("CandidateId").and_then(Value::as_str))
+            .unwrap_or("candidate-unknown");
+
+        let score_payload = json!({
+            "id": candidate_id,
+            "scores": Value::Object(scores.clone()),
+            "actions_attempted": actions_attempted,
+            "succeeded": succeeded,
+            "replay_signature": replay.get("ReplaySignature").cloned().unwrap_or(Value::Null),
+        });
+
+        ctx.log(
+            "info",
+            &format!(
+                "gepa-score: candidate={candidate_id}, weighted_sum={weighted_sum:.3}, acceptable={is_acceptable}"
+            ),
+        );
 
         Ok(json!({
-            "scores": scores,
+            "ScoresJson": score_payload.to_string(),
+            "scores": Value::Object(scores),
+            "candidate": score_payload,
         }))
+    }
+}
+
+fn read_replay_result(ctx: &Context, fields: &Value) -> Value {
+    if let Some(replay) = ctx.trigger_params.get("replay_result") {
+        return replay.clone();
+    }
+
+    if let Some(val) = ctx.trigger_params.get("ReplayResultJson") {
+        return parse_or_clone_json_value(val);
+    }
+    if let Some(val) = fields.get("ReplayResultJson") {
+        return parse_or_clone_json_value(val);
+    }
+    if let Some(replay) = fields.get("replay_result") {
+        return replay.clone();
+    }
+    json!({})
+}
+
+fn parse_or_clone_json_value(v: &Value) -> Value {
+    match v {
+        Value::String(raw) => serde_json::from_str::<Value>(raw).unwrap_or_else(|_| json!({})),
+        _ => v.clone(),
     }
 }
