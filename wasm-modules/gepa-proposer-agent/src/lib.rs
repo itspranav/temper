@@ -92,12 +92,12 @@ temper_module! {
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(250);
 
-        let agent_id = format!(
-            "evo-{}-{}-a{}",
-            sanitize_id(evo_id),
-            sanitize_id(candidate_id),
-            attempt
-        );
+        let max_agent_retries = ctx
+            .config
+            .get("max_agent_retries")
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(3)
+            .max(1);
 
         let headers = vec![
             ("Content-Type".to_string(), "application/json".to_string()),
@@ -111,124 +111,161 @@ temper_module! {
             ("x-temper-agent-type".to_string(), "supervisor".to_string()),
         ];
 
-        let create_url = format!("{base_url}/tdata/TemperAgents");
-        let create_resp = post_json(
-            &ctx,
-            &create_url,
-            &headers,
-            json!({
-                "TemperAgentId": agent_id,
-            }),
-        )?;
-        let created_agent_id = extract_entity_id(&create_resp).unwrap_or_else(|| {
-            // Fallback to requested ID if response shape differs across versions.
-            create_resp
-                .get("fields")
-                .and_then(|f| f.get("Id"))
-                .and_then(Value::as_str)
-                .unwrap_or("unknown-agent")
-                .to_string()
-        });
-
         let system_prompt = ctx
             .config
             .get("system_prompt")
             .cloned()
             .unwrap_or_else(default_system_prompt);
-        let user_message = build_user_message(skill_name, entity_type, spec_source, &dataset_json);
+        let base_user_message = build_user_message(skill_name, entity_type, spec_source, &dataset_json);
+        let mut last_error = String::new();
 
-        let cfg_url = format!(
-            "{base_url}/tdata/TemperAgents('{created_agent_id}')/Temper.Agent.TemperAgent.Configure"
-        );
-        let _ = post_json(
-            &ctx,
-            &cfg_url,
-            &headers,
-            json!({
-                "system_prompt": system_prompt,
-                "user_message": user_message,
-                "model": model,
-                "provider": provider,
-                "max_turns": max_turns,
-                "tools_enabled": tools_enabled,
-                "workdir": workdir,
-                "sandbox_url": sandbox_url,
-            }),
-        )?;
+        for agent_retry in 0..max_agent_retries {
+            let agent_id = build_agent_id(evo_id, candidate_id, attempt, agent_retry);
+            let create_url = format!("{base_url}/tdata/TemperAgents");
+            let create_resp = post_json(
+                &ctx,
+                &create_url,
+                &headers,
+                json!({
+                    "TemperAgentId": agent_id,
+                }),
+            )?;
+            let created_agent_id = extract_entity_id(&create_resp).unwrap_or_else(|| {
+                create_resp
+                    .get("fields")
+                    .and_then(|f| f.get("Id"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown-agent")
+                    .to_string()
+            });
 
-        let provision_url = format!(
-            "{base_url}/tdata/TemperAgents('{created_agent_id}')/Temper.Agent.TemperAgent.Provision"
-        );
-        let _ = post_json(&ctx, &provision_url, &headers, json!({}))?;
+            let user_message = if agent_retry == 0 {
+                base_user_message.clone()
+            } else {
+                format!(
+                    "{base_user_message}\n\nIMPORTANT: previous attempt returned empty/invalid payload. \
+Return valid compact JSON in one line with non-empty MutatedSpecSource and MutationSummary."
+                )
+            };
 
-        for attempt in 0..poll_attempts {
-            if attempt > 0 && poll_sleep_ms > 0 {
-                let _ = sleep_tick(&ctx, &sandbox_url, &workdir, poll_sleep_ms);
+            let cfg_url = format!(
+                "{base_url}/tdata/TemperAgents('{created_agent_id}')/Temper.Agent.TemperAgent.Configure"
+            );
+            let _ = post_json(
+                &ctx,
+                &cfg_url,
+                &headers,
+                json!({
+                    "system_prompt": system_prompt,
+                    "user_message": user_message,
+                    "model": model,
+                    "provider": provider,
+                    "max_turns": max_turns,
+                    "tools_enabled": tools_enabled,
+                    "workdir": workdir,
+                    "sandbox_url": sandbox_url,
+                }),
+            )?;
+
+            let provision_url = format!(
+                "{base_url}/tdata/TemperAgents('{created_agent_id}')/Temper.Agent.TemperAgent.Provision"
+            );
+            let _ = post_json(&ctx, &provision_url, &headers, json!({}))?;
+
+            let mut attempt_finished = false;
+            for poll in 0..poll_attempts {
+                if poll > 0 && poll_sleep_ms > 0 {
+                    let _ = sleep_tick(&ctx, &sandbox_url, &workdir, poll_sleep_ms);
+                }
+                let get_url = format!("{base_url}/tdata/TemperAgents('{created_agent_id}')");
+                let entity = get_json(&ctx, &get_url, &headers)?;
+                let status = entity
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .or_else(|| {
+                        entity
+                            .get("fields")
+                            .and_then(|f| f.get("Status"))
+                            .and_then(Value::as_str)
+                    })
+                    .unwrap_or("Unknown");
+
+                match status {
+                    "Completed" => {
+                        let result_text = entity
+                            .get("fields")
+                            .and_then(|f| f.get("result"))
+                            .and_then(Value::as_str)
+                            .or_else(|| {
+                                entity
+                                    .get("fields")
+                                    .and_then(|f| f.get("Result"))
+                                    .and_then(Value::as_str)
+                            })
+                            .unwrap_or_default();
+
+                        match extract_mutation_payload(result_text) {
+                            Ok((mutated_spec, summary)) => {
+                                return Ok(json!({
+                                    "MutatedSpecSource": mutated_spec,
+                                    "MutationSummary": summary,
+                                    "ProposerType": "temper_agent",
+                                    "ProposerAgentId": created_agent_id,
+                                }));
+                            }
+                            Err(err) => {
+                                last_error = format!(
+                                    "TemperAgent completed with invalid payload on retry {agent_retry}: {err}"
+                                );
+                                ctx.log("warn", &last_error);
+                                attempt_finished = true;
+                                break;
+                            }
+                        }
+                    }
+                    "Failed" | "Cancelled" => {
+                        let err = entity
+                            .get("fields")
+                            .and_then(|f| f.get("error_message"))
+                            .and_then(Value::as_str)
+                            .or_else(|| {
+                                entity
+                                    .get("fields")
+                                    .and_then(|f| f.get("ErrorMessage"))
+                                    .and_then(Value::as_str)
+                            })
+                            .unwrap_or("TemperAgent run failed");
+                        last_error = format!("TemperAgent {status} on retry {agent_retry}: {err}");
+                        ctx.log("warn", &last_error);
+                        attempt_finished = true;
+                        break;
+                    }
+                    _ => {}
+                }
             }
-            let get_url = format!("{base_url}/tdata/TemperAgents('{created_agent_id}')");
-            let entity = get_json(&ctx, &get_url, &headers)?;
-            let status = entity
-                .get("status")
-                .and_then(Value::as_str)
-                .or_else(|| {
-                    entity
-                        .get("fields")
-                        .and_then(|f| f.get("Status"))
-                        .and_then(Value::as_str)
-                })
-                .unwrap_or("Unknown");
 
-            match status {
-                "Completed" => {
-                    let result_text = entity
-                        .get("fields")
-                        .and_then(|f| f.get("result"))
-                        .and_then(Value::as_str)
-                        .or_else(|| {
-                            entity
-                                .get("fields")
-                                .and_then(|f| f.get("Result"))
-                                .and_then(Value::as_str)
-                        })
-                        .unwrap_or_default();
-
-                    let (mutated_spec, summary) = extract_mutation_payload(result_text)?;
-
-                    return Ok(json!({
-                        "MutatedSpecSource": mutated_spec,
-                        "MutationSummary": summary,
-                        "ProposerType": "temper_agent",
-                        "ProposerAgentId": created_agent_id,
-                    }));
-                }
-                "Failed" | "Cancelled" => {
-                    let err = entity
-                        .get("fields")
-                        .and_then(|f| f.get("error_message"))
-                        .and_then(Value::as_str)
-                        .or_else(|| {
-                            entity
-                                .get("fields")
-                                .and_then(|f| f.get("ErrorMessage"))
-                                .and_then(Value::as_str)
-                        })
-                        .unwrap_or("TemperAgent run failed");
-                    return Err(format!("TemperAgent {status}: {err}"));
-                }
-                _ => {
-                    // Busy-poll: wasm runtime does not expose sleep. Keep loop bounded.
-                }
+            if !attempt_finished {
+                last_error = format!(
+                    "Timed out waiting for TemperAgent completion after {poll_attempts} polls on retry {agent_retry}"
+                );
+                ctx.log("warn", &last_error);
             }
         }
 
-        Err(format!(
-            "Timed out waiting for TemperAgent completion after {poll_attempts} polls"
-        ))
+        if last_error.is_empty() {
+            Err("GEPA proposer failed without explicit error".to_string())
+        } else {
+            Err(last_error)
+        }
     }
 }
 
 fn read_dataset_json(ctx: &Context, fields: &Value) -> Result<String, String> {
-    if let Some(s) = ctx.trigger_params.get("DatasetJson").and_then(Value::as_str) {
+    if let Some(s) = ctx
+        .trigger_params
+        .get("DatasetJson")
+        .and_then(Value::as_str)
+    {
         return Ok(s.to_string());
     }
     if let Some(v) = ctx.trigger_params.get("reflective_dataset") {
@@ -243,10 +280,18 @@ fn read_dataset_json(ctx: &Context, fields: &Value) -> Result<String, String> {
     Err("missing DatasetJson in trigger/state".to_string())
 }
 
-fn post_json(ctx: &Context, url: &str, headers: &[(String, String)], body: Value) -> Result<Value, String> {
+fn post_json(
+    ctx: &Context,
+    url: &str,
+    headers: &[(String, String)],
+    body: Value,
+) -> Result<Value, String> {
     let resp = ctx.http_call("POST", url, headers, &body.to_string())?;
     if !(200..300).contains(&resp.status) {
-        return Err(format!("POST {url} failed: HTTP {} body={}", resp.status, resp.body));
+        return Err(format!(
+            "POST {url} failed: HTTP {} body={}",
+            resp.status, resp.body
+        ));
     }
     parse_json_body(&resp.body)
 }
@@ -254,7 +299,10 @@ fn post_json(ctx: &Context, url: &str, headers: &[(String, String)], body: Value
 fn get_json(ctx: &Context, url: &str, headers: &[(String, String)]) -> Result<Value, String> {
     let resp = ctx.http_call("GET", url, headers, "")?;
     if !(200..300).contains(&resp.status) {
-        return Err(format!("GET {url} failed: HTTP {} body={}", resp.status, resp.body));
+        return Err(format!(
+            "GET {url} failed: HTTP {} body={}",
+            resp.status, resp.body
+        ));
     }
     parse_json_body(&resp.body)
 }
@@ -285,7 +333,8 @@ fn default_system_prompt() -> String {
     "You are the GEPA evolution agent operating inside TemperAgent. \
 Return only compact JSON with keys MutatedSpecSource and MutationSummary. \
 Do not include markdown fences. Do not ask for permissions. \
-Do not edit files; reason over the provided spec text.".to_string()
+Do not edit files; reason over the provided spec text."
+        .to_string()
 }
 
 fn build_user_message(
@@ -322,6 +371,25 @@ fn sanitize_id(raw: &str) -> String {
     } else {
         out.chars().take(48).collect()
     }
+}
+
+fn build_agent_id(
+    evo_id: &str,
+    candidate_id: &str,
+    mutation_attempt: i64,
+    agent_retry: usize,
+) -> String {
+    let base = format!(
+        "evo-{}-{}-a{}-r{}",
+        sanitize_id(evo_id),
+        sanitize_id(candidate_id),
+        mutation_attempt,
+        agent_retry
+    );
+    if base.len() <= 96 {
+        return base;
+    }
+    base.chars().take(96).collect()
 }
 
 fn extract_mutation_payload(result_text: &str) -> Result<(String, String), String> {
@@ -436,7 +504,12 @@ fn extract_markdown_code_blocks(text: &str) -> Vec<String> {
     blocks
 }
 
-fn sleep_tick(ctx: &Context, sandbox_url: &str, workdir: &str, sleep_ms: u64) -> Result<(), String> {
+fn sleep_tick(
+    ctx: &Context,
+    sandbox_url: &str,
+    workdir: &str,
+    sleep_ms: u64,
+) -> Result<(), String> {
     let secs = sleep_ms as f64 / 1000.0;
     let cmd = format!("sleep {secs:.3}");
     let url = format!("{sandbox_url}/v1/processes/run");

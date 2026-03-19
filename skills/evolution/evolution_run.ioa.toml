@@ -198,16 +198,17 @@ on_failure = "Fail"
 prompt = "You are the GEPA evolution agent. Read the reflective dataset in trigger_params.DatasetJson — it contains failure traces showing why the current spec doesn't work. Propose a minimal IOA spec mutation that fixes the failures while preserving all existing working behavior. Return the full mutated spec source and a summary of what changed."
 
 [integration.config]
-temper_api_url = "http://127.0.0.1:3000"
+temper_api_url = "http://127.0.0.1:4455"
 sandbox_url = "http://127.0.0.1:9999"
 model = "claude-sonnet-4-20250514"
 provider = "anthropic"
 max_turns = "8"
 poll_attempts = "600"
 poll_sleep_ms = "250"
+max_agent_retries = "2"
 tools_enabled = ""
 workdir = "/tmp/workspace"
-timeout_secs = "180"
+timeout_secs = "420"
 
 [[integration]]
 name = "score_candidate"
