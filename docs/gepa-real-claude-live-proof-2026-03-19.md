@@ -1,5 +1,10 @@
 # GEPA Live Proof (OTS Portfolio + Workflow Metrics) — 2026-03-19
 
+> Superseded by [`docs/GEPA_E2E_PROOF.md`](./GEPA_E2E_PROOF.md), which contains:
+> - the latest fresh-tenant end-to-end run (`evo-live-fresh-20260319-v4`)
+> - full OTS/entity/authz taxonomy and trigger semantics
+> - full raw artifacts (OTS/replay/reflective) and explicit blockers
+
 ## Scope
 - Worktree: `/Users/seshendranalla/Development/temper-gepa-tarjan`
 - Server: `temper serve --port 4455 --storage turso --no-observe`
