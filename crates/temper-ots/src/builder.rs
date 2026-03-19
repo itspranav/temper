@@ -27,6 +27,7 @@ use temper_runtime::scheduler::sim_now;
 ///
 /// let trajectory = builder.build();
 /// ```
+#[derive(Clone)]
 pub struct TrajectoryBuilder {
     /// Trajectory metadata
     metadata: OTSMetadata,
@@ -100,6 +101,33 @@ impl TrajectoryBuilder {
     /// Set the system message for the trajectory.
     pub fn set_system_message(&mut self, system_message: OTSSystemMessage) {
         self.system_message = Some(system_message);
+    }
+
+    /// Build the final trajectory, consuming the builder.
+    ///
+    /// If a turn is still in progress, it is automatically ended using
+    /// `sim_now()` as the end time.
+    ///
+    /// Build a snapshot of the current trajectory without consuming the builder.
+    ///
+    /// Useful for mid-session uploads where the session should continue
+    /// recording new turns after the upload.
+    pub fn snapshot(&self) -> OTSTrajectory {
+        let mut metadata = self.metadata.clone();
+        let now = sim_now(); // determinism-ok: sim_now is DST-safe
+        metadata.timestamp_end = Some(now);
+        metadata.duration_ms = Some((now - metadata.timestamp_start).num_milliseconds() as f64);
+
+        let mut turns = self.turns.clone();
+        if let Some(ref current) = self.current_turn {
+            turns.push(current.clone());
+        }
+
+        let mut trajectory = OTSTrajectory::new(metadata);
+        trajectory.context = self.context.clone();
+        trajectory.system_message = self.system_message.clone();
+        trajectory.turns = turns;
+        trajectory
     }
 
     /// Build the final trajectory, consuming the builder.
@@ -253,6 +281,32 @@ mod tests {
         let trajectory = builder.build();
         assert!(trajectory.metadata.timestamp_end.is_some());
         assert!(trajectory.metadata.duration_ms.is_some());
+    }
+
+    #[test]
+    fn test_snapshot_does_not_consume_builder() {
+        let now = sim_now();
+        let metadata = OTSMetadata::new("Snapshot", "agent-snap", OutcomeType::Success, now);
+        let mut builder = TrajectoryBuilder::new(metadata, OTSContext::new());
+
+        builder.start_turn(now);
+        builder.add_message(OTSMessage::new(
+            MessageRole::User,
+            OTSMessageContent::text("in-progress"),
+            now,
+        ));
+
+        let snapshot = builder.snapshot();
+        assert_eq!(
+            snapshot.turns.len(),
+            1,
+            "snapshot should include in-progress turn"
+        );
+
+        // Builder should remain usable after snapshot.
+        builder.end_turn(now);
+        let final_trajectory = builder.build();
+        assert_eq!(final_trajectory.turns.len(), 1);
     }
 
     #[test]

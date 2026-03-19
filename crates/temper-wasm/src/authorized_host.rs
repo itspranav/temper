@@ -178,7 +178,7 @@ impl WasmHost for AuthorizedWasmHost {
         action: &str,
         params_json: &str,
     ) -> Result<String, String> {
-        // Spec evaluation is a local host capability; delegate directly.
+        // Spec evaluation is a local computation — no authorization needed.
         self.inner
             .evaluate_spec(ioa_source, current_state, action, params_json)
     }

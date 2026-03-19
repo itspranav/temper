@@ -349,9 +349,17 @@ Target entity: {entity_type}\n\n\
 Current IOA spec:\n{spec_source}\n\n\
 Reflective dataset JSON:\n{dataset_json}\n\n\
 Task:\n\
-1) Propose the minimal IOA mutation fixing the failures.\n\
-2) Preserve existing working behavior.\n\
-3) Keep schema/invariants coherent.\n\
+1) Read workflow-level triplets. Each triplet has:\n\
+   - input: goal + reasoning chain\n\
+   - output: what happened\n\
+   - feedback: specific fix suggestion\n\
+   - score: 1.0 success, 0.5 partial, 0.0 failed\n\
+   - preserve: true means this working pattern must not regress\n\
+2) Propose the minimal IOA mutation that improves workflow completion while preserving successful patterns.\n\
+3) Triplets with preserve=true MUST remain valid after mutation.\n\
+4) For failed/partial workflows, apply the feedback suggestion exactly where possible.\n\
+5) Check patterns.missing_capabilities and add missing [[action]] sections or transitions as needed.\n\
+6) Keep schema/invariants coherent and avoid unrelated changes.\n\
 Output strict JSON only:\n\
 {{\"MutatedSpecSource\":\"...full spec...\",\"MutationSummary\":\"...\"}}"
     )

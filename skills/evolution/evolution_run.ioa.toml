@@ -49,7 +49,7 @@ kind = "input"
 from = ["Selecting"]
 to = "Evaluating"
 effect = [{ type = "increment", var = "candidate_count" }, { type = "trigger", name = "evaluate_candidate" }]
-params = ["CandidateId", "SpecSource", "TrajectoryActions"]
+params = ["CandidateId", "SpecSource", "TrajectoryActions", "Trajectories"]
 hint = "Select a candidate spec from the Pareto frontier or seed pool."
 
 [[action]]
@@ -195,7 +195,7 @@ type = "wasm"
 module = "gepa-proposer-agent"
 on_success = "RecordMutation"
 on_failure = "Fail"
-prompt = "You are the GEPA evolution agent. Read the reflective dataset in trigger_params.DatasetJson — it contains failure traces showing why the current spec doesn't work. Propose a minimal IOA spec mutation that fixes the failures while preserving all existing working behavior. Return the full mutated spec source and a summary of what changed."
+prompt = "You are the GEPA evolution agent. Read trigger_params.DatasetJson with workflow-level triplets and patterns. Preserve triplets where preserve=true, improve failed/partial workflows using feedback and missing_capabilities, and propose a minimal mutation that increases workflow completion without regressions. Return the full mutated spec source and a summary."
 
 [integration.config]
 temper_api_url = "http://127.0.0.1:4455"

@@ -3,6 +3,7 @@
 use anyhow::{Result, bail};
 use monty::MontyObject;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use temper_ots::{
     DecisionType, MessageRole, OTSChoice, OTSConsequence, OTSContext, OTSDecision, OTSMessage,
     OTSMessageContent, OTSMetadata, OutcomeType, TrajectoryBuilder,
@@ -51,6 +52,10 @@ pub(crate) struct RuntimeContext {
     sandbox: temper_sandbox::runner::PersistentSandbox,
     /// OTS trajectory builder for capturing agent execution traces.
     pub(crate) trajectory: Option<TrajectoryBuilder>,
+    /// Tenants observed in executed calls during this session.
+    tenants_seen: BTreeMap<String, usize>,
+    /// Entity types observed in executed calls during this session.
+    entity_types_seen: BTreeMap<String, usize>,
 }
 
 impl RuntimeContext {
@@ -79,6 +84,8 @@ impl RuntimeContext {
                 .unwrap_or_else(|| "default".to_string()), // determinism-ok: startup config
             sandbox: temper_sandbox::runner::PersistentSandbox::new(&[("temper", "Temper", 1)]),
             trajectory: None,
+            tenants_seen: BTreeMap::new(),
+            entity_types_seen: BTreeMap::new(),
         })
     }
 
@@ -159,6 +166,8 @@ impl RuntimeContext {
 
     /// Record an execute tool call as an OTS turn with a decision.
     pub(crate) fn record_execute_turn(&mut self, code: &str, result: &Result<String>) {
+        let extracted_actions = extract_trajectory_actions_from_code(code);
+
         let Some(ref mut builder) = self.trajectory else {
             return;
         };
@@ -198,7 +207,6 @@ impl RuntimeContext {
         };
 
         let mut choice = OTSChoice::new(format!("execute: {}", &code[..code.len().min(100)]));
-        let extracted_actions = extract_trajectory_actions_from_code(code);
         if !extracted_actions.is_empty() {
             choice = choice.with_arguments(serde_json::json!({
                 "trajectory_actions": extracted_actions,
@@ -211,6 +219,61 @@ impl RuntimeContext {
         builder.end_turn(now);
 
         tracing::debug!(outcome = outcome_str, "ots.trajectory.turn_recorded");
+
+        for meta in extract_temper_call_metadata(code) {
+            if let Some(tenant) = meta.tenant {
+                self.tenants_seen
+                    .entry(tenant)
+                    .and_modify(|count| *count += 1)
+                    .or_insert(1);
+            }
+            if let Some(entity_type) = meta.entity_type {
+                self.entity_types_seen
+                    .entry(entity_type)
+                    .and_modify(|count| *count += 1)
+                    .or_insert(1);
+            }
+        }
+    }
+
+    /// Flush a snapshot of the trajectory mid-session without consuming it.
+    pub(crate) async fn flush_trajectory(&self) -> Result<String> {
+        let Some(ref builder) = self.trajectory else {
+            bail!("no trajectory in progress");
+        };
+
+        let trajectory = builder.snapshot();
+        let trajectory_id = trajectory.trajectory_id.clone();
+        let json = serde_json::to_string(&trajectory)?;
+
+        let url = format!("{}/api/ots/trajectories", self.base_url);
+        let mut request = self
+            .http
+            .post(&url)
+            .body(json)
+            .header("Content-Type", "application/json")
+            .header("X-Tenant-Id", self.primary_tenant());
+
+        if let Some(primary_entity_type) = self.primary_entity_type() {
+            request = request.header("X-Entity-Type", primary_entity_type);
+        }
+        if let Some(ref agent_id) = self.agent_id {
+            request = request.header("X-Agent-Id", agent_id);
+        }
+        if let Some(ref session_id) = self.session_id {
+            request = request.header("X-Session-Id", session_id);
+        }
+        if let Some(ref api_key) = self.api_key {
+            request = request.header("Authorization", format!("Bearer {api_key}"));
+        }
+
+        let resp = request.send().await?;
+        if resp.status().is_success() {
+            tracing::info!("ots.trajectory.flushed");
+            Ok(trajectory_id)
+        } else {
+            bail!("flush failed: HTTP {}", resp.status());
+        }
     }
 
     /// Finalize and POST the trajectory to the server.
@@ -234,7 +297,11 @@ impl RuntimeContext {
             .post(&url)
             .body(json)
             .header("Content-Type", "application/json")
-            .header("X-Tenant-Id", &self.identity_tenant);
+            .header("X-Tenant-Id", self.primary_tenant());
+
+        if let Some(primary_entity_type) = self.primary_entity_type() {
+            request = request.header("X-Entity-Type", primary_entity_type);
+        }
 
         if let Some(ref agent_id) = self.agent_id {
             request = request.header("X-Agent-Id", agent_id);
@@ -260,6 +327,23 @@ impl RuntimeContext {
                 tracing::warn!(error = %e, "ots.trajectory.upload_failed");
             }
         }
+    }
+
+    /// Most-used tenant for this session, falling back to configured identity tenant.
+    fn primary_tenant(&self) -> &str {
+        self.tenants_seen
+            .iter()
+            .max_by_key(|(_, count)| *count)
+            .map(|(tenant, _)| tenant.as_str())
+            .unwrap_or(self.identity_tenant.as_str())
+    }
+
+    /// Most-used entity type for this session.
+    fn primary_entity_type(&self) -> Option<&str> {
+        self.entity_types_seen
+            .iter()
+            .max_by_key(|(_, count)| *count)
+            .map(|(entity_type, _)| entity_type.as_str())
     }
 
     pub(crate) async fn run_execute(&mut self, code: &str) -> Result<String> {
@@ -380,6 +464,104 @@ fn extract_trajectory_actions_from_code(code: &str) -> Vec<Value> {
     }
 
     actions
+}
+
+#[derive(Debug, Clone, Default)]
+struct TemperCallMetadata {
+    tenant: Option<String>,
+    entity_type: Option<String>,
+}
+
+fn extract_temper_call_metadata(code: &str) -> Vec<TemperCallMetadata> {
+    let mut out = Vec::new();
+    out.extend(extract_temper_action_metadata(code));
+    out.extend(extract_temper_create_metadata(code));
+    out
+}
+
+fn extract_temper_action_metadata(code: &str) -> Vec<TemperCallMetadata> {
+    extract_call_metadata(code, "temper.action", |args| {
+        // New signature: temper.action(tenant, entity_type, id, action, params)
+        if args.len() >= 5
+            && let (Some(tenant), Some(entity_type), Some(_action)) = (
+                parse_python_string_literal(args[0]),
+                parse_python_string_literal(args[1]),
+                parse_python_string_literal(args[3]),
+            )
+        {
+            return TemperCallMetadata {
+                tenant: Some(tenant),
+                entity_type: Some(entity_type),
+            };
+        }
+
+        // Legacy signature: temper.action(entity_type, id, action, params)
+        TemperCallMetadata {
+            tenant: None,
+            entity_type: args
+                .first()
+                .and_then(|raw| parse_python_string_literal(raw)),
+        }
+    })
+}
+
+fn extract_temper_create_metadata(code: &str) -> Vec<TemperCallMetadata> {
+    extract_call_metadata(code, "temper.create", |args| {
+        // New signature: temper.create(tenant, entity_type, fields)
+        if args.len() >= 3
+            && let (Some(tenant), Some(entity_type)) = (
+                parse_python_string_literal(args[0]),
+                parse_python_string_literal(args[1]),
+            )
+        {
+            return TemperCallMetadata {
+                tenant: Some(tenant),
+                entity_type: Some(entity_type),
+            };
+        }
+
+        // Legacy signature: temper.create(entity_type, fields)
+        TemperCallMetadata {
+            tenant: None,
+            entity_type: args
+                .first()
+                .and_then(|raw| parse_python_string_literal(raw)),
+        }
+    })
+}
+
+fn extract_call_metadata<F>(code: &str, needle: &str, mapper: F) -> Vec<TemperCallMetadata>
+where
+    F: Fn(Vec<&str>) -> TemperCallMetadata,
+{
+    let mut out = Vec::new();
+    let mut cursor = 0usize;
+
+    while let Some(found) = code[cursor..].find(needle) {
+        let method_start = cursor + found + needle.len();
+        let mut open = method_start;
+        while open < code.len()
+            && code
+                .as_bytes()
+                .get(open)
+                .is_some_and(|b| b.is_ascii_whitespace())
+        {
+            open += 1;
+        }
+        if code.as_bytes().get(open) != Some(&b'(') {
+            cursor = method_start;
+            continue;
+        }
+
+        let Some(close) = find_matching_paren(code, open) else {
+            break;
+        };
+        let args = split_top_level_args(&code[open + 1..close]);
+        out.push(mapper(args));
+        cursor = close + 1;
+    }
+
+    out
 }
 
 fn find_matching_paren(input: &str, open_idx: usize) -> Option<usize> {
@@ -657,6 +839,27 @@ tenant = temper.action("gepa-tenant", "Issues", "11111111-1111-1111-1111-1111111
         assert_eq!(value["enabled"], serde_json::json!(true));
         assert_eq!(value["reason"], serde_json::Value::Null);
         assert_eq!(value["count"], serde_json::json!(2));
+    }
+
+    #[test]
+    fn extract_temper_call_metadata_tracks_tenant_and_entity() {
+        let code = r#"
+await temper.action("tenant-a", "Issue", "i-1", "Assign", {"AgentId": "agent-1"})
+await temper.create("tenant-b", "Task", {"Title": "x"})
+"#;
+        let metadata = extract_temper_call_metadata(code);
+        assert!(
+            metadata.iter().any(|m| {
+                m.tenant.as_deref() == Some("tenant-a") && m.entity_type.as_deref() == Some("Issue")
+            }),
+            "expected tenant-a/Issue metadata"
+        );
+        assert!(
+            metadata.iter().any(|m| {
+                m.tenant.as_deref() == Some("tenant-b") && m.entity_type.as_deref() == Some("Task")
+            }),
+            "expected tenant-b/Task metadata"
+        );
     }
 }
 

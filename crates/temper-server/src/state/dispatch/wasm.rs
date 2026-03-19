@@ -203,24 +203,24 @@ impl crate::state::ServerState {
         .await
     }
 
-    /// Fill missing replay trajectory actions from persisted OTS traces.
+    /// Fill missing replay trajectory inputs from persisted OTS traces.
     async fn maybe_inject_ots_trajectory_actions(
         &self,
         module_name: &str,
         ctx: &WasmDispatchCtx<'_>,
         action_params: &Value,
     ) -> Value {
-        if module_name != "gepa-replay" || has_trajectory_actions(action_params) {
+        if module_name != "gepa-replay" || has_replay_trajectory_input(action_params) {
             return action_params.clone();
         }
 
-        let Some(actions) = self.load_trajectory_actions_from_ots(ctx).await else {
+        let Some((trajectories, actions)) = self.load_replay_inputs_from_ots(ctx).await else {
             tracing::warn!(
                 tenant = %ctx.entity_ref.tenant,
                 entity_type = ctx.entity_ref.entity_type,
                 entity_id = ctx.entity_ref.entity_id,
                 trigger = ctx.action,
-                "gepa-replay missing TrajectoryActions and no usable OTS trajectories found"
+                "gepa-replay missing Trajectories/TrajectoryActions and no usable OTS trajectories found"
             );
             return action_params.clone();
         };
@@ -230,17 +230,26 @@ impl crate::state::ServerState {
             entity_type = ctx.entity_ref.entity_type,
             entity_id = ctx.entity_ref.entity_id,
             trigger = ctx.action,
+            trajectory_count = trajectories.len(),
             action_count = actions.len(),
-            "gepa-replay TrajectoryActions auto-injected from OTS trajectory"
+            "gepa-replay Trajectories and TrajectoryActions auto-injected from OTS"
         );
 
         let mut params = action_params.clone();
         if let Some(obj) = params.as_object_mut() {
             obj.insert(
+                "Trajectories".to_string(),
+                Value::Array(trajectories.clone()),
+            );
+            obj.insert(
                 "TrajectoryActions".to_string(),
                 Value::Array(actions.clone()),
             );
             obj.insert("TrajectorySource".to_string(), serde_json::json!("ots"));
+            obj.insert(
+                "TrajectoryCount".to_string(),
+                serde_json::json!(trajectories.len()),
+            );
             obj.insert(
                 "TrajectoryActionsCount".to_string(),
                 serde_json::json!(actions.len()),
@@ -249,16 +258,17 @@ impl crate::state::ServerState {
         }
 
         serde_json::json!({
+            "Trajectories": trajectories,
             "TrajectoryActions": actions,
             "TrajectorySource": "ots",
             "OriginalTriggerParams": action_params,
         })
     }
 
-    async fn load_trajectory_actions_from_ots(
+    async fn load_replay_inputs_from_ots(
         &self,
         ctx: &WasmDispatchCtx<'_>,
-    ) -> Option<Vec<Value>> {
+    ) -> Option<(Vec<Value>, Vec<Value>)> {
         let tenant = ctx.entity_ref.tenant.as_str();
         let turso = self.persistent_store_for_tenant(tenant).await?;
         let agent_id = ctx.agent_ctx.agent_id.as_deref();
@@ -281,6 +291,9 @@ impl crate::state::ServerState {
             rows.sort_by_key(|row| if row.session_id == session { 0 } else { 1 });
         }
 
+        let mut trajectories = Vec::new();
+        let mut actions = Vec::new();
+
         for row in rows {
             let data = match turso
                 .get_ots_trajectory(&row.trajectory_id)
@@ -295,13 +308,25 @@ impl crate::state::ServerState {
                 Ok(v) => v,
                 Err(_) => continue,
             };
-            let actions = extract_trajectory_actions_from_ots(&trajectory);
-            if !actions.is_empty() {
-                return Some(actions);
+
+            let extracted = extract_trajectory_actions_from_ots(&trajectory);
+            let has_turns = trajectory
+                .get("turns")
+                .and_then(Value::as_array)
+                .map(|turns| !turns.is_empty())
+                .unwrap_or(false);
+
+            if has_turns || !extracted.is_empty() {
+                trajectories.push(trajectory);
+                actions.extend(extracted);
             }
         }
 
-        None
+        if trajectories.is_empty() && actions.is_empty() {
+            None
+        } else {
+            Some((trajectories, actions))
+        }
     }
 
     /// Handle module-not-found: log, observe, dispatch on_failure callback.
@@ -794,10 +819,15 @@ fn spec_evaluator_fn() -> temper_wasm::SpecEvaluatorFn {
     )
 }
 
-fn has_trajectory_actions(params: &Value) -> bool {
-    match params.get("TrajectoryActions") {
+fn has_replay_trajectory_input(params: &Value) -> bool {
+    has_non_empty_param(params, "Trajectories") || has_non_empty_param(params, "TrajectoryActions")
+}
+
+fn has_non_empty_param(params: &Value, key: &str) -> bool {
+    match params.get(key) {
         Some(Value::Array(arr)) => !arr.is_empty(),
         Some(Value::String(s)) => !s.trim().is_empty(),
+        Some(Value::Object(obj)) => !obj.is_empty(),
         Some(_) => true,
         None => false,
     }

@@ -123,7 +123,19 @@ pub(super) async fn dispatch_json_value(ctx: &mut RuntimeContext, raw: Value) ->
             };
 
             let tool_result = match params.name.as_str() {
-                "execute" => ctx.run_execute(code).await,
+                "execute" => {
+                    if is_flush_trajectory_request(code) {
+                        ctx.flush_trajectory().await.map(|trajectory_id| {
+                            json!({
+                                "trajectory_id": trajectory_id,
+                                "status": "flushed",
+                            })
+                            .to_string()
+                        })
+                    } else {
+                        ctx.run_execute(code).await
+                    }
+                }
                 other => Err(anyhow!(format!("unknown tool '{other}'"))),
             };
 
@@ -228,6 +240,8 @@ Source should use `temper_wasm_sdk::prelude::*` and the `temper_module!` macro.\
 CEDAR GOVERNANCE: actions may be denied by Cedar policy. Denied actions create\n\
 decisions for human approval in the Observe UI or via `temper decide` CLI.\n\
 Use poll_decision(tenant, decision_id) to wait for the human decision.\n\
+OTS FLUSH: `await temper.flush_trajectory()` uploads a mid-session OTS snapshot\n\
+without ending the session.\n\
 You cannot approve or set policies — only humans can do that.";
 
     vec![json!({
@@ -245,4 +259,9 @@ You cannot approve or set policies — only humans can do that.";
             "additionalProperties": false
         }
     })]
+}
+
+fn is_flush_trajectory_request(code: &str) -> bool {
+    let compact = code.split_whitespace().collect::<String>();
+    compact.contains("temper.flush_trajectory()")
 }
