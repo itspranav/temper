@@ -680,3 +680,68 @@ async fn e2e_http_rotate_invalidates_identity_cache() {
         "rotated credential must be invalidated in resolver cache immediately"
     );
 }
+
+// =========================================================================
+// Bootstrap operator credential tests
+// =========================================================================
+
+/// Bootstrap operator credential: global API key resolves as verified identity.
+#[tokio::test]
+async fn e2e_bootstrap_operator_credential_resolves() {
+    let state = identity_test_state();
+    let api_key = "tmpr_bootstrap-operator-test-key";
+    let tenant = TenantId::new(TEST_TENANT);
+
+    // Bootstrap the operator credential for our test tenant.
+    temper_platform::bootstrap_operator_credential(&state, api_key, TEST_TENANT).await;
+
+    // The global API key should now resolve as a verified "operator" identity.
+    let resolver = IdentityResolver::new();
+    let identity = resolver
+        .resolve(&state.server, &tenant, api_key)
+        .await
+        .expect("bootstrap operator credential should resolve");
+
+    assert_eq!(identity.agent_instance_id, "operator");
+    assert_eq!(identity.agent_type_name, "operator");
+    assert!(identity.verified);
+}
+
+/// Bootstrap operator credential is idempotent — calling twice doesn't error.
+#[tokio::test]
+async fn e2e_bootstrap_operator_credential_idempotent() {
+    let state = identity_test_state();
+    let api_key = "tmpr_idempotent-bootstrap-test";
+    let tenant = TenantId::new(TEST_TENANT);
+
+    // Call twice — should not panic or error.
+    temper_platform::bootstrap_operator_credential(&state, api_key, TEST_TENANT).await;
+    temper_platform::bootstrap_operator_credential(&state, api_key, TEST_TENANT).await;
+
+    // Should still resolve correctly.
+    let resolver = IdentityResolver::new();
+    let identity = resolver
+        .resolve(&state.server, &tenant, api_key)
+        .await
+        .expect("operator credential should resolve after double bootstrap");
+
+    assert_eq!(identity.agent_instance_id, "operator");
+    assert!(identity.verified);
+}
+
+/// Without credential registration, API key does NOT resolve (no fallback).
+#[tokio::test]
+async fn e2e_unregistered_api_key_does_not_resolve() {
+    let state = identity_test_state();
+    let tenant = TenantId::new(TEST_TENANT);
+
+    // A key that was never registered should not resolve.
+    let resolver = IdentityResolver::new();
+    let result = resolver
+        .resolve(&state.server, &tenant, "tmpr_never-registered")
+        .await;
+    assert!(
+        result.is_none(),
+        "unregistered API key should not resolve to any identity"
+    );
+}

@@ -71,7 +71,9 @@ pub(super) async fn dispatch_json_value(ctx: &mut RuntimeContext, raw: Value) ->
                     .get("version")
                     .and_then(Value::as_str)
                     .map(String::from);
-                ctx.apply_client_info(ClientInfo { name, version }).await;
+                if let Err(e) = ctx.apply_client_info(ClientInfo { name, version }).await {
+                    tracing::error!("Failed to apply client info: {e}");
+                }
             }
 
             Ok(json!({

@@ -55,7 +55,8 @@ pub(super) async fn dispatch_bound_action(
         http_span.set_attribute(OtelKeyValue::new("session.id", sid.clone()));
     }
 
-    // Build SecurityContext — prefer credential-resolved identity (ADR-0033).
+    // Build SecurityContext — credential-resolved identity (ADR-0033) or
+    // operator identity for global API key access.
     let security_ctx = if let Some(identity) = resolved_identity {
         http_span.set_attribute(OtelKeyValue::new(
             "agent.id",
@@ -71,12 +72,14 @@ pub(super) async fn dispatch_bound_action(
             agent_ctx.session_id.as_deref(),
         )
     } else {
-        // Fallback for global API key (admin/operator) — uses self-declared headers.
+        // No credential resolved — operator/admin access via global API key.
+        // Build SecurityContext from X-Temper-Principal-Kind header (admin/system)
+        // without trusting self-declared identity fields.
         security_context_from_headers(
             headers,
-            agent_ctx.agent_id.as_deref(),
+            None, // No self-declared agent_id
             agent_ctx.session_id.as_deref(),
-            agent_ctx.agent_type.as_deref(),
+            None, // No self-declared agent_type
         )
     };
 

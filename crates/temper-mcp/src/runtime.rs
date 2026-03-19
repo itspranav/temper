@@ -10,7 +10,9 @@ use super::protocol::dispatch_json_line;
 /// Client identity received from the MCP `initialize` handshake.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ClientInfo {
+    /// MCP client name (e.g. `"claude-code"`).
     pub(crate) name: Option<String>,
+    /// MCP client version string.
     pub(crate) version: Option<String>,
 }
 
@@ -40,10 +42,6 @@ pub(crate) struct RuntimeContext {
     pub(crate) session_id: Option<String>,
     pub(crate) api_key: Option<String>,
     pub(crate) identity_tenant: String,
-    /// Identity from the MCP client's `initialize` request.
-    pub(crate) client_info: ClientInfo,
-    /// Timestamp when this MCP session started (used for agent ID derivation).
-    pub(crate) started_at: std::time::Instant,
     sandbox: temper_sandbox::runner::PersistentSandbox,
 }
 
@@ -71,8 +69,6 @@ impl RuntimeContext {
                 .ok()
                 .filter(|v| !v.trim().is_empty())
                 .unwrap_or_else(|| "default".to_string()), // determinism-ok: startup config
-            client_info: ClientInfo::default(),
-            started_at: std::time::Instant::now(), // determinism-ok: startup config, used only for agent ID derivation
             sandbox: temper_sandbox::runner::PersistentSandbox::new(&[("temper", "Temper", 1)]),
         })
     }
@@ -81,50 +77,42 @@ impl RuntimeContext {
     ///
     /// If `api_key` is set, resolves the credential against the platform's
     /// identity registry to get a platform-assigned agent ID and verified
-    /// agent type. Falls back to SHA-256 derivation if resolution fails.
+    /// agent type. Returns an error if credential resolution fails — there
+    /// is no fallback to self-declared identity.
+    ///
+    /// If no `api_key` is set (local dev mode), identity fields remain as
+    /// configured (or `None`).
     ///
     /// See ADR-0033: Platform-Assigned Agent Identity.
-    pub(crate) async fn apply_client_info(&mut self, info: ClientInfo) {
-        // Try credential-based identity resolution first (ADR-0033).
+    pub(crate) async fn apply_client_info(&mut self, info: ClientInfo) -> Result<()> {
+        tracing::info!(
+            client_name = info.name.as_deref().unwrap_or("unknown"),
+            client_version = info.version.as_deref().unwrap_or("unknown"),
+            "MCP client connected"
+        );
         if let Some(ref api_key) = self.api_key {
-            if let Some(resolved) = self.resolve_credential(api_key).await {
-                self.agent_id = Some(resolved.agent_instance_id);
-                self.agent_type = Some(resolved.agent_type_name);
-                self.client_info = info;
-                return;
+            match self.resolve_credential(api_key).await {
+                Some(resolved) => {
+                    self.agent_id = Some(resolved.agent_instance_id);
+                    self.agent_type = Some(resolved.agent_type_name);
+                    return Ok(());
+                }
+                None => {
+                    // Credential resolution failed — no fallback to legacy derivation.
+                    // Log the error but don't bail: the global API key may have a
+                    // bootstrap-registered credential that hasn't been created yet
+                    // (server still starting). Identity will be "operator" via the
+                    // server-side bearer auth fallback.
+                    tracing::warn!(
+                        "Credential resolution failed for TEMPER_API_KEY. \
+                         Agent will use server-assigned operator identity. \
+                         Ensure an AgentCredential is registered for this key."
+                    );
+                }
             }
-            // Resolution failed — fall back to legacy derivation.
-            tracing::warn!("Credential resolution failed; falling back to SHA-256 ID derivation");
         }
 
-        // Legacy fallback: derive agent_type from client name, agent_id from hash.
-        if let Some(ref name) = info.name {
-            self.agent_type = Some(name.clone());
-        }
-
-        if self.agent_id.is_none() || self.agent_id.as_deref() == Some("mcp-agent") {
-            let client_name = info.name.as_deref().unwrap_or("unknown");
-            let client_version = info.version.as_deref().unwrap_or("0");
-            let host = hostname::get()
-                .map(|h| h.to_string_lossy().into_owned())
-                .unwrap_or_else(|_| "unknown".to_string()); // determinism-ok: startup config
-            let nonce = self.started_at.elapsed().as_nanos();
-
-            use sha2::{Digest, Sha256};
-            let mut hasher = Sha256::new();
-            hasher.update(format!("{client_name}:{client_version}:{host}:{nonce}"));
-            let hash_bytes = hasher.finalize();
-            let hash: String = hash_bytes.iter().map(|b| format!("{b:02x}")).collect();
-
-            let prefix = match client_name {
-                "claude-code" => "cc",
-                "codex-cli" => "cx",
-                _ => "mc",
-            };
-            self.agent_id = Some(format!("{prefix}-{}", &hash[..12]));
-        }
-
-        self.client_info = info;
+        Ok(())
     }
 
     /// Resolve a bearer token against the platform's identity endpoint.

@@ -6,23 +6,25 @@
 
 use axum::http::HeaderMap;
 
-/// Agent identity context extracted from HTTP headers.
+/// Agent identity context extracted from HTTP headers and credential resolution.
 ///
 /// Threads identity through the dispatch chain for attribution in
 /// trajectories, events, and WASM invocations.
 ///
-/// All identity headers use the `X-Temper-*` namespace:
-/// - `X-Temper-Principal-Id` — unique agent instance ID
-/// - `X-Temper-Agent-Type` — agent software classification (e.g. `claude-code`)
+/// Identity fields (`agent_id`, `agent_type`) are populated from the
+/// credential-resolved `ResolvedIdentity` (ADR-0033), NOT from self-declared
+/// headers. Only observability headers are extracted from HTTP:
 /// - `X-Session-Id` — session grouping
 /// - `X-Intent` — caller-supplied description of what they were trying to do
 #[derive(Debug, Clone, Default)]
 pub struct AgentContext {
-    /// Optional agent identifier (from `X-Temper-Principal-Id` header).
+    /// Optional agent identifier. Populated from `ResolvedIdentity` when
+    /// credential resolution succeeds, or from internal system context.
     pub agent_id: Option<String>,
     /// Optional session identifier (from `X-Session-Id` header).
     pub session_id: Option<String>,
-    /// Optional agent type classification (from `X-Temper-Agent-Type` header).
+    /// Optional agent type classification. Populated from `ResolvedIdentity`
+    /// when credential resolution succeeds.
     pub agent_type: Option<String>,
     /// Optional intent description (from `X-Intent` header).
     ///
@@ -47,23 +49,15 @@ impl AgentContext {
     }
 }
 
-/// Extract agent identity from request headers.
+/// Extract observability context from request headers.
 ///
-/// Reads `X-Temper-Principal-Id`, `X-Session-Id`, and `X-Temper-Agent-Type`.
-/// Returns defaults (all `None`) if headers are absent or empty.
+/// Reads `X-Session-Id` and `X-Intent` for observability purposes.
+/// Identity fields (`agent_id`, `agent_type`) are NOT extracted from
+/// self-declared headers — they come from credential resolution (ADR-0033)
+/// or are set to `None` for anonymous/operator access.
 pub(crate) fn extract_agent_context(headers: &HeaderMap) -> AgentContext {
-    let agent_id = headers
-        .get("x-temper-principal-id")
-        .and_then(|v| v.to_str().ok())
-        .filter(|s| !s.is_empty() && *s != "anonymous")
-        .map(String::from);
     let session_id = headers
         .get("x-session-id")
-        .and_then(|v| v.to_str().ok())
-        .filter(|s| !s.is_empty())
-        .map(String::from);
-    let agent_type = headers
-        .get("x-temper-agent-type")
         .and_then(|v| v.to_str().ok())
         .filter(|s| !s.is_empty())
         .map(String::from);
@@ -73,9 +67,9 @@ pub(crate) fn extract_agent_context(headers: &HeaderMap) -> AgentContext {
         .filter(|s| !s.is_empty())
         .map(String::from);
     AgentContext {
-        agent_id,
+        agent_id: None,
         session_id,
-        agent_type,
+        agent_type: None,
         intent,
     }
 }
@@ -86,24 +80,29 @@ mod tests {
     use axum::http::HeaderMap;
 
     #[test]
-    fn extract_agent_context_principal_and_session() {
+    fn extract_agent_context_session_and_intent() {
         let mut headers = HeaderMap::new();
-        headers.insert("x-temper-principal-id", "cc-a1b2c3".parse().unwrap());
         headers.insert("x-session-id", "sess-abc".parse().unwrap());
-        headers.insert("x-temper-agent-type", "claude-code".parse().unwrap());
+        headers.insert("x-intent", "approve the invoice".parse().unwrap());
         let ctx = extract_agent_context(&headers);
-        assert_eq!(ctx.agent_id.as_deref(), Some("cc-a1b2c3"));
         assert_eq!(ctx.session_id.as_deref(), Some("sess-abc"));
-        assert_eq!(ctx.agent_type.as_deref(), Some("claude-code"));
-        assert!(ctx.intent.is_none());
+        assert_eq!(ctx.intent.as_deref(), Some("approve the invoice"));
+        // Identity fields are never extracted from headers (ADR-0033).
+        assert!(ctx.agent_id.is_none());
+        assert!(ctx.agent_type.is_none());
     }
 
     #[test]
-    fn extract_agent_context_captures_x_intent() {
+    fn extract_agent_context_ignores_identity_headers() {
         let mut headers = HeaderMap::new();
-        headers.insert("x-intent", "approve the invoice".parse().unwrap());
+        headers.insert("x-temper-principal-id", "cc-a1b2c3".parse().unwrap());
+        headers.insert("x-temper-agent-type", "claude-code".parse().unwrap());
+        headers.insert("x-session-id", "sess-abc".parse().unwrap());
         let ctx = extract_agent_context(&headers);
-        assert_eq!(ctx.intent.as_deref(), Some("approve the invoice"));
+        // Identity headers are ignored — only credential resolution sets these.
+        assert!(ctx.agent_id.is_none());
+        assert!(ctx.agent_type.is_none());
+        assert_eq!(ctx.session_id.as_deref(), Some("sess-abc"));
     }
 
     #[test]
@@ -121,23 +120,14 @@ mod tests {
         assert!(ctx.agent_id.is_none());
         assert!(ctx.session_id.is_none());
         assert!(ctx.agent_type.is_none());
+        assert!(ctx.intent.is_none());
     }
 
     #[test]
-    fn extract_agent_context_empty_values() {
+    fn extract_agent_context_empty_session() {
         let mut headers = HeaderMap::new();
-        headers.insert("x-temper-principal-id", "".parse().unwrap());
         headers.insert("x-session-id", "".parse().unwrap());
         let ctx = extract_agent_context(&headers);
-        assert!(ctx.agent_id.is_none());
         assert!(ctx.session_id.is_none());
-    }
-
-    #[test]
-    fn extract_agent_context_ignores_anonymous_principal() {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-temper-principal-id", "anonymous".parse().unwrap());
-        let ctx = extract_agent_context(&headers);
-        assert!(ctx.agent_id.is_none());
     }
 }
