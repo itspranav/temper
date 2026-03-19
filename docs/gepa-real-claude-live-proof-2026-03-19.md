@@ -83,6 +83,31 @@ Replay from `Created` failed for:
 ### After
 GEPA generated a spec mutation that explicitly supports these actions from `Created`, addressing the observed failure trajectory.
 
+## What Did Not Work and Current Limits (Explicit)
+
+### What did not work in this live run
+- The first TemperAgent proposer attempt (`r0`) returned an empty top-level result payload.
+- The run only succeeded after retry (`r1`) returned valid JSON with `MutatedSpecSource` and `MutationSummary`.
+- This behavior required retry handling and longer timeouts to complete reliably.
+
+### What is currently limited (design/implementation limits)
+- Evolution objective is still failure-repair biased:
+  - Proposer prompt asks for "minimal IOA mutation fixing the failures" and preserving behavior.
+  - This is correct for regression repair, but not yet full optimization over successful trajectories.
+- OTS trajectory usage is not yet full-portfolio aggregation:
+  - Replay currently auto-loads a usable OTS trajectory from recent rows and replays that action list.
+  - It does not yet optimize across all available trajectories in one run.
+- Success trajectories are captured but under-leveraged:
+  - Reflective dataset records both `failure_count` and `success_count`.
+  - Current mutation prompting still centers failures, rather than explicitly improving efficiency/quality from successes.
+- Replay semantic fidelity is simplified:
+  - Current injected evaluator is action/topology focused and does not fully model richer parameter semantics.
+  - This is sufficient for proving live OTS ingestion and mutation deployment, but not a complete semantic verifier.
+
+### Bottom line
+- Proven: single-run, live OTS -> replay -> TemperAgent mutation -> verify -> deploy works end to end.
+- Not yet proven: full GEPA-style evolution that jointly optimizes across broad success and failure trajectory portfolios for global efficiency gains.
+
 ## Diagram (Exact Proof Path)
 ```text
 Codex (this session)
