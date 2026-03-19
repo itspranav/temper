@@ -1,16 +1,20 @@
 //! Skill Catalog — agent-installable pre-built application specs.
 //!
-//! Skills are spec bundles (IOA TOML + CSDL + Cedar policies) that ship
-//! embedded in the binary. Agents discover them via `list_skills()` / `install_skill()`
-//! and developers can pre-load them with `--skill <name>`.
+//! Skills are spec bundles (IOA TOML + CSDL + Cedar policies) loaded from
+//! the `skills/` directory at runtime. Agents discover them via
+//! `list_skills()` / `install_skill()` and developers can pre-load them
+//! with `--skill <name>`.
 //!
 //! Install reuses [`crate::bootstrap::bootstrap_tenant_specs`] so every skill
 //! goes through the same verification cascade as system specs.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::{OnceLock, RwLock};
 
 use serde::Serialize;
 use temper_runtime::tenant::TenantId;
+use temper_spec::automaton;
 use temper_spec::csdl::{emit_csdl_xml, merge_csdl, parse_csdl};
 
 use crate::bootstrap;
@@ -27,203 +31,352 @@ pub struct InstallResult {
     pub skipped: Vec<String>,
 }
 
-// ── Project Management Skill ──────────────────────────────────────
-
-const PM_ISSUE_IOA: &str = include_str!("../../../../skills/project-management/issue.ioa.toml");
-const PM_PROJECT_IOA: &str = include_str!("../../../../skills/project-management/project.ioa.toml");
-const PM_CYCLE_IOA: &str = include_str!("../../../../skills/project-management/cycle.ioa.toml");
-const PM_COMMENT_IOA: &str = include_str!("../../../../skills/project-management/comment.ioa.toml");
-const PM_LABEL_IOA: &str = include_str!("../../../../skills/project-management/label.ioa.toml");
-const PM_CSDL: &str = include_str!("../../../../skills/project-management/model.csdl.xml");
-const PM_CEDAR_ISSUE: &str =
-    include_str!("../../../../skills/project-management/policies/issue.cedar");
-
-// ── Temper FS Skill ───────────────────────────────────────────────
-
-const FS_FILE_IOA: &str = include_str!("../../../../skills/temper-fs/specs/file.ioa.toml");
-const FS_DIR_IOA: &str = include_str!("../../../../skills/temper-fs/specs/directory.ioa.toml");
-const FS_VERSION_IOA: &str =
-    include_str!("../../../../skills/temper-fs/specs/file_version.ioa.toml");
-const FS_WORKSPACE_IOA: &str =
-    include_str!("../../../../skills/temper-fs/specs/workspace.ioa.toml");
-const FS_CSDL: &str = include_str!("../../../../skills/temper-fs/specs/model.csdl.xml");
-const FS_CEDAR_FILE: &str = include_str!("../../../../skills/temper-fs/policies/file.cedar");
-const FS_CEDAR_WORKSPACE: &str =
-    include_str!("../../../../skills/temper-fs/policies/workspace.cedar");
-const FS_CEDAR_WASM: &str = include_str!("../../../../skills/temper-fs/policies/wasm.cedar");
-
-// ── Evolution Skill ──────────────────────────────────────────────
-
-const EVO_RUN_IOA: &str = include_str!("../../../../skills/evolution/evolution_run.ioa.toml");
-const EVO_SENTINEL_IOA: &str =
-    include_str!("../../../../skills/evolution/sentinel_monitor.ioa.toml");
-const EVO_CSDL: &str = include_str!("../../../../skills/evolution/model.csdl.xml");
-const EVO_CEDAR: &str = include_str!("../../../../skills/evolution/policies/evolution.cedar");
-const EVO_SKILL_MD: &str = include_str!("../../../../skills/evolution/skill.md");
-
-// ── Agent Orchestration Skill ────────────────────────────────────
-
-const AO_HEARTBEAT_IOA: &str =
-    include_str!("../../../../skills/agent-orchestration/specs/heartbeat_run.ioa.toml");
-const AO_ORG_IOA: &str =
-    include_str!("../../../../skills/agent-orchestration/specs/organization.ioa.toml");
-const AO_BUDGET_IOA: &str =
-    include_str!("../../../../skills/agent-orchestration/specs/budget_ledger.ioa.toml");
-const AO_CSDL: &str = include_str!("../../../../skills/agent-orchestration/specs/model.csdl.xml");
-const AO_CEDAR: &str =
-    include_str!("../../../../skills/agent-orchestration/policies/orchestration.cedar");
-
-// ── Temper Agent Skill ──────────────────────────────────────────────
-
-const TEMPER_AGENT_IOA: &str =
-    include_str!("../../../../skills/temper-agent/specs/temper_agent.ioa.toml");
-const TEMPER_AGENT_CSDL: &str =
-    include_str!("../../../../skills/temper-agent/specs/model.csdl.xml");
-const TEMPER_AGENT_CEDAR: &str =
-    include_str!("../../../../skills/temper-agent/policies/agent.cedar");
-
 /// Metadata for a skill in the catalog.
 #[derive(Debug, Clone, Serialize)]
 pub struct SkillEntry {
     /// Short name used in CLI flags and API calls (e.g. `"project-management"`).
-    pub name: &'static str,
+    pub name: String,
     /// Human-readable description.
-    pub description: &'static str,
+    pub description: String,
     /// Entity types included in the skill.
-    pub entity_types: &'static [&'static str],
+    pub entity_types: Vec<String>,
     /// Semantic version.
-    pub version: &'static str,
+    pub version: String,
     /// Full skill guide markdown (from `skill.md`), if available.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub skill_guide: Option<&'static str>,
+    pub skill_guide: Option<String>,
 }
 
-/// Full spec bundle for a skill.
+/// Full spec bundle for a skill (owned, loaded from disk).
 pub struct SkillBundle {
     /// IOA spec sources as `(entity_type, ioa_toml_source)` pairs.
-    pub specs: &'static [(&'static str, &'static str)],
+    pub specs: Vec<(String, String)>,
     /// CSDL XML source.
-    pub csdl: &'static str,
+    pub csdl: String,
     /// Cedar policy sources (may be empty).
-    pub cedar_policies: &'static [&'static str],
+    pub cedar_policies: Vec<String>,
 }
 
 // Backward-compatible type aliases.
 pub type OsAppEntry = SkillEntry;
 pub type OsAppBundle = SkillBundle;
 
-/// Project Management app specs.
-const PM_SPECS: &[(&str, &str)] = &[
-    ("Issue", PM_ISSUE_IOA),
-    ("Project", PM_PROJECT_IOA),
-    ("Cycle", PM_CYCLE_IOA),
-    ("Comment", PM_COMMENT_IOA),
-    ("Label", PM_LABEL_IOA),
-];
+// ── Skill Catalog (disk-loaded, cached) ─────────────────────────────
 
-/// Temper FS app specs.
-const FS_SPECS: &[(&str, &str)] = &[
-    ("File", FS_FILE_IOA),
-    ("Directory", FS_DIR_IOA),
-    ("FileVersion", FS_VERSION_IOA),
-    ("Workspace", FS_WORKSPACE_IOA),
-];
+/// In-memory cache of discovered skills.
+struct SkillCatalog {
+    /// Directory containing skill bundles.
+    skills_dir: PathBuf,
+    /// Catalog entries (lightweight metadata).
+    entries: Vec<SkillEntry>,
+    /// Mapping from skill name to its directory path on disk.
+    paths: BTreeMap<String, PathBuf>,
+}
 
-/// Agent orchestration app specs.
-const AO_SPECS: &[(&str, &str)] = &[
-    ("HeartbeatRun", AO_HEARTBEAT_IOA),
-    ("Organization", AO_ORG_IOA),
-    ("BudgetLedger", AO_BUDGET_IOA),
-];
+/// Global catalog, initialized on first access.
+static CATALOG: OnceLock<RwLock<SkillCatalog>> = OnceLock::new();
 
-/// Temper Agent app specs.
-const TEMPER_AGENT_SPECS: &[(&str, &str)] = &[("TemperAgent", TEMPER_AGENT_IOA)];
+/// Get or initialize the global skill catalog.
+fn catalog() -> &'static RwLock<SkillCatalog> {
+    CATALOG.get_or_init(|| RwLock::new(SkillCatalog::discover()))
+}
 
-/// Evolution skill specs.
-const EVO_SPECS: &[(&str, &str)] = &[
-    ("EvolutionRun", EVO_RUN_IOA),
-    ("SentinelMonitor", EVO_SENTINEL_IOA),
-];
+/// Override the skills directory. Must be called before any catalog access.
+///
+/// If the catalog was already initialized, it is replaced.
+pub fn set_skills_dir(dir: PathBuf) {
+    let new_catalog = SkillCatalog::from_dir(dir);
+    match CATALOG.get() {
+        Some(lock) => {
+            *lock.write().unwrap() = new_catalog; // ci-ok: infallible lock
+        }
+        None => {
+            let _ = CATALOG.set(RwLock::new(new_catalog));
+        }
+    }
+}
 
-/// All available skills.
-static SKILL_CATALOG: &[SkillEntry] = &[
-    SkillEntry {
-        name: "project-management",
-        description: "Issue tracking with projects, cycles, labels, and comments",
-        entity_types: &["Issue", "Project", "Cycle", "Comment", "Label"],
-        version: "0.1.0",
-        skill_guide: None,
-    },
-    SkillEntry {
-        name: "temper-fs",
-        description: "Governed filesystem with workspaces, directories, files, and versioning",
-        entity_types: &["File", "Directory", "FileVersion", "Workspace"],
-        version: "0.1.0",
-        skill_guide: None,
-    },
-    SkillEntry {
-        name: "agent-orchestration",
-        description: "Agent heartbeat orchestration with organizations and budget ledgering",
-        entity_types: &["HeartbeatRun", "Organization", "BudgetLedger"],
-        version: "0.1.0",
-        skill_guide: None,
-    },
-    SkillEntry {
-        name: "temper-agent",
-        description: "Spec-driven agent with LLM loop, sandbox tools, and TemperFS conversation storage",
-        entity_types: &["TemperAgent"],
-        version: "0.1.0",
-        skill_guide: None,
-    },
-    SkillEntry {
-        name: "evolution",
-        description: "GEPA-based self-improvement loop for Temper skills",
-        entity_types: &["EvolutionRun", "SentinelMonitor"],
-        version: "0.1.0",
-        skill_guide: Some(EVO_SKILL_MD),
-    },
-];
+/// Re-scan the skills directory and refresh the catalog.
+///
+/// Call this after modifying skill files on disk to pick up changes
+/// without restarting the server.
+pub fn reload_skills() {
+    let cat = catalog().read().unwrap(); // ci-ok: infallible lock
+    let dir = cat.skills_dir.clone();
+    drop(cat);
+    let new = SkillCatalog::from_dir(dir);
+    *catalog().write().unwrap() = new; // ci-ok: infallible lock
+}
+
+impl SkillCatalog {
+    /// Discover the skills directory and scan it.
+    fn discover() -> Self {
+        // Priority 1: TEMPER_SKILLS_DIR env var.
+        if let Ok(dir) = std::env::var("TEMPER_SKILLS_DIR") {
+            // determinism-ok: env var read at startup for configuration
+            let path = PathBuf::from(dir);
+            if path.is_dir() {
+                tracing::info!("Loading skills from TEMPER_SKILLS_DIR: {}", path.display());
+                return Self::from_dir(path);
+            }
+        }
+
+        // Priority 2: Relative to this crate's source (works in dev and cargo test).
+        let compile_time_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("skills");
+        if compile_time_dir.is_dir() {
+            let canonical = compile_time_dir
+                .canonicalize()
+                .unwrap_or(compile_time_dir.clone());
+            tracing::info!(
+                "Loading skills from workspace: {}",
+                canonical.display()
+            );
+            return Self::from_dir(canonical);
+        }
+
+        // Priority 3: ./skills/ relative to CWD.
+        let cwd_dir = PathBuf::from("skills");
+        if cwd_dir.is_dir() {
+            let canonical = cwd_dir.canonicalize().unwrap_or(cwd_dir.clone());
+            tracing::info!("Loading skills from CWD: {}", canonical.display());
+            return Self::from_dir(canonical);
+        }
+
+        tracing::warn!(
+            "No skills directory found. Set TEMPER_SKILLS_DIR or run from workspace root."
+        );
+        Self {
+            skills_dir: PathBuf::new(),
+            entries: Vec::new(),
+            paths: BTreeMap::new(),
+        }
+    }
+
+    /// Build catalog from a specific directory.
+    fn from_dir(dir: PathBuf) -> Self {
+        let mut entries = Vec::new();
+        let mut paths = BTreeMap::new();
+
+        let read_dir = match std::fs::read_dir(&dir) {
+            Ok(rd) => rd,
+            Err(e) => {
+                tracing::warn!("Failed to read skills directory {}: {e}", dir.display());
+                return Self {
+                    skills_dir: dir,
+                    entries,
+                    paths,
+                };
+            }
+        };
+
+        let mut skill_dirs: Vec<_> = read_dir
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+            .collect();
+        // Deterministic ordering.
+        skill_dirs.sort_by_key(|e| e.file_name());
+
+        for entry in skill_dirs {
+            let skill_dir = entry.path();
+            let skill_name = entry.file_name().to_string_lossy().to_string();
+
+            // Scan for IOA specs to determine entity types.
+            let ioa_files = find_ioa_files(&skill_dir);
+            let entity_types: Vec<String> = ioa_files
+                .iter()
+                .filter_map(|(_, ioa_path)| {
+                    let source = std::fs::read_to_string(ioa_path).ok()?;
+                    let parsed = automaton::parse_automaton(&source).ok()?;
+                    Some(parsed.automaton.name)
+                })
+                .collect();
+
+            // Look for skill guide.
+            let skill_guide = read_skill_guide(&skill_dir);
+
+            // Infer description from skill guide or use default.
+            let description = skill_guide
+                .as_ref()
+                .and_then(|guide| extract_description(guide))
+                .unwrap_or_else(|| format!("Skill: {skill_name}"));
+
+            paths.insert(skill_name.clone(), skill_dir);
+            entries.push(SkillEntry {
+                name: skill_name,
+                description,
+                entity_types,
+                version: "0.1.0".to_string(),
+                skill_guide,
+            });
+        }
+
+        Self {
+            skills_dir: dir,
+            entries,
+            paths,
+        }
+    }
+}
+
+/// Find all IOA spec files in a skill directory.
+///
+/// Handles both layouts:
+/// - Root-level: `skill-name/*.ioa.toml` + `skill-name/model.csdl.xml`
+/// - Specs subdir: `skill-name/specs/*.ioa.toml` + `skill-name/specs/model.csdl.xml`
+///
+/// Returns `(entity_type_hint, path)` pairs. The entity type is extracted
+/// from the IOA file's `[automaton] name` field, not the filename.
+fn find_ioa_files(skill_dir: &Path) -> Vec<(String, PathBuf)> {
+    let mut results = Vec::new();
+    let mut seen_names = std::collections::HashSet::new();
+
+    // Scan root first (takes priority for dedup).
+    scan_dir_for_ioa(skill_dir, &mut results, &mut seen_names);
+
+    // Then scan specs/ subdirectory.
+    let specs_dir = skill_dir.join("specs");
+    if specs_dir.is_dir() {
+        scan_dir_for_ioa(&specs_dir, &mut results, &mut seen_names);
+    }
+
+    results
+}
+
+/// Scan a single directory for `*.ioa.toml` files.
+fn scan_dir_for_ioa(
+    dir: &Path,
+    results: &mut Vec<(String, PathBuf)>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<_> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .ends_with(".ioa.toml")
+        })
+        .collect();
+    files.sort_by_key(|e| e.file_name());
+
+    for entry in files {
+        let path = entry.path();
+        let fname = entry.file_name().to_string_lossy().to_string();
+        // Use filename as dedup key.
+        if !seen.insert(fname) {
+            continue;
+        }
+        results.push((String::new(), path));
+    }
+}
+
+/// Find the CSDL model file in a skill directory.
+fn find_csdl(skill_dir: &Path) -> Option<PathBuf> {
+    // Root-level first.
+    let root = skill_dir.join("model.csdl.xml");
+    if root.exists() {
+        return Some(root);
+    }
+    // Then specs/.
+    let specs = skill_dir.join("specs").join("model.csdl.xml");
+    if specs.exists() {
+        return Some(specs);
+    }
+    None
+}
+
+/// Find all Cedar policy files in a skill directory.
+fn find_cedar_policies(skill_dir: &Path) -> Vec<PathBuf> {
+    let policies_dir = skill_dir.join("policies");
+    if !policies_dir.is_dir() {
+        return Vec::new();
+    }
+    let Ok(entries) = std::fs::read_dir(&policies_dir) else {
+        return Vec::new();
+    };
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .ends_with(".cedar")
+        })
+        .map(|e| e.path())
+        .collect();
+    files.sort();
+    files
+}
+
+/// Read the skill guide markdown (skill.md or SKILL.md).
+fn read_skill_guide(skill_dir: &Path) -> Option<String> {
+    for name in &["skill.md", "SKILL.md"] {
+        let path = skill_dir.join(name);
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            return Some(content);
+        }
+    }
+    None
+}
+
+/// Extract a description from skill guide markdown.
+///
+/// Looks for the first non-header, non-empty line, or a TOML frontmatter
+/// `description` field.
+fn extract_description(guide: &str) -> Option<String> {
+    // Check for TOML frontmatter (+++...+++ delimited).
+    if guide.starts_with("+++") {
+        if let Some(end) = guide[3..].find("+++") {
+            let frontmatter = &guide[3..3 + end];
+            for line in frontmatter.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("description") {
+                    if let Some(val) = trimmed.split('=').nth(1) {
+                        let val = val.trim().trim_matches('"');
+                        if !val.is_empty() {
+                            return Some(val.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Fall back to first paragraph after any heading.
+    for line in guide.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("+++") {
+            continue;
+        }
+        return Some(trimmed.to_string());
+    }
+    None
+}
+
+// ── Public API ──────────────────────────────────────────────────────
 
 /// List all available skills.
-pub fn list_skills() -> &'static [SkillEntry] {
-    SKILL_CATALOG
+pub fn list_skills() -> Vec<SkillEntry> {
+    let cat = catalog().read().unwrap(); // ci-ok: infallible lock
+    cat.entries.clone()
 }
 
 /// Backward-compatible alias.
-pub fn list_os_apps() -> &'static [SkillEntry] {
+pub fn list_os_apps() -> Vec<SkillEntry> {
     list_skills()
 }
 
 /// Get the full spec bundle for a skill by name.
+///
+/// Reads IOA, CSDL, and Cedar files from disk on each call so changes
+/// are picked up without a rebuild.
 pub fn get_skill(name: &str) -> Option<SkillBundle> {
-    match name {
-        "project-management" => Some(SkillBundle {
-            specs: PM_SPECS,
-            csdl: PM_CSDL,
-            cedar_policies: &[PM_CEDAR_ISSUE],
-        }),
-        "temper-fs" => Some(SkillBundle {
-            specs: FS_SPECS,
-            csdl: FS_CSDL,
-            cedar_policies: &[FS_CEDAR_FILE, FS_CEDAR_WORKSPACE, FS_CEDAR_WASM],
-        }),
-        "agent-orchestration" => Some(SkillBundle {
-            specs: AO_SPECS,
-            csdl: AO_CSDL,
-            cedar_policies: &[AO_CEDAR],
-        }),
-        "temper-agent" => Some(SkillBundle {
-            specs: TEMPER_AGENT_SPECS,
-            csdl: TEMPER_AGENT_CSDL,
-            cedar_policies: &[TEMPER_AGENT_CEDAR],
-        }),
-        "evolution" => Some(SkillBundle {
-            specs: EVO_SPECS,
-            csdl: EVO_CSDL,
-            cedar_policies: &[EVO_CEDAR],
-        }),
-        _ => None,
-    }
+    let cat = catalog().read().unwrap(); // ci-ok: infallible lock
+    let skill_dir = cat.paths.get(name)?;
+    load_skill_bundle(skill_dir)
 }
 
 /// Backward-compatible alias.
@@ -232,21 +385,51 @@ pub fn get_os_app(name: &str) -> Option<SkillBundle> {
 }
 
 /// Get the full skill guide markdown for a skill by name.
-///
-/// Returns the parsed `skill.md` content (TOML frontmatter stripped),
-/// or `None` if the skill has no guide.
-pub fn get_skill_guide(name: &str) -> Option<&'static str> {
-    SKILL_CATALOG
+pub fn get_skill_guide(name: &str) -> Option<String> {
+    let cat = catalog().read().unwrap(); // ci-ok: infallible lock
+    cat.entries
         .iter()
         .find(|e| e.name == name)
-        .and_then(|e| e.skill_guide)
+        .and_then(|e| e.skill_guide.clone())
+}
+
+/// Load a complete skill bundle from a directory on disk.
+fn load_skill_bundle(skill_dir: &Path) -> Option<SkillBundle> {
+    let ioa_files = find_ioa_files(skill_dir);
+    if ioa_files.is_empty() {
+        return None;
+    }
+
+    // Read IOA specs, extracting entity type from the parsed automaton name.
+    let mut specs = Vec::new();
+    for (_hint, path) in &ioa_files {
+        let source = std::fs::read_to_string(path).ok()?;
+        let parsed = automaton::parse_automaton(&source).ok()?;
+        specs.push((parsed.automaton.name, source));
+    }
+
+    // Read CSDL.
+    let csdl_path = find_csdl(skill_dir)?;
+    let csdl = std::fs::read_to_string(&csdl_path).ok()?;
+
+    // Read Cedar policies.
+    let cedar_policies: Vec<String> = find_cedar_policies(skill_dir)
+        .into_iter()
+        .filter_map(|p| std::fs::read_to_string(&p).ok())
+        .collect();
+
+    Some(SkillBundle {
+        specs,
+        csdl,
+        cedar_policies,
+    })
 }
 
 /// Install a skill into a tenant (workspace).
 ///
-/// Runs the verification cascade and registers specs in the SpecRegistry,
-/// loads Cedar policies, and **persists everything to the platform DB** so
-/// specs survive redeployments.
+/// Reads skill files from disk, runs the verification cascade, registers
+/// specs in the SpecRegistry, loads Cedar policies, and **persists
+/// everything to the platform DB** so specs survive redeployments.
 ///
 /// **Write ordering:** Turso first, then memory. If Turso persistence fails
 /// the operation returns an error *before* touching in-memory state, so the
@@ -267,11 +450,12 @@ pub async fn install_skill(
         let mut added = Vec::new();
         let mut updated = Vec::new();
         let mut skipped = Vec::new();
-        for (entity_type, ioa_source) in bundle.specs {
+        for (entity_type, ioa_source) in &bundle.specs {
             let incoming_hash = temper_store_turso::spec_content_hash(ioa_source);
             match registry.get_spec(&tenant_id, entity_type) {
                 Some(existing) => {
-                    let existing_hash = temper_store_turso::spec_content_hash(&existing.ioa_source);
+                    let existing_hash =
+                        temper_store_turso::spec_content_hash(&existing.ioa_source);
                     if incoming_hash == existing_hash {
                         skipped.push(entity_type.to_string());
                     } else {
@@ -285,11 +469,11 @@ pub async fn install_skill(
         }
         // Skill installs must preserve existing tenant types.
         let merged_csdl = if let Some(existing) = registry.get_tenant(&tenant_id) {
-            let incoming = parse_csdl(bundle.csdl)
+            let incoming = parse_csdl(&bundle.csdl)
                 .map_err(|e| format!("Failed to parse CSDL for skill '{skill_name}': {e}"))?;
             emit_csdl_xml(&merge_csdl(&existing.csdl, &incoming))
         } else {
-            bundle.csdl.to_string()
+            bundle.csdl.clone()
         };
         (added, updated, skipped, merged_csdl)
     };
@@ -327,8 +511,8 @@ pub async fn install_skill(
             .map(|row| (row.entity_type, row.ioa_source))
             .collect();
 
-        for (entity_type, ioa_source) in bundle.specs {
-            spec_sources.insert((*entity_type).to_string(), (*ioa_source).to_string());
+        for (entity_type, ioa_source) in &bundle.specs {
+            spec_sources.insert(entity_type.clone(), ioa_source.clone());
         }
 
         for (entity_type, ioa_source) in spec_sources {
@@ -356,7 +540,7 @@ pub async fn install_skill(
     } else if let Some(ref store) = state.server.event_store
         && let Some(ps) = store.platform_store()
     {
-        for (entity_type, ioa_source) in bundle.specs {
+        for (entity_type, ioa_source) in &bundle.specs {
             let hash = temper_store_turso::spec_content_hash(ioa_source);
             ps.upsert_spec(tenant, entity_type, ioa_source, &merged_csdl, &hash)
                 .await
@@ -382,8 +566,8 @@ pub async fn install_skill(
     let specs_to_bootstrap: Vec<(&str, &str)> = bundle
         .specs
         .iter()
-        .filter(|(entity_type, _)| !skipped.contains(&entity_type.to_string()))
-        .map(|(et, src)| (*et, *src))
+        .filter(|(entity_type, _)| !skipped.contains(entity_type))
+        .map(|(et, src)| (et.as_str(), src.as_str()))
         .collect();
 
     if !specs_to_bootstrap.is_empty() {

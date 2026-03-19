@@ -12,4 +12,7 @@ pub(crate) use operations::{
 };
 pub(crate) use records_detail::{handle_decide, handle_get_evolution_record};
 pub(crate) use records_list::{handle_list_evolution_insights, handle_list_evolution_records};
-pub(crate) use trajectories::{handle_trajectories, handle_unmet_intent};
+pub(crate) use trajectories::{
+    handle_get_ots_trajectories, handle_post_ots_trajectory, handle_trajectories,
+    handle_unmet_intent,
+};

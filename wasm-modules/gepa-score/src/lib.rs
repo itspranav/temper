@@ -12,10 +12,11 @@ temper_module! {
     fn run(ctx: Context) -> Result<Value> {
         ctx.log("info", "gepa-score: computing objective scores");
 
-        // Read replay result from trigger params
+        // Read replay result from trigger params (passed by RecordVerificationPass callback)
         let replay = ctx.trigger_params
             .get("replay_result")
-            .ok_or("trigger_params missing 'replay_result'")?;
+            .or_else(|| ctx.trigger_params.get("result"))
+            .unwrap_or(&ctx.trigger_params);
 
         let actions_attempted = replay.get("actions_attempted")
             .and_then(Value::as_u64)

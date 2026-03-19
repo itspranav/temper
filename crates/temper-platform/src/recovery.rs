@@ -118,5 +118,5 @@ fn tenant_has_skill_specs(state: &PlatformState, tenant: &str, app_name: &str) -
     bundle
         .specs
         .iter()
-        .all(|(entity_type, _)| registry.get_table(&tenant_id, entity_type).is_some())
+        .all(|(entity_type, _)| registry.get_table(&tenant_id, entity_type.as_str()).is_some())
 }

@@ -159,10 +159,10 @@ impl crate::state::ServerState {
             .and_then(|s| s.parse::<u64>().ok())
             .map(std::time::Duration::from_secs)
             .unwrap_or(std::time::Duration::from_secs(30));
-        let inner: Arc<dyn WasmHost> = Arc::new(ProductionWasmHost::with_timeout(
-            tenant_secrets,
-            http_timeout,
-        ));
+        let inner: Arc<dyn WasmHost> = Arc::new(
+            ProductionWasmHost::with_timeout(tenant_secrets, http_timeout)
+                .with_spec_evaluator(spec_evaluator_fn()),
+        );
         let host: Arc<dyn WasmHost> = Arc::new(AuthorizedWasmHost::new(inner, gate, authz_ctx));
         let max_response_bytes = integration
             .config
@@ -630,7 +630,9 @@ impl crate::state::ServerState {
             trigger_action: context.trigger_action.clone(),
         };
         let tenant_secrets = self.get_authorized_wasm_secrets(tenant, &*base_gate, &authz_ctx);
-        let inner: Arc<dyn WasmHost> = Arc::new(ProductionWasmHost::new(tenant_secrets));
+        let inner: Arc<dyn WasmHost> = Arc::new(
+            ProductionWasmHost::new(tenant_secrets).with_spec_evaluator(spec_evaluator_fn()),
+        );
         let host: Arc<dyn WasmHost> =
             Arc::new(AuthorizedWasmHost::new(inner, base_gate, authz_ctx));
         let limits = WasmResourceLimits::default();
@@ -648,4 +650,41 @@ impl crate::state::ServerState {
             .await
             .map_err(|e| e.to_string())
     }
+}
+
+/// Build a spec evaluator closure that uses `temper-jit` to evaluate transitions.
+///
+/// This bridges `temper-wasm` (no jit dep) and `temper-jit` (transition evaluation)
+/// through a function pointer injected into `ProductionWasmHost`.
+fn spec_evaluator_fn() -> temper_wasm::SpecEvaluatorFn {
+    use temper_jit::table::TransitionTable;
+    use temper_spec::automaton::parse_automaton;
+
+    std::sync::Arc::new(
+        |ioa_source: &str, current_state: &str, action: &str, _params_json: &str| {
+            let automaton = parse_automaton(ioa_source)
+                .map_err(|e| format!("failed to parse IOA spec: {e}"))?;
+            let table = TransitionTable::from_automaton(&automaton);
+
+            // evaluate(current_state, item_count, action) -> Option<TransitionResult>
+            match table.evaluate(current_state, 0, action) {
+                Some(result) => {
+                    let json = serde_json::json!({
+                        "success": result.success,
+                        "new_state": result.new_state,
+                        "error": serde_json::Value::Null,
+                    });
+                    Ok(json.to_string())
+                }
+                None => {
+                    let json = serde_json::json!({
+                        "success": false,
+                        "new_state": serde_json::Value::Null,
+                        "error": format!("unknown action '{}' in state '{}'", action, current_state),
+                    });
+                    Ok(json.to_string())
+                }
+            }
+        },
+    )
 }

@@ -6,7 +6,8 @@ use temper_verify::cascade::VerificationCascade;
 
 #[test]
 fn test_pm_specs_parse() {
-    for (entity_type, ioa_source) in PM_SPECS {
+    let bundle = get_skill("project-management").expect("PM skill not found");
+    for (entity_type, ioa_source) in &bundle.specs {
         let result = automaton::parse_automaton(ioa_source);
         assert!(
             result.is_ok(),
@@ -19,7 +20,8 @@ fn test_pm_specs_parse() {
 
 #[test]
 fn test_pm_csdl_parses() {
-    let result = parse_csdl(PM_CSDL);
+    let bundle = get_skill("project-management").expect("PM skill not found");
+    let result = parse_csdl(&bundle.csdl);
     assert!(
         result.is_ok(),
         "PM CSDL failed to parse: {:?}",
@@ -29,10 +31,11 @@ fn test_pm_csdl_parses() {
 
 #[test]
 fn test_pm_spec_entity_names() {
-    for (entity_type, ioa_source) in PM_SPECS {
+    let bundle = get_skill("project-management").expect("PM skill not found");
+    for (entity_type, ioa_source) in &bundle.specs {
         let a = automaton::parse_automaton(ioa_source).unwrap();
         assert_eq!(
-            a.automaton.name, *entity_type,
+            &a.automaton.name, entity_type,
             "PM spec name mismatch: expected {entity_type}, got {}",
             a.automaton.name
         );
@@ -41,7 +44,8 @@ fn test_pm_spec_entity_names() {
 
 #[test]
 fn test_pm_specs_verify() {
-    for (entity_type, ioa_source) in PM_SPECS {
+    let bundle = get_skill("project-management").expect("PM skill not found");
+    for (entity_type, ioa_source) in &bundle.specs {
         let cascade = VerificationCascade::from_ioa(ioa_source)
             .with_sim_seeds(3)
             .with_prop_test_cases(50);
@@ -56,7 +60,8 @@ fn test_pm_specs_verify() {
 
 #[test]
 fn test_agent_orchestration_specs_parse() {
-    for (entity_type, ioa_source) in AO_SPECS {
+    let bundle = get_skill("agent-orchestration").expect("AO skill not found");
+    for (entity_type, ioa_source) in &bundle.specs {
         let result = automaton::parse_automaton(ioa_source);
         assert!(
             result.is_ok(),
@@ -69,7 +74,8 @@ fn test_agent_orchestration_specs_parse() {
 
 #[test]
 fn test_agent_orchestration_csdl_parses() {
-    let result = parse_csdl(AO_CSDL);
+    let bundle = get_skill("agent-orchestration").expect("AO skill not found");
+    let result = parse_csdl(&bundle.csdl);
     assert!(
         result.is_ok(),
         "Agent Orchestration CSDL failed to parse: {:?}",
@@ -79,7 +85,8 @@ fn test_agent_orchestration_csdl_parses() {
 
 #[test]
 fn test_agent_orchestration_specs_verify() {
-    for (entity_type, ioa_source) in AO_SPECS {
+    let bundle = get_skill("agent-orchestration").expect("AO skill not found");
+    for (entity_type, ioa_source) in &bundle.specs {
         let cascade = VerificationCascade::from_ioa(ioa_source)
             .with_sim_seeds(3)
             .with_prop_test_cases(30);
@@ -95,18 +102,20 @@ fn test_agent_orchestration_specs_verify() {
 #[test]
 fn test_list_skills_returns_catalog() {
     let apps = list_skills();
-    assert_eq!(apps.len(), 5);
-    assert_eq!(apps[0].name, "project-management");
-    assert_eq!(apps[0].entity_types.len(), 5);
-    assert_eq!(apps[1].name, "temper-fs");
-    assert_eq!(apps[1].entity_types.len(), 4);
-    assert_eq!(apps[2].name, "agent-orchestration");
-    assert_eq!(apps[2].entity_types.len(), 3);
-    assert_eq!(apps[3].name, "temper-agent");
-    assert_eq!(apps[3].entity_types.len(), 1);
-    assert_eq!(apps[4].name, "evolution");
-    assert_eq!(apps[4].entity_types.len(), 2);
-    assert!(apps[4].skill_guide.is_some());
+    // Should find at least the 5 spec-bearing skills.
+    let names: Vec<&str> = apps.iter().map(|e| e.name.as_str()).collect();
+    assert!(names.contains(&"project-management"), "missing project-management: {names:?}");
+    assert!(names.contains(&"temper-fs"), "missing temper-fs: {names:?}");
+    assert!(names.contains(&"agent-orchestration"), "missing agent-orchestration: {names:?}");
+    assert!(names.contains(&"temper-agent"), "missing temper-agent: {names:?}");
+    assert!(names.contains(&"evolution"), "missing evolution: {names:?}");
+
+    // Check entity types for known skills.
+    let pm = apps.iter().find(|e| e.name == "project-management").unwrap();
+    assert_eq!(pm.entity_types.len(), 5, "PM entity types: {:?}", pm.entity_types);
+    let evo = apps.iter().find(|e| e.name == "evolution").unwrap();
+    assert_eq!(evo.entity_types.len(), 2, "Evo entity types: {:?}", evo.entity_types);
+    assert!(evo.skill_guide.is_some(), "evolution should have a skill guide");
 }
 
 #[test]
@@ -116,12 +125,13 @@ fn test_get_skill_project_management() {
     let bundle = bundle.unwrap();
     assert_eq!(bundle.specs.len(), 5);
     assert!(!bundle.csdl.is_empty());
-    assert_eq!(bundle.cedar_policies.len(), 1);
+    assert!(!bundle.cedar_policies.is_empty());
 }
 
 #[test]
 fn test_agent_specs_parse() {
-    for (entity_type, ioa_source) in TEMPER_AGENT_SPECS {
+    let bundle = get_skill("temper-agent").expect("temper-agent skill not found");
+    for (entity_type, ioa_source) in &bundle.specs {
         let result = automaton::parse_automaton(ioa_source);
         assert!(
             result.is_ok(),
@@ -134,7 +144,8 @@ fn test_agent_specs_parse() {
 
 #[test]
 fn test_agent_csdl_parses() {
-    let result = parse_csdl(TEMPER_AGENT_CSDL);
+    let bundle = get_skill("temper-agent").expect("temper-agent skill not found");
+    let result = parse_csdl(&bundle.csdl);
     assert!(
         result.is_ok(),
         "Agent CSDL failed to parse: {:?}",
@@ -144,10 +155,11 @@ fn test_agent_csdl_parses() {
 
 #[test]
 fn test_agent_spec_entity_names() {
-    for (entity_type, ioa_source) in TEMPER_AGENT_SPECS {
+    let bundle = get_skill("temper-agent").expect("temper-agent skill not found");
+    for (entity_type, ioa_source) in &bundle.specs {
         let a = automaton::parse_automaton(ioa_source).unwrap();
         assert_eq!(
-            a.automaton.name, *entity_type,
+            &a.automaton.name, entity_type,
             "Agent spec name mismatch: expected {entity_type}, got {}",
             a.automaton.name
         );
@@ -156,7 +168,8 @@ fn test_agent_spec_entity_names() {
 
 #[test]
 fn test_agent_specs_verify() {
-    for (entity_type, ioa_source) in TEMPER_AGENT_SPECS {
+    let bundle = get_skill("temper-agent").expect("temper-agent skill not found");
+    for (entity_type, ioa_source) in &bundle.specs {
         let cascade = VerificationCascade::from_ioa(ioa_source)
             .with_sim_seeds(3)
             .with_prop_test_cases(50);
@@ -176,7 +189,7 @@ fn test_get_skill_agent_orchestration() {
     let bundle = bundle.unwrap();
     assert_eq!(bundle.specs.len(), 3);
     assert!(!bundle.csdl.is_empty());
-    assert_eq!(bundle.cedar_policies.len(), 1);
+    assert!(!bundle.cedar_policies.is_empty());
 }
 
 #[test]
@@ -186,7 +199,7 @@ fn test_get_skill_temper_agent() {
     let bundle = bundle.unwrap();
     assert_eq!(bundle.specs.len(), 1);
     assert!(!bundle.csdl.is_empty());
-    assert_eq!(bundle.cedar_policies.len(), 1);
+    assert!(!bundle.cedar_policies.is_empty());
 }
 
 #[test]
@@ -443,4 +456,12 @@ async fn test_skill_install_survives_restart() {
     let _ = std::fs::remove_file(&db_path);
     let _ = std::fs::remove_file(format!("{db_path}-wal"));
     let _ = std::fs::remove_file(format!("{db_path}-shm"));
+}
+
+#[test]
+fn test_reload_picks_up_disk_changes() {
+    // Just verify reload doesn't panic and produces a valid catalog.
+    reload_skills();
+    let skills = list_skills();
+    assert!(!skills.is_empty(), "catalog should not be empty after reload");
 }

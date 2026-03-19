@@ -327,6 +327,40 @@ CREATE TABLE IF NOT EXISTS tenant_secrets (
     PRIMARY KEY(tenant, key_name)
 );";
 
+// ---------------------------------------------------------------------------
+// OTS trajectory storage (full agent execution traces)
+// ---------------------------------------------------------------------------
+
+/// Full OTS trajectory storage for GEPA self-improvement loop.
+///
+/// Stores complete agent execution traces (tool calls, decisions, reasoning)
+/// captured by the MCP server during agent sessions. The `data` column holds
+/// the full OTS JSON blob; indexed columns enable efficient filtering.
+pub const CREATE_OTS_TRAJECTORIES_TABLE: &str = "\
+CREATE TABLE IF NOT EXISTS ots_trajectories (
+    trajectory_id TEXT PRIMARY KEY,
+    tenant TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    session_id TEXT,
+    outcome TEXT NOT NULL DEFAULT 'unknown',
+    entity_type TEXT,
+    turn_count INTEGER NOT NULL DEFAULT 0,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);";
+
+pub const CREATE_OTS_TRAJECTORIES_AGENT_INDEX: &str = "\
+CREATE INDEX IF NOT EXISTS idx_ots_trajectories_agent
+    ON ots_trajectories(agent_id);";
+
+pub const CREATE_OTS_TRAJECTORIES_TENANT_INDEX: &str = "\
+CREATE INDEX IF NOT EXISTS idx_ots_trajectories_tenant
+    ON ots_trajectories(tenant);";
+
+pub const CREATE_OTS_TRAJECTORIES_OUTCOME_INDEX: &str = "\
+CREATE INDEX IF NOT EXISTS idx_ots_trajectories_outcome
+    ON ots_trajectories(outcome);";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,6 +391,10 @@ mod tests {
         assert!(CREATE_DESIGN_TIME_EVENTS_TABLE.contains("IF NOT EXISTS"));
         assert!(CREATE_DESIGN_TIME_EVENTS_TENANT_INDEX.contains("IF NOT EXISTS"));
         assert!(CREATE_TENANT_SECRETS_TABLE.contains("IF NOT EXISTS"));
+        assert!(CREATE_OTS_TRAJECTORIES_TABLE.contains("IF NOT EXISTS"));
+        assert!(CREATE_OTS_TRAJECTORIES_AGENT_INDEX.contains("IF NOT EXISTS"));
+        assert!(CREATE_OTS_TRAJECTORIES_TENANT_INDEX.contains("IF NOT EXISTS"));
+        assert!(CREATE_OTS_TRAJECTORIES_OUTCOME_INDEX.contains("IF NOT EXISTS"));
     }
 
     #[test]

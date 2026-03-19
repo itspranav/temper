@@ -3,11 +3,12 @@
 //! These match the host functions linked by `temper-wasm::engine::link_host_functions`.
 //! SDK users should use the typed wrappers in `context.rs` instead.
 
-/// Buffer size for reading invocation context (256 KB).
+/// Buffer size for reading invocation context (512 KB).
 ///
 /// Agent conversation state can grow large (10K+ per turn), so this
-/// needs to accommodate multi-turn entities.
-pub const CTX_BUF_LEN: usize = 262144;
+/// needs to accommodate multi-turn entities. Increased from 256 KB
+/// to handle entities with accumulated adapter/WASM callback fields.
+pub const CTX_BUF_LEN: usize = 524288;
 
 /// Buffer size for HTTP response data (512 KB).
 pub const HTTP_BUF_LEN: usize = 524288;

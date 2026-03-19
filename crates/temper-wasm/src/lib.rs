@@ -13,7 +13,9 @@ pub mod types;
 
 pub use authorized_host::{AuthorizedWasmHost, WasmAuthzDecision, WasmAuthzGate, extract_domain};
 pub use engine::{WasmEngine, WasmError};
-pub use host_trait::{ProductionWasmHost, SimWasmHost, WasmHost, parse_connect_frames};
+pub use host_trait::{
+    ProductionWasmHost, SimWasmHost, SpecEvaluatorFn, WasmHost, parse_connect_frames,
+};
 pub use stream::{StreamRegistry, StreamRegistryConfig};
 pub use types::{
     WasmAuthzContext, WasmInvocationContext, WasmInvocationResult, WasmResourceLimits,

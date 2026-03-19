@@ -12,25 +12,42 @@ temper_module! {
     fn run(ctx: Context) -> Result<Value> {
         ctx.log("info", "gepa-reflective: building reflective dataset");
 
-        // Read trajectories from trigger params
-        let trajectories = ctx.trigger_params
+        // Read trajectories from trigger params (passed by RecordEvaluation)
+        let trajectories_val = ctx.trigger_params
             .get("trajectories")
-            .and_then(Value::as_array)
-            .ok_or("trigger_params missing 'trajectories' array")?;
+            .or_else(|| ctx.trigger_params.get("ReplayResultJson"));
+        // Parse if string, use directly if array
+        let trajectories_parsed: Vec<Value>;
+        let trajectories = match trajectories_val {
+            Some(Value::Array(arr)) => arr,
+            Some(Value::String(s)) => {
+                trajectories_parsed = match serde_json::from_str::<Value>(s) {
+                    Ok(Value::Array(arr)) => arr,
+                    Ok(val) => vec![val],
+                    Err(_) => vec![],
+                };
+                &trajectories_parsed
+            }
+            _ => {
+                trajectories_parsed = vec![];
+                &trajectories_parsed
+            }
+        };
 
-        // Read skill/entity context
-        let skill_name = ctx.entity_state
-            .get("skill_name")
+        // Read skill/entity context from entity state fields
+        let fields = ctx.entity_state.get("fields").unwrap_or(&ctx.entity_state);
+        let skill_name = fields
+            .get("SkillName")
             .and_then(Value::as_str)
             .unwrap_or("unknown");
-        let entity_type = ctx.entity_state
-            .get("target_entity_type")
+        let entity_type = fields
+            .get("TargetEntityType")
             .and_then(Value::as_str)
             .unwrap_or("unknown");
 
         // Read previous verification errors (if any)
-        let verification_feedback: Vec<String> = ctx.entity_state
-            .get("verification_errors")
+        let verification_feedback: Vec<String> = fields
+            .get("VerificationErrors")
             .and_then(Value::as_array)
             .map(|arr| {
                 arr.iter()

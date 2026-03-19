@@ -164,7 +164,9 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let apps = json["apps"].as_array().unwrap();
         assert!(!apps.is_empty());
-        assert_eq!(apps[0]["name"], "project-management");
+        // Verify a known skill is present (order depends on filesystem scan).
+        let names: Vec<&str> = apps.iter().filter_map(|a| a["name"].as_str()).collect();
+        assert!(names.contains(&"project-management"), "missing project-management: {names:?}");
     }
 
     #[tokio::test]
@@ -221,7 +223,9 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let apps = json["apps"].as_array().unwrap();
         assert!(!apps.is_empty());
-        assert_eq!(apps[0]["name"], "project-management");
+        // Verify a known skill is present (order depends on filesystem scan).
+        let names: Vec<&str> = apps.iter().filter_map(|a| a["name"].as_str()).collect();
+        assert!(names.contains(&"project-management"), "missing project-management: {names:?}");
     }
 
     #[tokio::test]

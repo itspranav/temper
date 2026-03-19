@@ -275,6 +275,16 @@ effect = "increment comment_count"
 params = ["CommentId"]
 hint = "Add a comment to the issue."
 
+# --- Reassign (added by GEPA evolution run evo-reassign-fix) ---
+
+[[action]]
+name = "Reassign"
+kind = "input"
+from = ["Backlog", "Triage", "Todo", "Planning", "Planned", "InProgress", "InReview"]
+guard = "is_true assignee_set"
+params = ["NewAssigneeId"]
+hint = "Reassign the issue to a different implementer."
+
 # --- Output Actions ---
 
 [[action]]

@@ -12,17 +12,19 @@ temper_module! {
     fn run(ctx: Context) -> Result<Value> {
         ctx.log("info", "gepa-pareto: updating Pareto frontier");
 
-        // Read current frontier from entity state
-        let frontier = ctx.entity_state
+        // Read current frontier from entity state fields
+        let fields = ctx.entity_state.get("fields").unwrap_or(&ctx.entity_state);
+        let frontier = fields
             .get("pareto_frontier")
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
 
-        // Read new candidate from trigger params
+        // Read new candidate from trigger params (scores + id)
         let candidate = ctx.trigger_params
             .get("candidate")
-            .ok_or("trigger_params missing 'candidate'")?;
+            .or_else(|| ctx.trigger_params.get("result"))
+            .unwrap_or(&ctx.trigger_params);
 
         let candidate_id = candidate.get("id")
             .and_then(Value::as_str)

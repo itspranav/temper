@@ -72,4 +72,5 @@ pub use store::{
     ActionStats, AgentSummary, DesignTimeEventRow, EvolutionRecordRow, FeatureRequestRow,
     PolicyRow, TursoEventStore, TursoSpecRow, TursoTenantConstraintRow, TursoTrajectoryRow,
     TursoWasmInvocationRow, TursoWasmModuleRow, UnmetIntentAggRow,
+    ots::OtsTrajectoryRow,
 };

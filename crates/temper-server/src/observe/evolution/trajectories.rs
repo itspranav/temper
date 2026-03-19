@@ -2,7 +2,7 @@ use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Json;
 use serde::Deserialize;
-use temper_runtime::scheduler::sim_now;
+use temper_runtime::scheduler::{sim_now, sim_uuid};
 use tracing::instrument;
 
 use crate::authz::{observe_tenant_scope, require_observe_auth};
@@ -190,4 +190,144 @@ pub(crate) async fn handle_unmet_intent(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     Ok(StatusCode::CREATED)
+}
+
+// ---------------------------------------------------------------------------
+// OTS Trajectory endpoints — full agent execution traces for GEPA
+// ---------------------------------------------------------------------------
+
+/// Query parameters for OTS trajectory listing.
+#[derive(Deserialize)]
+pub(crate) struct OtsTrajectoryQueryParams {
+    pub agent_id: Option<String>,
+    pub outcome: Option<String>,
+    pub limit: Option<i64>,
+}
+
+/// POST /api/ots/trajectories — receive a full OTS trajectory from an MCP session.
+#[instrument(skip_all, fields(otel.name = "POST /api/ots/trajectories"))]
+pub(crate) async fn handle_post_ots_trajectory(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+    body: String,
+) -> Result<StatusCode, (StatusCode, String)> {
+    // Parse the OTS trajectory JSON to extract indexed fields.
+    let trajectory: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid JSON: {e}")))?;
+
+    let trajectory_id = trajectory
+        .get("metadata")
+        .and_then(|m| m.get("trajectory_id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| sim_uuid().to_string());
+
+    let agent_id = headers
+        .get("X-Agent-Id")
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| {
+            trajectory
+                .get("metadata")
+                .and_then(|m| m.get("agent_id"))
+                .and_then(|v| v.as_str())
+        })
+        .unwrap_or("unknown");
+
+    let session_id = headers
+        .get("X-Session-Id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let outcome = trajectory
+        .get("metadata")
+        .and_then(|m| m.get("outcome"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+
+    let turn_count = trajectory
+        .get("turns")
+        .and_then(|t| t.as_array())
+        .map(|a| a.len() as i64)
+        .unwrap_or(0);
+
+    let tenant = headers
+        .get("X-Tenant-Id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("default");
+
+    if let Some(turso) = state.persistent_store_for_tenant(tenant).await {
+        turso
+            .persist_ots_trajectory(
+                &trajectory_id,
+                tenant,
+                agent_id,
+                session_id,
+                outcome,
+                turn_count,
+                &body,
+            )
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("failed to persist OTS trajectory: {e}"),
+                )
+            })?;
+
+        tracing::info!(
+            trajectory_id = %trajectory_id,
+            agent_id = %agent_id,
+            turn_count = turn_count,
+            outcome = %outcome,
+            "ots.trajectory.persisted"
+        );
+    } else {
+        tracing::warn!(
+            tenant = %tenant,
+            "no persistent store — OTS trajectory not persisted"
+        );
+    }
+
+    Ok(StatusCode::CREATED)
+}
+
+/// GET /api/ots/trajectories — list OTS trajectories with optional filters.
+#[instrument(skip_all, fields(otel.name = "GET /api/ots/trajectories"))]
+pub(crate) async fn handle_get_ots_trajectories(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+    Query(params): Query<OtsTrajectoryQueryParams>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let tenant = headers
+        .get("X-Tenant-Id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("default");
+    let limit = params.limit.unwrap_or(50).min(500);
+
+    let Some(turso) = state.persistent_store_for_tenant(tenant).await else {
+        return Ok(Json(serde_json::json!({
+            "trajectories": [],
+            "total": 0,
+        })));
+    };
+
+    match turso
+        .list_ots_trajectories(tenant, params.agent_id.as_deref(), params.outcome.as_deref(), limit)
+        .await
+    {
+        Ok(rows) => {
+            let total = rows.len();
+            Ok(Json(serde_json::json!({
+                "trajectories": rows,
+                "total": total,
+            })))
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to list OTS trajectories");
+            Ok(Json(serde_json::json!({
+                "trajectories": [],
+                "total": 0,
+            })))
+        }
+    }
 }

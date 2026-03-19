@@ -57,6 +57,12 @@ pub fn build_api_router() -> Router<ServerState> {
             "/evolution/sentinel/check",
             post(crate::observe::evolution::handle_sentinel_check),
         )
+        // OTS trajectory endpoints (full agent execution traces for GEPA)
+        .route(
+            "/ots/trajectories",
+            post(crate::observe::evolution::handle_post_ots_trajectory)
+                .get(crate::observe::evolution::handle_get_ots_trajectories),
+        )
         .route(
             "/tenants/{tenant}/secrets/{key_name}",
             put(secrets::handle_put_secret).delete(secrets::handle_delete_secret),

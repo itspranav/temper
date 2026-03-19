@@ -4,6 +4,7 @@
 //! responses for deterministic testing.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
@@ -80,12 +81,21 @@ pub trait WasmHost: Send + Sync {
     }
 }
 
+/// Callback for evaluating IOA spec transitions.
+///
+/// Injected by `temper-server` where `temper-jit` is available.
+/// Keeps the dependency boundary clean: `temper-wasm` never depends on `temper-jit`.
+pub type SpecEvaluatorFn =
+    Arc<dyn Fn(&str, &str, &str, &str) -> Result<String, String> + Send + Sync>;
+
 /// Production host: real HTTP calls via reqwest, real secrets.
 pub struct ProductionWasmHost {
     /// HTTP client for making real requests.
     client: reqwest::Client,
     /// Secrets from env vars or a secret store.
     secrets: BTreeMap<String, String>,
+    /// Optional spec evaluator (provided by temper-server at construction).
+    spec_evaluator: Option<SpecEvaluatorFn>,
 }
 
 impl ProductionWasmHost {
@@ -103,7 +113,14 @@ impl ProductionWasmHost {
                 .build()
                 .unwrap_or_default(),
             secrets,
+            spec_evaluator: None,
         }
+    }
+
+    /// Create with a spec evaluator for `host_evaluate_spec` support.
+    pub fn with_spec_evaluator(mut self, evaluator: SpecEvaluatorFn) -> Self {
+        self.spec_evaluator = Some(evaluator);
+        self
     }
 }
 
@@ -234,6 +251,19 @@ impl WasmHost for ProductionWasmHost {
             "warn" => tracing::warn!(target: "wasm_guest", "{}", message),
             "info" => tracing::info!(target: "wasm_guest", "{}", message),
             _ => tracing::debug!(target: "wasm_guest", "{}", message),
+        }
+    }
+
+    fn evaluate_spec(
+        &self,
+        ioa_source: &str,
+        current_state: &str,
+        action: &str,
+        params_json: &str,
+    ) -> Result<String, String> {
+        match &self.spec_evaluator {
+            Some(evaluator) => evaluator(ioa_source, current_state, action, params_json),
+            None => Err("evaluate_spec not supported by this host".to_string()),
         }
     }
 }

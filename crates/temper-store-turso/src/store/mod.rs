@@ -21,6 +21,7 @@ mod constraints;
 mod event_store;
 mod evolution;
 mod instrumentation;
+pub mod ots;
 mod policy;
 mod secrets;
 mod specs;
@@ -216,6 +217,20 @@ impl TursoEventStore {
             let _ = conn.execute(stmt, ()).await; // ignore "duplicate column" errors
         }
         conn.execute(schema::CREATE_TRAJECTORIES_AGENT_INDEX, ())
+            .await
+            .map_err(storage_error)?;
+
+        // OTS trajectory storage — full agent execution traces for GEPA.
+        conn.execute(schema::CREATE_OTS_TRAJECTORIES_TABLE, ())
+            .await
+            .map_err(storage_error)?;
+        conn.execute(schema::CREATE_OTS_TRAJECTORIES_AGENT_INDEX, ())
+            .await
+            .map_err(storage_error)?;
+        conn.execute(schema::CREATE_OTS_TRAJECTORIES_TENANT_INDEX, ())
+            .await
+            .map_err(storage_error)?;
+        conn.execute(schema::CREATE_OTS_TRAJECTORIES_OUTCOME_INDEX, ())
             .await
             .map_err(storage_error)?;
 

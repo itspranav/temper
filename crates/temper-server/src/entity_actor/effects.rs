@@ -356,20 +356,40 @@ pub fn apply_new_state_fallback(state: &mut EntityState, from_status: &str, new_
     }
 }
 
+/// Maximum size (in bytes) for a single field value projected into entity state.
+/// Adapter outputs like `raw_output` and `stream` can be huge and bloat the
+/// WASM invocation context beyond CTX_BUF_LEN (256 KB). Capping individual
+/// values prevents this while keeping declared entity params intact.
+const MAX_FIELD_VALUE_BYTES: usize = 32_768; // 32 KB
+
 /// Sync all state variables into the `fields` JSON object.
 ///
 /// This projects status, counters, booleans, lists, and action params
-/// into the entity's fields for OData queries.
+/// into the entity's fields for OData queries. Fields whose serialized
+/// value exceeds `MAX_FIELD_VALUE_BYTES` are truncated to prevent entity
+/// state bloat from adapter outputs.
 pub fn sync_fields(state: &mut EntityState, params: &serde_json::Value) {
     if let Some(obj) = state.fields.as_object_mut() {
         obj.insert(
             "Status".to_string(),
             serde_json::Value::String(state.status.clone()),
         );
-        // Project action params into fields
+        // Project action params into fields (skip oversized values)
         if let Some(p) = params.as_object() {
             for (k, v) in p {
-                obj.insert(k.clone(), v.clone());
+                let serialized_len = v.to_string().len();
+                if serialized_len <= MAX_FIELD_VALUE_BYTES {
+                    obj.insert(k.clone(), v.clone());
+                } else {
+                    // Store a truncation marker so the field is visible but not bloated
+                    obj.insert(
+                        k.clone(),
+                        serde_json::Value::String(format!(
+                            "[truncated: {} bytes exceeds {} limit]",
+                            serialized_len, MAX_FIELD_VALUE_BYTES
+                        )),
+                    );
+                }
             }
         }
         // Sync counters into fields

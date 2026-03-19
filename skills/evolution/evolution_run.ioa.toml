@@ -47,8 +47,8 @@ name = "SelectCandidate"
 kind = "input"
 from = ["Selecting"]
 to = "Evaluating"
-effect = "inc candidate_count"
-params = ["CandidateId", "SpecSource"]
+effect = [{ type = "increment", var = "candidate_count" }, { type = "trigger", name = "evaluate_candidate" }]
+params = ["CandidateId", "SpecSource", "TrajectoryActions"]
 hint = "Select a candidate spec from the Pareto frontier or seed pool."
 
 [[action]]
@@ -56,6 +56,7 @@ name = "RecordEvaluation"
 kind = "input"
 from = ["Evaluating"]
 to = "Reflecting"
+effect = "trigger build_reflective_dataset"
 params = ["ReplayResultJson"]
 hint = "Record evaluation (replay) results from the WASM replay module."
 
@@ -64,6 +65,7 @@ name = "RecordDataset"
 kind = "input"
 from = ["Reflecting"]
 to = "Proposing"
+effect = "trigger propose_mutation"
 params = ["DatasetJson"]
 hint = "Record reflective dataset built by WASM module from OTS traces."
 
@@ -72,7 +74,7 @@ name = "RecordMutation"
 kind = "input"
 from = ["Proposing"]
 to = "Verifying"
-effect = "inc mutation_attempts"
+effect = "increment mutation_attempts"
 params = ["MutatedSpecSource", "MutationSummary"]
 hint = "Record the LLM-proposed spec mutation."
 
@@ -81,6 +83,7 @@ name = "RecordVerificationPass"
 kind = "input"
 from = ["Verifying"]
 to = "Scoring"
+effect = "trigger score_candidate"
 params = ["VerificationReport"]
 hint = "Record successful L0-L3 verification of the mutated spec."
 
@@ -105,6 +108,7 @@ name = "RecordScore"
 kind = "input"
 from = ["Scoring"]
 to = "Updating"
+effect = "trigger update_frontier"
 params = ["ScoresJson"]
 hint = "Record multi-objective scores from WASM scoring module."
 
@@ -129,7 +133,7 @@ name = "ContinueEvolution"
 kind = "input"
 from = ["Updating"]
 to = "Selecting"
-effect = "inc generation; set mutation_attempts 0"
+effect = "increment generation"
 hint = "Continue to next generation."
 
 [[action]]
@@ -145,7 +149,7 @@ name = "Reject"
 kind = "input"
 from = ["AwaitingApproval"]
 to = "Selecting"
-effect = "set mutation_attempts 0"
+effect = "increment generation"
 params = ["RejectionReason"]
 hint = "Reject the candidate, continue evolving."
 
@@ -169,7 +173,7 @@ hint = "Unrecoverable error — evolution run failed."
 
 [[integration]]
 name = "evaluate_candidate"
-trigger = "RecordEvaluation"
+trigger = "evaluate_candidate"
 type = "wasm"
 module = "gepa-replay"
 on_success = "RecordEvaluation"
@@ -177,7 +181,7 @@ on_failure = "Fail"
 
 [[integration]]
 name = "build_reflective_dataset"
-trigger = "RecordDataset"
+trigger = "build_reflective_dataset"
 type = "wasm"
 module = "gepa-reflective"
 on_success = "RecordDataset"
@@ -185,15 +189,16 @@ on_failure = "Fail"
 
 [[integration]]
 name = "propose_mutation"
-trigger = "RecordMutation"
+trigger = "propose_mutation"
 type = "adapter"
 adapter = "claude_code"
 on_success = "RecordMutation"
 on_failure = "Fail"
+prompt = "You are the GEPA evolution agent. Read the reflective dataset in trigger_params.DatasetJson — it contains failure traces showing why the current spec doesn't work. Propose a minimal IOA spec mutation that fixes the failures while preserving all existing working behavior. Return the full mutated spec source and a summary of what changed."
 
 [[integration]]
 name = "score_candidate"
-trigger = "RecordScore"
+trigger = "score_candidate"
 type = "wasm"
 module = "gepa-score"
 on_success = "RecordScore"
@@ -201,7 +206,7 @@ on_failure = "Fail"
 
 [[integration]]
 name = "update_frontier"
-trigger = "RecordFrontier"
+trigger = "update_frontier"
 type = "wasm"
 module = "gepa-pareto"
 on_success = "RecordFrontier"

@@ -12,17 +12,28 @@ temper_module! {
     fn run(ctx: Context) -> Result<Value> {
         ctx.log("info", "gepa-replay: starting trajectory replay");
 
-        // Read candidate IOA source from entity state
-        let ioa_source = ctx.entity_state
-            .get("candidate_spec")
+        // Read candidate IOA source from entity state fields (set by SelectCandidate params)
+        let fields = ctx.entity_state.get("fields").unwrap_or(&ctx.entity_state);
+        let ioa_source = fields
+            .get("SpecSource")
             .and_then(Value::as_str)
-            .ok_or("entity_state missing 'candidate_spec'")?;
+            .or_else(|| ctx.trigger_params.get("SpecSource").and_then(Value::as_str))
+            .ok_or("entity_state.fields missing 'SpecSource'")?;
 
-        // Read trajectory actions from trigger params
-        let actions = ctx.trigger_params
-            .get("trajectory_actions")
-            .and_then(Value::as_array)
-            .ok_or("trigger_params missing 'trajectory_actions' array")?;
+        // Read trajectory actions from trigger params or entity state
+        let actions_val = ctx.trigger_params
+            .get("TrajectoryActions")
+            .or_else(|| fields.get("TrajectoryActions"));
+        // Parse if string, use directly if array
+        let actions_parsed: Vec<Value>;
+        let actions = match actions_val {
+            Some(Value::Array(arr)) => arr,
+            Some(Value::String(s)) => {
+                actions_parsed = serde_json::from_str(s).unwrap_or_default();
+                &actions_parsed
+            }
+            _ => return Err("trigger_params missing 'TrajectoryActions'".into()),
+        };
 
         let initial_state = ctx.trigger_params
             .get("initial_state")
