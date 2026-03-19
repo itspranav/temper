@@ -4,11 +4,6 @@
 // The planner CAN approve its own plan (because the human told it to).
 // The real gate is the human saying "go ahead" in conversation.
 
-// --- Permit all actions on Issue for any principal ---
-// This allows the spec's transition table to be the sole gatekeeper,
-// which is what we want for evolution: Cedar governs WHO, the spec governs WHAT.
-permit(principal, action, resource is Issue);
-
 // --- Universal: any agent can create, read, list, comment ---
 
 permit(
