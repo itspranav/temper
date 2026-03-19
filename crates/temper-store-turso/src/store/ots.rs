@@ -19,35 +19,40 @@ pub struct OtsTrajectoryRow {
     pub created_at: String,
 }
 
+/// Parameters for persisting an OTS trajectory.
+pub struct OtsTrajectoryParams<'a> {
+    pub trajectory_id: &'a str,
+    pub tenant: &'a str,
+    pub agent_id: &'a str,
+    pub session_id: &'a str,
+    pub outcome: &'a str,
+    pub turn_count: i64,
+    pub data: &'a str,
+}
+
 impl TursoEventStore {
     /// Persist a full OTS trajectory JSON blob.
     #[instrument(skip_all, fields(
         otel.name = "turso.persist_ots_trajectory",
-        trajectory_id = %trajectory_id,
-        agent_id = %agent_id,
+        trajectory_id = %p.trajectory_id,
+        agent_id = %p.agent_id,
     ))]
     pub async fn persist_ots_trajectory(
         &self,
-        trajectory_id: &str,
-        tenant: &str,
-        agent_id: &str,
-        session_id: &str,
-        outcome: &str,
-        turn_count: i64,
-        data: &str,
+        p: &OtsTrajectoryParams<'_>,
     ) -> Result<(), PersistenceError> {
         let _timer = TursoQueryTimer::start("turso.persist_ots_trajectory");
         let conn = self.connection()?;
         conn.execute(
             "INSERT OR REPLACE INTO ots_trajectories (trajectory_id, tenant, agent_id, session_id, outcome, turn_count, data, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))",
             params![
-                trajectory_id.to_string(),
-                tenant.to_string(),
-                agent_id.to_string(),
-                session_id.to_string(),
-                outcome.to_string(),
-                turn_count,
-                data.to_string(),
+                p.trajectory_id.to_string(),
+                p.tenant.to_string(),
+                p.agent_id.to_string(),
+                p.session_id.to_string(),
+                p.outcome.to_string(),
+                p.turn_count,
+                p.data.to_string(),
             ],
         )
         .await

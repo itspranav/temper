@@ -257,15 +257,15 @@ pub(crate) async fn handle_post_ots_trajectory(
 
     if let Some(turso) = state.persistent_store_for_tenant(tenant).await {
         turso
-            .persist_ots_trajectory(
-                &trajectory_id,
+            .persist_ots_trajectory(&temper_store_turso::OtsTrajectoryParams {
+                trajectory_id: &trajectory_id,
                 tenant,
                 agent_id,
                 session_id,
                 outcome,
                 turn_count,
-                &body,
-            )
+                data: &body,
+            })
             .await
             .map_err(|e| {
                 (
