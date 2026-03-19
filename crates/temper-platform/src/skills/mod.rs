@@ -318,18 +318,18 @@ fn read_skill_guide(skill_dir: &Path) -> Option<String> {
 /// `description` field.
 fn extract_description(guide: &str) -> Option<String> {
     // Check for TOML frontmatter (+++...+++ delimited).
-    if guide.starts_with("+++") {
-        if let Some(end) = guide[3..].find("+++") {
-            let frontmatter = &guide[3..3 + end];
-            for line in frontmatter.lines() {
-                let trimmed = line.trim();
-                if trimmed.starts_with("description") {
-                    if let Some(val) = trimmed.split('=').nth(1) {
-                        let val = val.trim().trim_matches('"');
-                        if !val.is_empty() {
-                            return Some(val.to_string());
-                        }
-                    }
+    if let Some(rest) = guide.strip_prefix("+++")
+        && let Some(end) = rest.find("+++")
+    {
+        let frontmatter = &rest[..end];
+        for line in frontmatter.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("description")
+                && let Some(val) = trimmed.split('=').nth(1)
+            {
+                let val = val.trim().trim_matches('"');
+                if !val.is_empty() {
+                    return Some(val.to_string());
                 }
             }
         }
