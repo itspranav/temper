@@ -75,6 +75,11 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
 
         // Get API key from integration config (resolved from {secret:anthropic_api_key})
         let api_key = ctx.config.get("api_key").cloned().unwrap_or_default();
+        let anthropic_api_url = ctx
+            .config
+            .get("anthropic_api_url")
+            .cloned()
+            .unwrap_or_else(|| "https://api.anthropic.com/v1/messages".to_string());
 
         if api_key.is_empty() {
             return Err("missing api_key in integration config".to_string());
@@ -126,7 +131,15 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
 
         // Call LLM API
         let response = match provider {
-            "anthropic" => call_anthropic(&ctx, &api_key, model, system_prompt, &messages, &tools)?,
+            "anthropic" => call_anthropic(
+                &ctx,
+                &api_key,
+                &anthropic_api_url,
+                model,
+                system_prompt,
+                &messages,
+                &tools,
+            )?,
             other => return Err(format!("unsupported LLM provider: {other}")),
         };
 
@@ -244,6 +257,7 @@ struct LlmResponse {
 fn call_anthropic(
     ctx: &Context,
     api_key: &str,
+    api_url: &str,
     model: &str,
     system_prompt: &str,
     messages: &[Value],
@@ -290,8 +304,8 @@ fn call_anthropic(
     ctx.log(
         "info",
         &format!(
-            "llm_caller: calling Anthropic API, model={model}, oauth={is_oauth}, messages={}",
-            messages.len()
+            "llm_caller: calling Anthropic API, model={model}, oauth={is_oauth}, messages={}, url={api_url}",
+            messages.len(),
         ),
     );
 
@@ -329,12 +343,7 @@ fn call_anthropic(
                 ),
             );
         }
-        match ctx.http_call(
-            "POST",
-            "https://api.anthropic.com/v1/messages",
-            &headers,
-            &body_str,
-        ) {
+        match ctx.http_call("POST", api_url, &headers, &body_str) {
             Ok(r) if r.status == 200 => {
                 resp = Some(r);
                 break;

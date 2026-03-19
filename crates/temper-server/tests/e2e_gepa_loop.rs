@@ -1202,9 +1202,9 @@ hint = "Reassign the issue to a different implementer."
 
 /// Proves: the compiled GEPA WASM modules actually execute through the
 /// integration dispatch chain. Uses the REAL EvolutionRun spec with
-/// integrations, registers the compiled .wasm binaries, and verifies
-/// that `SelectCandidate` → `evaluate_candidate` WASM trigger fires
-/// the `gepa-replay` module which calls back `RecordEvaluation`.
+/// integrations, registers compiled replay/reflective/score/pareto binaries,
+/// and verifies that `SelectCandidate` → `evaluate_candidate` trigger fires
+/// `gepa-replay` which calls back `RecordEvaluation`.
 ///
 /// This is the true end-to-end proof that the WASM chain works.
 #[tokio::test(flavor = "multi_thread")]
@@ -1351,10 +1351,10 @@ to = "Done"
     // The integration fires in background (tokio::spawn). Wait for it.
     // The chain is: evaluate_candidate (gepa-replay) → RecordEvaluation
     //            → build_reflective_dataset (gepa-reflective) → RecordDataset
-    //            → propose_mutation (claude_code adapter — will fail, no adapter in test)
+    //            → propose_mutation (gepa-proposer-agent, not registered in this test)
     //
     // We expect the entity to reach at least "Reflecting" or "Proposing" via WASM,
-    // then potentially "Failed" when the claude_code adapter can't be resolved.
+    // then potentially "Failed" when propose_mutation cannot run.
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let mut final_status = "Evaluating".to_string();
@@ -1397,7 +1397,7 @@ to = "Done"
 
     // Even better: if we reached Proposing or Failed, it means BOTH
     // gepa-replay AND gepa-reflective WASM modules fired successfully,
-    // and the chain only stopped at the claude_code adapter (expected).
+    // and the chain only stopped at propose_mutation (expected in this test).
     let wasm_chain_completed = matches!(final_status.as_str(), "Proposing" | "Failed");
     println!(
         "WASM chain completed (replay + reflective): {wasm_chain_completed}, final: {final_status}"
@@ -1427,7 +1427,7 @@ to = "Done"
     );
 }
 
-/// **Full autonomous GEPA loop** — proves the entire chain runs end-to-end:
+/// **Full autonomous GEPA loop (test override)** — proves the entire chain runs end-to-end:
 ///
 /// SelectCandidate → gepa-replay (WASM) → RecordEvaluation
 ///                → gepa-reflective (WASM) → RecordDataset
@@ -1436,9 +1436,9 @@ to = "Done"
 ///                → gepa-score (WASM) → RecordScore
 ///                → gepa-pareto (WASM) → RecordFrontier
 ///
-/// The adapter uses a mock shell script instead of the real `claude` CLI.
-/// This proves Claude Code IS the evolution agent — the adapter spawns a process,
-/// passes the prompt and entity state, and the process returns a mutated spec.
+/// Production uses `gepa-proposer-agent` WASM + TemperAgent. This test
+/// intentionally overrides only `propose_mutation` to a deterministic mock adapter
+/// so CI can run without LLM keys/network.
 #[tokio::test]
 async fn e2e_gepa_full_autonomous_loop_with_adapter() {
     use std::io::Write;
@@ -1481,13 +1481,13 @@ MOCK_OUTPUT
         }
     }
 
-    // --- Build EvolutionRun spec with mock command override ---
+    // --- Build EvolutionRun spec with propose_mutation test override ---
     let base_ioa = include_str!("../../../skills/evolution/evolution_run.ioa.toml");
-    // Replace the propose_mutation integration to use our mock script
+    // Replace the proposer module with deterministic adapter for test-only execution.
     let mock_path = mock_script.to_str().expect("mock path to str");
     let modified_ioa = base_ioa.replace(
-        "adapter = \"claude_code\"",
-        &format!("adapter = \"claude_code\"\ncommand = \"{mock_path}\""),
+        "type = \"wasm\"\nmodule = \"gepa-proposer-agent\"",
+        &format!("type = \"adapter\"\nadapter = \"claude_code\"\ncommand = \"{mock_path}\""),
     );
 
     let csdl_xml = r#"<?xml version="1.0" encoding="utf-8"?>

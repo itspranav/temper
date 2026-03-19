@@ -6,6 +6,7 @@ exclude = [
     "wasm-modules/gepa-score",
     "wasm-modules/gepa-pareto",
     "wasm-modules/gepa-reflective",
+    "wasm-modules/gepa-proposer-agent",
     "crates/temper-wasm/tests/fixtures/echo-integration-src",
     "skills/temper-agent/wasm/llm_caller",
     "skills/temper-agent/wasm/tool_runner",

@@ -2,6 +2,7 @@
 
 use anyhow::{Result, bail};
 use monty::MontyObject;
+use serde_json::Value;
 use temper_ots::{
     DecisionType, MessageRole, OTSChoice, OTSConsequence, OTSContext, OTSDecision, OTSMessage,
     OTSMessageContent, OTSMetadata, OutcomeType, TrajectoryBuilder,
@@ -196,11 +197,15 @@ impl RuntimeContext {
             }
         };
 
-        let decision = OTSDecision::new(
-            DecisionType::ToolSelection,
-            OTSChoice::new(format!("execute: {}", &code[..code.len().min(100)])),
-            consequence,
-        );
+        let mut choice = OTSChoice::new(format!("execute: {}", &code[..code.len().min(100)]));
+        let extracted_actions = extract_trajectory_actions_from_code(code);
+        if !extracted_actions.is_empty() {
+            choice = choice.with_arguments(serde_json::json!({
+                "trajectory_actions": extracted_actions,
+            }));
+        }
+
+        let decision = OTSDecision::new(DecisionType::ToolSelection, choice, consequence);
         builder.add_decision(decision);
 
         builder.end_turn(now);
@@ -228,7 +233,8 @@ impl RuntimeContext {
             .http
             .post(&url)
             .body(json)
-            .header("Content-Type", "application/json");
+            .header("Content-Type", "application/json")
+            .header("X-Tenant-Id", &self.identity_tenant);
 
         if let Some(ref agent_id) = self.agent_id {
             request = request.header("X-Agent-Id", agent_id);
@@ -321,6 +327,336 @@ impl RuntimeContext {
                 },
             )
             .await
+    }
+}
+
+fn extract_trajectory_actions_from_code(code: &str) -> Vec<Value> {
+    let mut actions = Vec::new();
+    let mut cursor = 0usize;
+    let needle = "temper.action";
+
+    while let Some(found) = code[cursor..].find(needle) {
+        let method_start = cursor + found + needle.len();
+        let mut open = method_start;
+        while open < code.len()
+            && code
+                .as_bytes()
+                .get(open)
+                .is_some_and(|b| b.is_ascii_whitespace())
+        {
+            open += 1;
+        }
+        if code.as_bytes().get(open) != Some(&b'(') {
+            cursor = method_start;
+            continue;
+        }
+
+        let Some(close) = find_matching_paren(code, open) else {
+            break;
+        };
+
+        let args = split_top_level_args(&code[open + 1..close]);
+        let (action_idx, params_idx) =
+            if args.len() >= 5 && parse_python_string_literal(args[3]).is_some() {
+                (3usize, 4usize)
+            } else {
+                (2usize, 3usize)
+            };
+
+        if args.len() > action_idx
+            && let Some(action_name) = parse_python_string_literal(args[action_idx])
+        {
+            let params = args
+                .get(params_idx)
+                .and_then(|raw| parse_python_json_value(raw))
+                .unwrap_or_else(|| serde_json::json!({}));
+            actions.push(serde_json::json!({
+                "action": action_name,
+                "params": params,
+            }));
+        }
+
+        cursor = close + 1;
+    }
+
+    actions
+}
+
+fn find_matching_paren(input: &str, open_idx: usize) -> Option<usize> {
+    let mut depth = 0i32;
+    let mut in_quote: Option<char> = None;
+    let mut escaped = false;
+
+    for (offset, ch) in input[open_idx..].char_indices() {
+        let idx = open_idx + offset;
+        if let Some(quote) = in_quote {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == quote {
+                in_quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' | '"' => in_quote = Some(ch),
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(idx);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
+fn split_top_level_args(input: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut depth_paren = 0i32;
+    let mut depth_brace = 0i32;
+    let mut depth_bracket = 0i32;
+    let mut in_quote: Option<char> = None;
+    let mut escaped = false;
+
+    for (idx, ch) in input.char_indices() {
+        if let Some(quote) = in_quote {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == quote {
+                in_quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' | '"' => in_quote = Some(ch),
+            '(' => depth_paren += 1,
+            ')' => depth_paren -= 1,
+            '{' => depth_brace += 1,
+            '}' => depth_brace -= 1,
+            '[' => depth_bracket += 1,
+            ']' => depth_bracket -= 1,
+            ',' if depth_paren == 0 && depth_brace == 0 && depth_bracket == 0 => {
+                parts.push(input[start..idx].trim());
+                start = idx + 1;
+            }
+            _ => {}
+        }
+    }
+
+    if start <= input.len() {
+        let tail = input[start..].trim();
+        if !tail.is_empty() {
+            parts.push(tail);
+        }
+    }
+    parts
+}
+
+fn parse_python_string_literal(raw: &str) -> Option<String> {
+    let s = raw.trim();
+    if s.len() < 2 {
+        return None;
+    }
+    let quote = s.chars().next()?;
+    if (quote != '\'' && quote != '"') || !s.ends_with(quote) {
+        return None;
+    }
+
+    let mut out = String::new();
+    let mut escaped = false;
+    for ch in s[1..s.len() - 1].chars() {
+        if escaped {
+            let mapped = match ch {
+                'n' => '\n',
+                'r' => '\r',
+                't' => '\t',
+                '\\' => '\\',
+                '\'' => '\'',
+                '"' => '"',
+                other => other,
+            };
+            out.push(mapped);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        out.push(ch);
+    }
+    if escaped {
+        out.push('\\');
+    }
+    Some(out)
+}
+
+fn parse_python_json_value(raw: &str) -> Option<Value> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Some(serde_json::json!({}));
+    }
+    if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
+        return Some(v);
+    }
+    let normalized = normalize_pythonish_json(trimmed);
+    serde_json::from_str::<Value>(&normalized).ok()
+}
+
+fn normalize_pythonish_json(input: &str) -> String {
+    let mut quoted = String::with_capacity(input.len());
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+
+    for ch in input.chars() {
+        if in_single {
+            if escaped {
+                quoted.push(ch);
+                escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' => escaped = true,
+                '\'' => {
+                    in_single = false;
+                    quoted.push('"');
+                }
+                '"' => quoted.push_str("\\\""),
+                _ => quoted.push(ch),
+            }
+            continue;
+        }
+
+        if in_double {
+            quoted.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_double = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' => {
+                in_single = true;
+                quoted.push('"');
+            }
+            '"' => {
+                in_double = true;
+                quoted.push('"');
+            }
+            _ => quoted.push(ch),
+        }
+    }
+
+    let mut out = String::with_capacity(quoted.len());
+    let mut token = String::new();
+    let mut in_string = false;
+    let mut esc = false;
+
+    let flush_token = |token: &mut String, out: &mut String| {
+        if token.is_empty() {
+            return;
+        }
+        match token.as_str() {
+            "True" => out.push_str("true"),
+            "False" => out.push_str("false"),
+            "None" => out.push_str("null"),
+            _ => out.push_str(token),
+        }
+        token.clear();
+    };
+
+    for ch in quoted.chars() {
+        if in_string {
+            out.push(ch);
+            if esc {
+                esc = false;
+            } else if ch == '\\' {
+                esc = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        if ch == '"' {
+            flush_token(&mut token, &mut out);
+            in_string = true;
+            out.push(ch);
+            continue;
+        }
+
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            token.push(ch);
+            continue;
+        }
+
+        flush_token(&mut token, &mut out);
+        out.push(ch);
+    }
+    flush_token(&mut token, &mut out);
+
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_trajectory_actions_from_temper_action_calls() {
+        let code = r#"
+result = temper.action("Issue", "issue-1", "PromoteToCritical", {"Reason": "prod incident"})
+other = temper.action('Issue', 'issue-1', 'Assign', {'AgentId': 'agent-2'})
+tenant = temper.action("gepa-tenant", "Issues", "11111111-1111-1111-1111-111111111111", "Reassign", {"NewAssigneeId": "agent-3"})
+"#;
+
+        let actions = extract_trajectory_actions_from_code(code);
+        assert_eq!(actions.len(), 3);
+        assert_eq!(
+            actions[0].get("action").and_then(Value::as_str),
+            Some("PromoteToCritical")
+        );
+        assert_eq!(
+            actions[2]
+                .get("params")
+                .and_then(Value::as_object)
+                .and_then(|m| m.get("NewAssigneeId"))
+                .and_then(Value::as_str),
+            Some("agent-3")
+        );
+    }
+
+    #[test]
+    fn normalize_python_literals_to_json() {
+        let value = parse_python_json_value("{'enabled': True, 'reason': None, 'count': 2}")
+            .expect("python dict should parse");
+        assert_eq!(value["enabled"], serde_json::json!(true));
+        assert_eq!(value["reason"], serde_json::Value::Null);
+        assert_eq!(value["count"], serde_json::json!(2));
     }
 }
 

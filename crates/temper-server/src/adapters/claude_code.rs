@@ -233,7 +233,19 @@ fn lift_mutation_fields(out: &mut Value) {
             "spec_source",
             "new_spec",
         ],
-    );
+    )
+    .or_else(|| {
+        find_first_key_in_embedded_json(
+            out,
+            &[
+                "MutatedSpecSource",
+                "mutated_spec_source",
+                "SpecSource",
+                "spec_source",
+                "new_spec",
+            ],
+        )
+    });
     let summary_value = find_first_key(
         out,
         &[
@@ -243,7 +255,19 @@ fn lift_mutation_fields(out: &mut Value) {
             "rationale",
             "change_summary",
         ],
-    );
+    )
+    .or_else(|| {
+        find_first_key_in_embedded_json(
+            out,
+            &[
+                "MutationSummary",
+                "mutation_summary",
+                "summary",
+                "rationale",
+                "change_summary",
+            ],
+        )
+    });
 
     if let Some(obj) = out.as_object_mut() {
         if let Some(spec) = spec_value {
@@ -289,6 +313,70 @@ fn find_key_recursive(value: &Value, key: &str) -> Option<Value> {
     }
 }
 
+fn find_first_key_in_embedded_json(root: &Value, keys: &[&str]) -> Option<Value> {
+    let mut stack = vec![root];
+    while let Some(value) = stack.pop() {
+        match value {
+            Value::Object(map) => {
+                stack.extend(map.values());
+            }
+            Value::Array(arr) => {
+                stack.extend(arr);
+            }
+            Value::String(text) => {
+                if let Some(found) = find_key_in_textual_json(text, keys) {
+                    return Some(found);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn find_key_in_textual_json(text: &str, keys: &[&str]) -> Option<Value> {
+    if let Ok(value) = serde_json::from_str::<Value>(text)
+        && let Some(found) = find_first_key(&value, keys)
+    {
+        return Some(found);
+    }
+
+    for block in extract_markdown_code_blocks(text) {
+        if let Ok(value) = serde_json::from_str::<Value>(block)
+            && let Some(found) = find_first_key(&value, keys)
+        {
+            return Some(found);
+        }
+    }
+
+    None
+}
+
+fn extract_markdown_code_blocks(text: &str) -> Vec<&str> {
+    let mut blocks = Vec::new();
+    let mut cursor = 0usize;
+
+    while let Some(start_rel) = text[cursor..].find("```") {
+        let fence_start = cursor + start_rel + 3;
+        let after_fence = &text[fence_start..];
+        let Some(first_newline_rel) = after_fence.find('\n') else {
+            break;
+        };
+        let block_start = fence_start + first_newline_rel + 1;
+        let Some(end_rel) = text[block_start..].find("```") else {
+            break;
+        };
+        let block_end = block_start + end_rel;
+        let block = text[block_start..block_end].trim();
+        if !block.is_empty() {
+            blocks.push(block);
+        }
+        cursor = block_end + 3;
+    }
+
+    blocks
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,6 +398,21 @@ mod tests {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .contains("[automaton]")
+        );
+    }
+
+    #[test]
+    fn parse_stream_json_lifts_mutation_fields_from_markdown_code_block() {
+        let stdout = r#"{"result":{"result":"I updated the spec.\n```json\n{\"MutationSummary\":\"Added PromoteToCritical action\",\"MutatedSpecSource\":\"[automaton]\\nname=\\\"Issue\\\"\"}\n```"}}"#;
+
+        let parsed = parse_stream_json_output(stdout);
+        assert_eq!(
+            parsed.get("MutationSummary").and_then(Value::as_str),
+            Some("Added PromoteToCritical action")
+        );
+        assert_eq!(
+            parsed.get("MutatedSpecSource").and_then(Value::as_str),
+            Some("[automaton]\nname=\"Issue\"")
         );
     }
 }

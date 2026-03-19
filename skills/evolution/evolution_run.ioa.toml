@@ -4,8 +4,9 @@
 # (OS app) and evolves its specs through LLM-guided mutation, verification,
 # and Pareto frontier management.
 #
-# LLM-creative steps use the claude_code adapter. Computation steps
-# (replay, scoring, Pareto update, reflective dataset) use WASM modules.
+# LLM-creative steps run through TemperAgent (spec+WASM), not direct adapters.
+# Computation steps (replay, scoring, Pareto update, reflective dataset)
+# use dedicated GEPA WASM modules.
 #
 # Verification retry loop: on L0-L3 failure, errors are fed back as
 # reflective data for the next mutation attempt (max 3 per candidate).
@@ -190,11 +191,23 @@ on_failure = "Fail"
 [[integration]]
 name = "propose_mutation"
 trigger = "propose_mutation"
-type = "adapter"
-adapter = "claude_code"
+type = "wasm"
+module = "gepa-proposer-agent"
 on_success = "RecordMutation"
 on_failure = "Fail"
 prompt = "You are the GEPA evolution agent. Read the reflective dataset in trigger_params.DatasetJson — it contains failure traces showing why the current spec doesn't work. Propose a minimal IOA spec mutation that fixes the failures while preserving all existing working behavior. Return the full mutated spec source and a summary of what changed."
+
+[integration.config]
+temper_api_url = "http://127.0.0.1:3000"
+sandbox_url = "http://127.0.0.1:9999"
+model = "claude-sonnet-4-20250514"
+provider = "anthropic"
+max_turns = "8"
+poll_attempts = "600"
+poll_sleep_ms = "250"
+tools_enabled = ""
+workdir = "/tmp/workspace"
+timeout_secs = "180"
 
 [[integration]]
 name = "score_candidate"

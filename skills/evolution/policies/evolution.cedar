@@ -49,3 +49,13 @@ permit(principal, action == Action::"CheckSentinel", resource is SentinelMonitor
 permit(principal, action == Action::"AlertsFound", resource is SentinelMonitor);
 permit(principal, action == Action::"NoAlerts", resource is SentinelMonitor);
 permit(principal, action == Action::"CreateEvolutionRun", resource is SentinelMonitor);
+
+// GEPA proposer module orchestrates TemperAgent over local Temper API.
+permit(
+  principal is Agent,
+  action == Action::"http_call",
+  resource is HttpEndpoint
+) when {
+  context.module == "gepa-proposer-agent" &&
+  ["127.0.0.1", "localhost"].contains(resource.domain)
+};

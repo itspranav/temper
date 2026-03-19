@@ -25,7 +25,7 @@ Orchestrates one GEPA evolution cycle targeting a skill's entity specs.
 - **SelectCandidate**: Pick a spec from the Pareto frontier or seed pool
 - **RecordEvaluation**: Replay trajectories against the candidate spec (WASM)
 - **RecordDataset**: Build reflective dataset from OTS traces (WASM)
-- **RecordMutation**: LLM proposes spec edits guided by reflective data (adapter)
+- **RecordMutation**: TemperAgent proposes spec edits guided by reflective data (spec/WASM path)
 - **RecordVerificationPass/Failure**: L0-L3 cascade result
 - **RecordScore**: Multi-objective scoring (WASM)
 - **RecordFrontier**: Pareto frontier update (WASM)

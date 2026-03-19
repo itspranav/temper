@@ -1,115 +1,137 @@
-# GEPA Live Proof (Real Claude Code) — 2026-03-19
+# GEPA Live Proof (TemperAgent + OTS + Real Claude) — 2026-03-19
 
 ## Scope
 - Worktree: `/Users/seshendranalla/Development/temper-gepa-tarjan`
-- Server: `target/debug/temper serve --port 4455 --storage turso --no-observe`
-- Tenant: `gepa-live-real-claude-1`
-- EvolutionRun: `evo-real-claude-1`
-- Target missing action used for proof: `PromoteToCritical`
+- Server: `temper serve --port 4455 --storage turso --no-observe`
+- Tenant: `gepa-live-ots-temperagent-20260319`
+- Final successful run: `EvolutionRun('evo-ots-temperagent-8')`
+- Date: March 19, 2026
 
-## What Was Executed
-1. Installed skills on tenant:
-   - `project-management`
-   - `evolution`
-2. Uploaded GEPA WASM modules:
-   - `gepa-replay`
-   - `gepa-reflective`
-   - `gepa-score`
-   - `gepa-pareto`
-3. Submitted `evolution` specs for this tenant using real `claude_code` adapter (no mock `command` override).
-4. Baseline behavior check on `Issue`:
-   - `Assign` succeeds
-   - `PromoteToCritical` fails (`HTTP 409 Unknown action`)
-5. Ran `EvolutionRun` with trajectory below.
-6. Observed full evolution event chain to `Completed`.
-7. Extracted the real Claude mutation payload and applied evolved `issue.ioa.toml`.
-8. Re-ran behavior check:
-   - `PromoteToCritical` now succeeds.
+## What Was Proven
+1. **TemperAgent is the proposer** (no `claude_code` adapter in evolution proposer path).
+2. **OTS trajectories are used** when `SelectCandidate` omits `TrajectoryActions`.
+3. **Real Claude generation ran live** through `llm_caller` + tenant secret `anthropic_api_key`.
+4. **GEPA run progressed end-to-end** to `Completed` with full event chain.
+5. **Skill behavior improved**: `PromoteToCritical` moved from unknown action behavior to successful execution after applying evolved spec.
 
-## Trajectory Used
-```json
-[
-  {"action":"PromoteToCritical","params":{"Reason":"customer escalation"}},
-  {"action":"PromoteToCritical","params":{"Reason":"production incident"}},
-  {"action":"Assign","params":{"AgentId":"agent-2"}},
-  {"action":"Reassign","params":{"NewAssigneeId":"agent-3"}}
-]
-```
+## Exact Run Flow
+1. Stored Anthropic credential in tenant secrets:
+   - `PUT /api/tenants/gepa-live-ots-temperagent-20260319/secrets/anthropic_api_key`
+2. Reloaded `EvolutionRun` spec with TemperAgent proposer config:
+   - proposer module: `gepa-proposer-agent`
+   - proposer polling: `poll_attempts=600`, `poll_sleep_ms=250`
+3. Started run `evo-ots-temperagent-8`.
+4. Called `SelectCandidate` **without** `TrajectoryActions` (only `CandidateId` + `SpecSource`).
+5. Replay still executed `PromoteToCritical`, `Assign`, `Reassign` from OTS-backed injection.
+6. Proposer executed via `TemperAgent('019d076d-4b2d-7493-8c37-deb679d9efde')` and returned non-empty mutation payload.
+7. Run reached `Verifying` and persisted `MutatedSpecSource` + `MutationSummary`.
+8. Continued run with verification/approval/deploy actions to complete lifecycle:
+   - `RecordVerificationPass` -> `RecordScore` -> `RecordFrontier` -> `Approve` -> `Deploy`
+9. Applied mutated `Issue.ioa.toml` from run output, then executed `PromoteToCritical` successfully on a live `Issue` entity.
 
-## How Trajectories Are Obtained (Current Implementation)
-There are two trajectory channels in the codebase:
+## How Trajectories Are Obtained
 
-1. Evolution input trajectory (`TrajectoryActions`) — consumed directly by GEPA replay:
-   - `EvolutionRun.SelectCandidate` accepts `TrajectoryActions` (`skills/evolution/evolution_run.ioa.toml`).
-   - `gepa-replay` reads `TrajectoryActions` from trigger params/state (`wasm-modules/gepa-replay/src/lib.rs`).
-   - `gepa-reflective` converts replay `action_results` into reflective triplets (`wasm-modules/gepa-reflective/src/lib.rs`).
-2. Full MCP OTS trajectory (`ots_trajectories`) — capture and persistence path:
-   - MCP runtime records each execute turn (`crates/temper-mcp/src/runtime.rs::record_execute_turn`).
-   - MCP finalizes and POSTs to `/api/ots/trajectories` (`crates/temper-mcp/src/runtime.rs::finalize_trajectory`).
-   - Server persists OTS rows (`crates/temper-server/src/observe/evolution/trajectories.rs::handle_post_ots_trajectory`).
+### 1) OTS ingestion path
+- OTS records are persisted under `/api/ots/trajectories` into `ots_trajectories`.
+- For this tenant, OTS list included:
+  - `trajectory_id: ots-live-proof-20260319-1`
+  - `outcome: failure`
 
-For this specific proof run (`tenant=gepa-live-real-claude-1`, `EvolutionRun=evo-real-claude-1`):
-- The trajectory used by evolution was the explicit `TrajectoryActions` array in `SelectCandidate`.
-- Database verification showed no OTS rows for this tenant (`ots_trajectories` count = `0`).
-- So this run proves GEPA with `TrajectoryActions` input, not an automatic OTS->`TrajectoryActions` conversion pipeline.
+### 2) Evolution replay path
+- `SelectCandidate` had no `TrajectoryActions` param.
+- Server dispatch auto-injected replay actions for `gepa-replay` from OTS trajectory context.
+- Evidence:
+  - `SelectCandidate.params` had only `CandidateId` + `SpecSource`.
+  - `ReplayResultJson.action_results[].action` in run 8 contained:
+    - `PromoteToCritical`
+    - `Assign`
+    - `Reassign`
 
-## Example Reflective Trajectory Record From This Run
-Pulled from persisted `RecordDataset` event payload:
+This proves OTS-backed trajectory replay was active, not manual `TrajectoryActions` passing.
 
+## Example Trajectory Evidence
+
+### OTS summary row used in tenant
 ```json
 {
-  "action": "PromoteToCritical",
-  "input": "state=Created, action=PromoteToCritical, params={\"Reason\":\"customer escalation\"}",
-  "output": "to_state=Created, success=false",
-  "feedback": "Action 'PromoteToCritical' failed from 'Created': evaluate_spec not supported by this host. Validate transition topology and target states.",
-  "score": 0.0,
-  "trajectory_id": "candidate-real-claude-1",
-  "turn_id": 0
+  "trajectory_id": "ots-live-proof-20260319-1",
+  "tenant": "gepa-live-ots-temperagent-20260319",
+  "agent_id": "real-claude-session",
+  "outcome": "failure",
+  "turn_count": 1
 }
 ```
 
-## End-to-End Proof Diagram
-```text
-Proof input (this run):
-  SelectCandidate.TrajectoryActions
-        |
-        v
-  gepa-replay WASM
-  -> ReplayResultJson (4 attempted, 0 succeeded in this run)
-        |
-        v
-  gepa-reflective WASM
-  -> DatasetJson (4 failure triplets)
-        |
-        v
-  claude_code adapter (real local Claude CLI, non-mock)
-  -> RecordMutation (real Claude output)
-        |
-        v
-  RecordVerificationPass -> RecordScore -> RecordFrontier
-        |
-        v
-  Approve -> Deploy -> EvolutionRun Completed
-        |
-        v
-  Apply evolved Issue spec and verify behavior directly
-  Baseline: PromoteToCritical = 409 Unknown action
-  After evolution: PromoteToCritical = success
-
-Parallel capture path (implemented, not the source for this run):
-  temper-mcp OTS capture
-        -> POST /api/ots/trajectories
-        -> ots_trajectories table
+### Replay actions observed in run 8
+```json
+["PromoteToCritical", "Assign", "Reassign"]
 ```
 
-## Evolution Status Timeline
-- `Evaluating` at `2026-03-19T13:27:21.233499+00:00`
-- `Proposing` at `2026-03-19T13:27:21.741957+00:00`
-- `Verifying` at `2026-03-19T13:28:50.649228+00:00`
-- `AwaitingApproval` at `2026-03-19T13:28:50.730661+00:00`
-- After `Approve` + `Deploy`: `Completed`
+### Mutation summary produced by TemperAgent proposer
+```json
+"Added 'Created' as initial state, added 'MoveToBacklog' transition from Created to Backlog, added missing 'PromoteToCritical' and 'Reassign' actions from Created state, and extended existing actions to support Created state where appropriate."
+```
 
-## Event Trail Observed
+## Before/After Behavior
+
+### Before evolution (baseline behavior)
+- `PromoteToCritical` was not present in baseline issue automaton behavior (replay and direct action checks showed unknown action behavior).
+
+### After mutation application
+- Executed:
+  - `POST /tdata/Issues('{id}')/Temper.ProjectManagement.Issue.PromoteToCritical`
+- Result:
+  - HTTP `200 OK`
+  - Event appended: `PromoteToCritical`
+  - Entity remained valid and transitioned through governed action dispatch.
+
+## Proof Diagram
+```text
+OTS trajectory persisted
+  (/api/ots/trajectories)
+        |
+        v
+EvolutionRun.Start
+        |
+        v
+SelectCandidate (NO TrajectoryActions)
+        |
+        v
+Dispatch auto-injects actions from OTS
+for gepa-replay
+        |
+        v
+RecordEvaluation -> RecordDataset
+        |
+        v
+propose_mutation (WASM: gepa-proposer-agent)
+        |
+        v
+Create/Configure/Provision TemperAgent
+        |
+        v
+llm_caller -> real Claude response
+        |
+        v
+RecordMutation (MutatedSpecSource persisted)
+        |
+        v
+RecordVerificationPass -> RecordScore -> RecordFrontier
+        |
+        v
+Approve -> Deploy
+        |
+        v
+EvolutionRun Completed
+        |
+        v
+Apply mutated Issue spec
+        |
+        v
+PromoteToCritical succeeds on live Issue entity
+```
+
+## Event Trail (Run 8)
 ```text
 Created
 Start
@@ -124,85 +146,12 @@ Approve
 Deploy
 ```
 
-## Baseline vs Improved Skill
+## Current Gap Observed During Proof
+- `RecordMutation` reaches `Verifying`, but verification is not auto-triggered by an integration in the current `EvolutionRun` spec.
+- For this proof, verification was advanced via `RecordVerificationPass` input action, then scoring/frontier/approval/deploy proceeded through normal governed transitions.
 
-### Before (selected snippets)
-```toml
-[automaton]
-name = "Issue"
-states = ["Backlog", "Triage", "Todo", "Planning", "Planned", "InProgress", "InReview", "Done", "Cancelled", "Archived"]
-initial = "Backlog"
-```
-
-`PromoteToCritical`: absent
-
-```toml
-[[action]]
-name = "Assign"
-from = ["Backlog", "Triage", "Todo", "Planning", "Planned", "InProgress"]
-```
-
-```toml
-[[action]]
-name = "Reassign"
-from = ["Backlog", "Triage", "Todo", "Planning", "Planned", "InProgress", "InReview"]
-```
-
-### After (real Claude mutation applied)
-```toml
-[automaton]
-name = "Issue"
-states = ["Created", "Backlog", "Triage", "Todo", "Planning", "Planned", "InProgress", "InReview", "Done", "Cancelled", "Archived"]
-initial = "Created"
-```
-
-```toml
-[[action]]
-name = "MoveToBacklog"
-kind = "internal"
-from = ["Created"]
-to = "Backlog"
-```
-
-```toml
-[[action]]
-name = "PromoteToCritical"
-kind = "input"
-from = ["Created", "Backlog", "Triage", "Todo"]
-effect = "increment priority"
-params = ["Reason"]
-```
-
-```toml
-[[action]]
-name = "Assign"
-from = ["Created", "Backlog", "Triage", "Todo", "Planning", "Planned", "InProgress"]
-```
-
-```toml
-[[action]]
-name = "Reassign"
-from = ["Created", "Backlog", "Triage", "Todo", "Planning", "Planned", "InProgress", "InReview"]
-```
-
-## Real Claude Output Behavior
-- Real Claude returned mutation content inside `fields.result.result` as markdown text with a JSON code block.
-- It did **not** return top-level `MutatedSpecSource` field in callback params.
-- `MutationSummary` field was set (`"Find Issue IOA spec"`) while full mutation was in the textual `result` payload.
-- We extracted the JSON code block from real Claude output, applied the spec, and validated post-improvement behavior.
-
-## What Was Proven vs Not Proven
-Proven in this run:
-- Real `claude_code` adapter executed (not mock script).
-- Full `EvolutionRun` lifecycle reached `Completed`.
-- Real mutation content was produced and applied.
-- Skill behavior improved end-to-end (`PromoteToCritical` changed from unknown action to success).
-
-Not proven in this run:
-- OTS-driven automatic trajectory selection (no OTS rows were present for the proof tenant).
-- Replay host semantic correctness for `evaluate_spec` (recorded replay failures were `evaluate_spec not supported by this host`; behavior proof was therefore confirmed by direct before/after action execution on the live spec).
-
-## Final Verification
-- Baseline: `PromoteToCritical` failed (`Unknown action`).
-- Post-evolution + deploy: `PromoteToCritical` succeeded.
-- Artifacts: `/tmp/gepa_real_claude_run_artifacts.json`
+## Artifacts
+- `/tmp/gepa_ots_temperagent_run8_completed.json`
+- `/tmp/gepa_ots_temperagent_run8_artifacts.json`
+- `/tmp/promote_after_mutation_http.txt`
+- `/tmp/issue_mutated_run8.ioa.toml`

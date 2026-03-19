@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use serde_json::Value;
 use tracing::instrument;
 
 use crate::entity_actor::{EntityResponse, EntityState};
@@ -117,6 +118,9 @@ impl crate::state::ServerState {
                 .handle_module_not_found(ctx, integration, &module_name)
                 .await;
         };
+        let trigger_params = self
+            .maybe_inject_ots_trajectory_actions(&module_name, ctx, action_params)
+            .await;
 
         // --- Build invocation context + host chain ---
         let authz_ctx = WasmAuthzContext {
@@ -132,7 +136,7 @@ impl crate::state::ServerState {
             entity_type: ctx.entity_ref.entity_type.to_string(),
             entity_id: ctx.entity_ref.entity_id.to_string(),
             trigger_action: ctx.action.to_string(),
-            trigger_params: action_params.clone(),
+            trigger_params,
             entity_state: serde_json::to_value(entity_state).unwrap_or_default(),
             agent_id: ctx.agent_ctx.agent_id.clone(),
             session_id: ctx.agent_ctx.session_id.clone(),
@@ -197,6 +201,107 @@ impl crate::state::ServerState {
             &denial_tracker,
         )
         .await
+    }
+
+    /// Fill missing replay trajectory actions from persisted OTS traces.
+    async fn maybe_inject_ots_trajectory_actions(
+        &self,
+        module_name: &str,
+        ctx: &WasmDispatchCtx<'_>,
+        action_params: &Value,
+    ) -> Value {
+        if module_name != "gepa-replay" || has_trajectory_actions(action_params) {
+            return action_params.clone();
+        }
+
+        let Some(actions) = self.load_trajectory_actions_from_ots(ctx).await else {
+            tracing::warn!(
+                tenant = %ctx.entity_ref.tenant,
+                entity_type = ctx.entity_ref.entity_type,
+                entity_id = ctx.entity_ref.entity_id,
+                trigger = ctx.action,
+                "gepa-replay missing TrajectoryActions and no usable OTS trajectories found"
+            );
+            return action_params.clone();
+        };
+
+        tracing::info!(
+            tenant = %ctx.entity_ref.tenant,
+            entity_type = ctx.entity_ref.entity_type,
+            entity_id = ctx.entity_ref.entity_id,
+            trigger = ctx.action,
+            action_count = actions.len(),
+            "gepa-replay TrajectoryActions auto-injected from OTS trajectory"
+        );
+
+        let mut params = action_params.clone();
+        if let Some(obj) = params.as_object_mut() {
+            obj.insert(
+                "TrajectoryActions".to_string(),
+                Value::Array(actions.clone()),
+            );
+            obj.insert("TrajectorySource".to_string(), serde_json::json!("ots"));
+            obj.insert(
+                "TrajectoryActionsCount".to_string(),
+                serde_json::json!(actions.len()),
+            );
+            return params;
+        }
+
+        serde_json::json!({
+            "TrajectoryActions": actions,
+            "TrajectorySource": "ots",
+            "OriginalTriggerParams": action_params,
+        })
+    }
+
+    async fn load_trajectory_actions_from_ots(
+        &self,
+        ctx: &WasmDispatchCtx<'_>,
+    ) -> Option<Vec<Value>> {
+        let tenant = ctx.entity_ref.tenant.as_str();
+        let turso = self.persistent_store_for_tenant(tenant).await?;
+        let agent_id = ctx.agent_ctx.agent_id.as_deref();
+
+        let mut rows = turso
+            .list_ots_trajectories(tenant, agent_id, None, 50)
+            .await
+            .ok()?;
+
+        // Fallback when identity resolution was unavailable at upload time.
+        if rows.is_empty() && agent_id.is_some() {
+            rows = turso
+                .list_ots_trajectories(tenant, None, None, 50)
+                .await
+                .ok()?;
+        }
+
+        let session_id = ctx.agent_ctx.session_id.as_deref();
+        if let Some(session) = session_id {
+            rows.sort_by_key(|row| if row.session_id == session { 0 } else { 1 });
+        }
+
+        for row in rows {
+            let data = match turso
+                .get_ots_trajectory(&row.trajectory_id)
+                .await
+                .ok()
+                .flatten()
+            {
+                Some(d) => d,
+                None => continue,
+            };
+            let trajectory = match serde_json::from_str::<Value>(&data) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let actions = extract_trajectory_actions_from_ots(&trajectory);
+            if !actions.is_empty() {
+                return Some(actions);
+            }
+        }
+
+        None
     }
 
     /// Handle module-not-found: log, observe, dispatch on_failure callback.
@@ -687,4 +792,465 @@ fn spec_evaluator_fn() -> temper_wasm::SpecEvaluatorFn {
             }
         },
     )
+}
+
+fn has_trajectory_actions(params: &Value) -> bool {
+    match params.get("TrajectoryActions") {
+        Some(Value::Array(arr)) => !arr.is_empty(),
+        Some(Value::String(s)) => !s.trim().is_empty(),
+        Some(_) => true,
+        None => false,
+    }
+}
+
+fn extract_trajectory_actions_from_ots(trajectory: &Value) -> Vec<Value> {
+    let mut actions = Vec::new();
+
+    let Some(turns) = trajectory.get("turns").and_then(Value::as_array) else {
+        return actions;
+    };
+
+    for turn in turns {
+        if let Some(decisions) = turn.get("decisions").and_then(Value::as_array) {
+            for decision in decisions {
+                if let Some(raw_actions) = decision
+                    .get("choice")
+                    .and_then(|choice| choice.get("arguments"))
+                    .and_then(|args| args.get("trajectory_actions"))
+                    .and_then(Value::as_array)
+                {
+                    for raw in raw_actions {
+                        if let Some(normalized) = normalize_trajectory_action(raw) {
+                            actions.push(normalized);
+                        }
+                    }
+                }
+
+                if let Some(choice_action) = decision
+                    .get("choice")
+                    .and_then(|choice| choice.get("action"))
+                    .and_then(Value::as_str)
+                    && let Some(code) = choice_action.strip_prefix("execute:")
+                {
+                    actions.extend(extract_temper_actions_from_code(code));
+                }
+            }
+        }
+
+        if let Some(messages) = turn.get("messages").and_then(Value::as_array) {
+            for message in messages {
+                let role = message
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if role != "user" {
+                    continue;
+                }
+                let text = message
+                    .get("content")
+                    .and_then(|content| content.get("text"))
+                    .and_then(Value::as_str);
+                if let Some(code) = text {
+                    actions.extend(extract_temper_actions_from_code(code));
+                }
+            }
+        }
+    }
+
+    dedupe_actions(actions)
+}
+
+fn normalize_trajectory_action(raw: &Value) -> Option<Value> {
+    match raw {
+        Value::String(action_name) => Some(serde_json::json!({
+            "action": action_name,
+            "params": {},
+        })),
+        Value::Object(obj) => {
+            let action = obj
+                .get("action")
+                .or_else(|| obj.get("Action"))
+                .and_then(Value::as_str)?;
+
+            let params = obj
+                .get("params")
+                .or_else(|| obj.get("Params"))
+                .and_then(parse_params_value)
+                .unwrap_or_else(|| serde_json::json!({}));
+
+            Some(serde_json::json!({
+                "action": action,
+                "params": params,
+            }))
+        }
+        _ => None,
+    }
+}
+
+fn parse_params_value(value: &Value) -> Option<Value> {
+    match value {
+        Value::Object(_) => Some(value.clone()),
+        Value::Null => Some(serde_json::json!({})),
+        Value::String(s) => {
+            if let Ok(parsed) = serde_json::from_str::<Value>(s) {
+                return Some(parsed);
+            }
+            Some(serde_json::json!({}))
+        }
+        _ => Some(serde_json::json!({})),
+    }
+}
+
+fn dedupe_actions(actions: Vec<Value>) -> Vec<Value> {
+    let mut deduped = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for action in actions {
+        let key = action.to_string();
+        if seen.insert(key) {
+            deduped.push(action);
+        }
+    }
+    deduped
+}
+
+fn extract_temper_actions_from_code(code: &str) -> Vec<Value> {
+    let mut actions = Vec::new();
+    let mut cursor = 0usize;
+    let needle = "temper.action";
+
+    while let Some(found) = code[cursor..].find(needle) {
+        let method_start = cursor + found + needle.len();
+        let mut open = method_start;
+        while open < code.len()
+            && code
+                .as_bytes()
+                .get(open)
+                .is_some_and(|b| b.is_ascii_whitespace())
+        {
+            open += 1;
+        }
+        if code.as_bytes().get(open) != Some(&b'(') {
+            cursor = method_start;
+            continue;
+        }
+        let Some(close) = find_matching_paren(code, open) else {
+            break;
+        };
+
+        let args = split_top_level_args(&code[open + 1..close]);
+        let (action_idx, params_idx) =
+            if args.len() >= 5 && parse_python_string_literal(args[3]).is_some() {
+                (3usize, 4usize)
+            } else {
+                (2usize, 3usize)
+            };
+
+        if args.len() > action_idx
+            && let Some(action_name) = parse_python_string_literal(args[action_idx])
+        {
+            let params = args
+                .get(params_idx)
+                .and_then(|raw| parse_python_json_value(raw))
+                .unwrap_or_else(|| serde_json::json!({}));
+            actions.push(serde_json::json!({
+                "action": action_name,
+                "params": params,
+            }));
+        }
+
+        cursor = close + 1;
+    }
+
+    actions
+}
+
+fn find_matching_paren(input: &str, open_idx: usize) -> Option<usize> {
+    let mut depth = 0i32;
+    let mut in_quote: Option<char> = None;
+    let mut escaped = false;
+
+    for (offset, ch) in input[open_idx..].char_indices() {
+        let idx = open_idx + offset;
+        if let Some(quote) = in_quote {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == quote {
+                in_quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' | '"' => in_quote = Some(ch),
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(idx);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn split_top_level_args(input: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut depth_paren = 0i32;
+    let mut depth_brace = 0i32;
+    let mut depth_bracket = 0i32;
+    let mut in_quote: Option<char> = None;
+    let mut escaped = false;
+
+    for (idx, ch) in input.char_indices() {
+        if let Some(quote) = in_quote {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == quote {
+                in_quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' | '"' => in_quote = Some(ch),
+            '(' => depth_paren += 1,
+            ')' => depth_paren -= 1,
+            '{' => depth_brace += 1,
+            '}' => depth_brace -= 1,
+            '[' => depth_bracket += 1,
+            ']' => depth_bracket -= 1,
+            ',' if depth_paren == 0 && depth_brace == 0 && depth_bracket == 0 => {
+                parts.push(input[start..idx].trim());
+                start = idx + 1;
+            }
+            _ => {}
+        }
+    }
+
+    if start <= input.len() {
+        let tail = input[start..].trim();
+        if !tail.is_empty() {
+            parts.push(tail);
+        }
+    }
+    parts
+}
+
+fn parse_python_string_literal(raw: &str) -> Option<String> {
+    let s = raw.trim();
+    if s.len() < 2 {
+        return None;
+    }
+    let quote = s.chars().next()?;
+    if (quote != '\'' && quote != '"') || !s.ends_with(quote) {
+        return None;
+    }
+
+    let mut out = String::new();
+    let mut escaped = false;
+    for ch in s[1..s.len() - 1].chars() {
+        if escaped {
+            let mapped = match ch {
+                'n' => '\n',
+                'r' => '\r',
+                't' => '\t',
+                '\\' => '\\',
+                '\'' => '\'',
+                '"' => '"',
+                other => other,
+            };
+            out.push(mapped);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        out.push(ch);
+    }
+    if escaped {
+        out.push('\\');
+    }
+    Some(out)
+}
+
+fn parse_python_json_value(raw: &str) -> Option<Value> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Some(serde_json::json!({}));
+    }
+    if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
+        return Some(v);
+    }
+    let normalized = normalize_pythonish_json(trimmed);
+    serde_json::from_str::<Value>(&normalized).ok()
+}
+
+fn normalize_pythonish_json(input: &str) -> String {
+    let mut quoted = String::with_capacity(input.len());
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+
+    for ch in input.chars() {
+        if in_single {
+            if escaped {
+                quoted.push(ch);
+                escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' => escaped = true,
+                '\'' => {
+                    in_single = false;
+                    quoted.push('"');
+                }
+                '"' => quoted.push_str("\\\""),
+                _ => quoted.push(ch),
+            }
+            continue;
+        }
+
+        if in_double {
+            quoted.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_double = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' => {
+                in_single = true;
+                quoted.push('"');
+            }
+            '"' => {
+                in_double = true;
+                quoted.push('"');
+            }
+            _ => quoted.push(ch),
+        }
+    }
+
+    let mut out = String::with_capacity(quoted.len());
+    let mut token = String::new();
+    let mut in_string = false;
+    let mut esc = false;
+
+    let flush_token = |token: &mut String, out: &mut String| {
+        if token.is_empty() {
+            return;
+        }
+        match token.as_str() {
+            "True" => out.push_str("true"),
+            "False" => out.push_str("false"),
+            "None" => out.push_str("null"),
+            _ => out.push_str(token),
+        }
+        token.clear();
+    };
+
+    for ch in quoted.chars() {
+        if in_string {
+            out.push(ch);
+            if esc {
+                esc = false;
+            } else if ch == '\\' {
+                esc = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        if ch == '"' {
+            flush_token(&mut token, &mut out);
+            in_string = true;
+            out.push(ch);
+            continue;
+        }
+
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            token.push(ch);
+            continue;
+        }
+
+        flush_token(&mut token, &mut out);
+        out.push(ch);
+    }
+    flush_token(&mut token, &mut out);
+
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_ots_actions_from_choice_arguments() {
+        let ots = serde_json::json!({
+            "turns": [{
+                "decisions": [{
+                    "choice": {
+                        "arguments": {
+                            "trajectory_actions": [
+                                {"action": "PromoteToCritical", "params": {"Reason": "prod"}},
+                                {"action": "Assign", "params": {"AgentId": "agent-2"}}
+                            ]
+                        }
+                    }
+                }]
+            }]
+        });
+
+        let actions = extract_trajectory_actions_from_ots(&ots);
+        assert_eq!(actions.len(), 2);
+        assert_eq!(
+            actions[0].get("action").and_then(Value::as_str),
+            Some("PromoteToCritical")
+        );
+    }
+
+    #[test]
+    fn extract_ots_actions_from_user_code_message() {
+        let ots = serde_json::json!({
+            "turns": [{
+                "messages": [{
+                    "role": "user",
+                    "content": {
+                        "text": "temper.action('tenant-1', 'Issues', '11111111-1111-1111-1111-111111111111', 'Reassign', {'NewAssigneeId': 'agent-3'})"
+                    }
+                }]
+            }]
+        });
+
+        let actions = extract_trajectory_actions_from_ots(&ots);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0]["action"], serde_json::json!("Reassign"));
+        assert_eq!(
+            actions[0]["params"]["NewAssigneeId"],
+            serde_json::json!("agent-3")
+        );
+    }
 }
