@@ -312,7 +312,12 @@ pub(crate) async fn handle_get_ots_trajectories(
     };
 
     match turso
-        .list_ots_trajectories(tenant, params.agent_id.as_deref(), params.outcome.as_deref(), limit)
+        .list_ots_trajectories(
+            tenant,
+            params.agent_id.as_deref(),
+            params.outcome.as_deref(),
+            limit,
+        )
         .await
     {
         Ok(rows) => {

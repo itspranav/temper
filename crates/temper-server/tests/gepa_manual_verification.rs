@@ -147,26 +147,38 @@ async fn manual_gepa_verification() {
 
     let evo_parsed = temper_spec::automaton::parse_automaton(evo_run_src);
     match &evo_parsed {
-        Ok(a) => println!("  EvolutionRun: PARSED OK — {} states, {} actions",
-            a.automaton.states.len(), a.actions.len()),
+        Ok(a) => println!(
+            "  EvolutionRun: PARSED OK — {} states, {} actions",
+            a.automaton.states.len(),
+            a.actions.len()
+        ),
         Err(e) => println!("  EvolutionRun: PARSE FAILED — {e}"),
     }
 
     let sentinel_parsed = temper_spec::automaton::parse_automaton(sentinel_src);
     match &sentinel_parsed {
-        Ok(a) => println!("  SentinelMonitor: PARSED OK — {} states, {} actions",
-            a.automaton.states.len(), a.actions.len()),
+        Ok(a) => println!(
+            "  SentinelMonitor: PARSED OK — {} states, {} actions",
+            a.automaton.states.len(),
+            a.actions.len()
+        ),
         Err(e) => println!("  SentinelMonitor: PARSE FAILED — {e}"),
     }
 
     // Build TransitionTables
     let evo_automaton = evo_parsed.expect("evo parse");
     let evo_table = temper_jit::table::TransitionTable::from_automaton(&evo_automaton);
-    println!("  EvolutionRun TransitionTable: {} rules", evo_table.rules.len());
+    println!(
+        "  EvolutionRun TransitionTable: {} rules",
+        evo_table.rules.len()
+    );
 
     let sentinel_automaton = sentinel_parsed.expect("sentinel parse");
     let sentinel_table = temper_jit::table::TransitionTable::from_automaton(&sentinel_automaton);
-    println!("  SentinelMonitor TransitionTable: {} rules", sentinel_table.rules.len());
+    println!(
+        "  SentinelMonitor TransitionTable: {} rules",
+        sentinel_table.rules.len()
+    );
 
     // ── 2. TransitionTable Evaluation ──────────────────────────────
     println!("\n## 2. TransitionTable Direct Evaluation\n");
@@ -188,8 +200,14 @@ async fn manual_gepa_verification() {
     for (state, action, expect_success) in &tests {
         let result = evo_table.evaluate_ctx(state, &ctx, action);
         let actual_success = result.as_ref().map(|r| r.success).unwrap_or(false);
-        let status = if actual_success == *expect_success { "OK" } else { "MISMATCH" };
-        println!("  [{status}] EvolutionRun: {state} --[{action}]--> success={actual_success} (expected {expect_success})");
+        let status = if actual_success == *expect_success {
+            "OK"
+        } else {
+            "MISMATCH"
+        };
+        println!(
+            "  [{status}] EvolutionRun: {state} --[{action}]--> success={actual_success} (expected {expect_success})"
+        );
     }
 
     // Test SentinelMonitor transitions
@@ -204,8 +222,14 @@ async fn manual_gepa_verification() {
     for (state, action, expect_success) in &sentinel_tests {
         let result = sentinel_table.evaluate_ctx(state, &ctx, action);
         let actual_success = result.as_ref().map(|r| r.success).unwrap_or(false);
-        let status = if actual_success == *expect_success { "OK" } else { "MISMATCH" };
-        println!("  [{status}] SentinelMonitor: {state} --[{action}]--> success={actual_success} (expected {expect_success})");
+        let status = if actual_success == *expect_success {
+            "OK"
+        } else {
+            "MISMATCH"
+        };
+        println!(
+            "  [{status}] SentinelMonitor: {state} --[{action}]--> success={actual_success} (expected {expect_success})"
+        );
     }
 
     // ── 3. Skill Installation ──────────────────────────────────────
@@ -230,15 +254,51 @@ async fn manual_gepa_verification() {
 
     let evo_id = "evo-manual-1";
     let lifecycle_actions = vec![
-        ("Start", serde_json::json!({"SkillName": "project-management", "TargetEntityType": "Issue", "AutonomyLevel": "auto"}), "Selecting"),
-        ("SelectCandidate", serde_json::json!({"CandidateId": "c0", "SpecSource": "original issue spec"}), "Evaluating"),
-        ("RecordEvaluation", serde_json::json!({"ReplayResultJson": "{\"actions_attempted\":10,\"succeeded\":5}"}), "Reflecting"),
-        ("RecordDataset", serde_json::json!({"DatasetJson": "{}"}), "Proposing"),
-        ("RecordMutation", serde_json::json!({"MutatedSpecSource": "mutated spec", "MutationSummary": "Added Reassign"}), "Verifying"),
-        ("RecordVerificationPass", serde_json::json!({"VerificationReport": "L0-L3 all passed"}), "Scoring"),
-        ("RecordScore", serde_json::json!({"ScoresJson": "{\"success_rate\":1.0}"}), "Updating"),
-        ("RecordFrontierAutoApprove", serde_json::json!({"FrontierUpdateJson": "{\"added\":true}"}), "Deploying"),
-        ("Deploy", serde_json::json!({"DeploymentId": "deploy-1"}), "Completed"),
+        (
+            "Start",
+            serde_json::json!({"SkillName": "project-management", "TargetEntityType": "Issue", "AutonomyLevel": "auto"}),
+            "Selecting",
+        ),
+        (
+            "SelectCandidate",
+            serde_json::json!({"CandidateId": "c0", "SpecSource": "original issue spec"}),
+            "Evaluating",
+        ),
+        (
+            "RecordEvaluation",
+            serde_json::json!({"ReplayResultJson": "{\"actions_attempted\":10,\"succeeded\":5}"}),
+            "Reflecting",
+        ),
+        (
+            "RecordDataset",
+            serde_json::json!({"DatasetJson": "{}"}),
+            "Proposing",
+        ),
+        (
+            "RecordMutation",
+            serde_json::json!({"MutatedSpecSource": "mutated spec", "MutationSummary": "Added Reassign"}),
+            "Verifying",
+        ),
+        (
+            "RecordVerificationPass",
+            serde_json::json!({"VerificationReport": "L0-L3 all passed"}),
+            "Scoring",
+        ),
+        (
+            "RecordScore",
+            serde_json::json!({"ScoresJson": "{\"success_rate\":1.0}"}),
+            "Updating",
+        ),
+        (
+            "RecordFrontierAutoApprove",
+            serde_json::json!({"FrontierUpdateJson": "{\"added\":true}"}),
+            "Deploying",
+        ),
+        (
+            "Deploy",
+            serde_json::json!({"DeploymentId": "deploy-1"}),
+            "Completed",
+        ),
     ];
 
     for (action, params, expected_status) in &lifecycle_actions {
@@ -252,8 +312,10 @@ async fn manual_gepa_verification() {
                 } else {
                     "FAIL"
                 };
-                println!("  [{status}] {action} → status={}, success={}, error={:?}",
-                    resp.state.status, resp.success, resp.error);
+                println!(
+                    "  [{status}] {action} → status={}, success={}, error={:?}",
+                    resp.state.status, resp.success, resp.error
+                );
             }
             Err(e) => println!("  [FAIL] {action} → dispatch error: {e}"),
         }
@@ -265,38 +327,73 @@ async fn manual_gepa_verification() {
     let evo_retry_id = "evo-manual-retry";
     // Drive to Verifying
     for (action, params) in [
-        ("Start", serde_json::json!({"SkillName": "pm", "TargetEntityType": "Issue", "AutonomyLevel": "auto"})),
-        ("SelectCandidate", serde_json::json!({"CandidateId": "c1", "SpecSource": "spec"})),
-        ("RecordEvaluation", serde_json::json!({"ReplayResultJson": "{}"})),
+        (
+            "Start",
+            serde_json::json!({"SkillName": "pm", "TargetEntityType": "Issue", "AutonomyLevel": "auto"}),
+        ),
+        (
+            "SelectCandidate",
+            serde_json::json!({"CandidateId": "c1", "SpecSource": "spec"}),
+        ),
+        (
+            "RecordEvaluation",
+            serde_json::json!({"ReplayResultJson": "{}"}),
+        ),
         ("RecordDataset", serde_json::json!({"DatasetJson": "{}"})),
-        ("RecordMutation", serde_json::json!({"MutatedSpecSource": "bad spec", "MutationSummary": "attempt 1"})),
+        (
+            "RecordMutation",
+            serde_json::json!({"MutatedSpecSource": "bad spec", "MutationSummary": "attempt 1"}),
+        ),
     ] {
-        let _ = harness.dispatch(TENANT, "EvolutionRun", evo_retry_id, action, params).await;
+        let _ = harness
+            .dispatch(TENANT, "EvolutionRun", evo_retry_id, action, params)
+            .await;
     }
 
     // Verification failure → Reflecting
     let r = harness
-        .dispatch(TENANT, "EvolutionRun", evo_retry_id, "RecordVerificationFailure",
-            serde_json::json!({"VerificationErrors": "L1: invariant violated"}))
+        .dispatch(
+            TENANT,
+            "EvolutionRun",
+            evo_retry_id,
+            "RecordVerificationFailure",
+            serde_json::json!({"VerificationErrors": "L1: invariant violated"}),
+        )
         .await;
     match &r {
-        Ok(resp) => println!("  RecordVerificationFailure → status={}, success={}", resp.state.status, resp.success),
+        Ok(resp) => println!(
+            "  RecordVerificationFailure → status={}, success={}",
+            resp.state.status, resp.success
+        ),
         Err(e) => println!("  RecordVerificationFailure → error: {e}"),
     }
 
     // ExhaustRetries → Failed
     for (action, params) in [
         ("RecordDataset", serde_json::json!({"DatasetJson": "{}"})),
-        ("RecordMutation", serde_json::json!({"MutatedSpecSource": "bad v2", "MutationSummary": "attempt 2"})),
+        (
+            "RecordMutation",
+            serde_json::json!({"MutatedSpecSource": "bad v2", "MutationSummary": "attempt 2"}),
+        ),
     ] {
-        let _ = harness.dispatch(TENANT, "EvolutionRun", evo_retry_id, action, params).await;
+        let _ = harness
+            .dispatch(TENANT, "EvolutionRun", evo_retry_id, action, params)
+            .await;
     }
     let r = harness
-        .dispatch(TENANT, "EvolutionRun", evo_retry_id, "ExhaustRetries",
-            serde_json::json!({"FailureReason": "Max attempts reached"}))
+        .dispatch(
+            TENANT,
+            "EvolutionRun",
+            evo_retry_id,
+            "ExhaustRetries",
+            serde_json::json!({"FailureReason": "Max attempts reached"}),
+        )
         .await;
     match &r {
-        Ok(resp) => println!("  ExhaustRetries → status={}, success={}", resp.state.status, resp.success),
+        Ok(resp) => println!(
+            "  ExhaustRetries → status={}, success={}",
+            resp.state.status, resp.success
+        ),
         Err(e) => println!("  ExhaustRetries → error: {e}"),
     }
 
@@ -306,19 +403,37 @@ async fn manual_gepa_verification() {
     let sentinel_id = "sentinel-manual-1";
     let sentinel_actions = vec![
         ("CheckSentinel", serde_json::json!({}), "Checking"),
-        ("AlertsFound", serde_json::json!({"AlertDetails": "6 failures", "SuggestedTarget": "pm/Issue"}), "Triggering"),
-        ("CreateEvolutionRun", serde_json::json!({"EvolutionRunId": "evo-2", "SkillName": "pm", "TargetEntityType": "Issue"}), "Active"),
+        (
+            "AlertsFound",
+            serde_json::json!({"AlertDetails": "6 failures", "SuggestedTarget": "pm/Issue"}),
+            "Triggering",
+        ),
+        (
+            "CreateEvolutionRun",
+            serde_json::json!({"EvolutionRunId": "evo-2", "SkillName": "pm", "TargetEntityType": "Issue"}),
+            "Active",
+        ),
         ("CheckSentinel", serde_json::json!({}), "Checking"),
         ("NoAlerts", serde_json::json!({}), "Active"),
     ];
 
     for (action, params, expected_status) in &sentinel_actions {
         let r = harness
-            .dispatch(TENANT, "SentinelMonitor", sentinel_id, action, params.clone())
+            .dispatch(
+                TENANT,
+                "SentinelMonitor",
+                sentinel_id,
+                action,
+                params.clone(),
+            )
             .await;
         match &r {
             Ok(resp) => {
-                let status = if resp.success && resp.state.status == *expected_status { "OK" } else { "FAIL" };
+                let status = if resp.success && resp.state.status == *expected_status {
+                    "OK"
+                } else {
+                    "FAIL"
+                };
                 println!("  [{status}] {action} → status={}", resp.state.status);
             }
             Err(e) => println!("  [FAIL] {action} → {e}"),
@@ -356,14 +471,23 @@ async fn manual_gepa_verification() {
         })
         .collect();
 
-    let alerts = temper_server::sentinel::check_rules(&rules, &harness.platform_state.server, &trajectory_entries);
+    let alerts = temper_server::sentinel::check_rules(
+        &rules,
+        &harness.platform_state.server,
+        &trajectory_entries,
+    );
     println!("  Alerts fired: {}", alerts.len());
     for alert in &alerts {
-        println!("    - {} (observed: {:.1})", alert.rule_name,
-            alert.record.observed_value.unwrap_or(0.0));
+        println!(
+            "    - {} (observed: {:.1})",
+            alert.rule_name,
+            alert.record.observed_value.unwrap_or(0.0)
+        );
     }
 
-    let ots_fired = alerts.iter().any(|a| a.rule_name == "ots_trajectory_failure_cluster");
+    let ots_fired = alerts
+        .iter()
+        .any(|a| a.rule_name == "ots_trajectory_failure_cluster");
     println!("  ots_trajectory_failure_cluster fired: {ots_fired}");
 
     // Below threshold (4 failures)
@@ -375,15 +499,26 @@ async fn manual_gepa_verification() {
             entity_id: format!("issue-{i}"),
             action: "Reassign".to_string(),
             success: false,
-            from_status: None, to_status: None,
+            from_status: None,
+            to_status: None,
             error: Some("not found".to_string()),
-            agent_id: None, session_id: None, authz_denied: None,
-            denied_resource: None, denied_module: None, source: None,
-            spec_governed: None, agent_type: None, request_body: None, intent: None,
+            agent_id: None,
+            session_id: None,
+            authz_denied: None,
+            denied_resource: None,
+            denied_module: None,
+            source: None,
+            spec_governed: None,
+            agent_type: None,
+            request_body: None,
+            intent: None,
         })
         .collect();
-    let few_alerts = temper_server::sentinel::check_rules(&rules, &harness.platform_state.server, &few_entries);
-    let ots_below = few_alerts.iter().any(|a| a.rule_name == "ots_trajectory_failure_cluster");
+    let few_alerts =
+        temper_server::sentinel::check_rules(&rules, &harness.platform_state.server, &few_entries);
+    let ots_below = few_alerts
+        .iter()
+        .any(|a| a.rule_name == "ots_trajectory_failure_cluster");
     println!("  ots_trajectory_failure_cluster with 4 failures: {ots_below} (expected: false)");
 
     // ── 8. GEPA Primitives ─────────────────────────────────────────
@@ -393,10 +528,19 @@ async fn manual_gepa_verification() {
 
     // Replay
     let mut replay = ReplayResult::new();
-    for _ in 0..5 { replay.record_success(); }
-    for _ in 0..5 { replay.record_unknown_action("Reassign", "Backlog"); }
-    println!("  Replay (original): attempted={}, succeeded={}, unknown={}, success_rate={:.2}",
-        replay.actions_attempted, replay.succeeded, replay.unknown_actions, replay.success_rate());
+    for _ in 0..5 {
+        replay.record_success();
+    }
+    for _ in 0..5 {
+        replay.record_unknown_action("Reassign", "Backlog");
+    }
+    println!(
+        "  Replay (original): attempted={}, succeeded={}, unknown={}, success_rate={:.2}",
+        replay.actions_attempted,
+        replay.succeeded,
+        replay.unknown_actions,
+        replay.success_rate()
+    );
 
     // Scoring
     let scores = ObjectiveScores::from_replay(&replay);
@@ -408,61 +552,113 @@ async fn manual_gepa_verification() {
 
     // Candidate + Pareto
     let now = chrono::Utc::now();
-    let mut c0 = Candidate::new("c0".into(), "original".into(), "pm".into(), "Issue".into(), 0, now);
-    for (k, v) in scores.into_map() { c0.set_score(k, v); }
+    let mut c0 = Candidate::new(
+        "c0".into(),
+        "original".into(),
+        "pm".into(),
+        "Issue".into(),
+        0,
+        now,
+    );
+    for (k, v) in scores.into_map() {
+        c0.set_score(k, v);
+    }
 
     let mut frontier = ParetoFrontier::new();
     let added = frontier.try_add(c0);
-    println!("  Pareto frontier: c0 added={added}, frontier size={}", frontier.len());
+    println!(
+        "  Pareto frontier: c0 added={added}, frontier size={}",
+        frontier.len()
+    );
 
     // Mutated replay — all succeed
     let mut replay_mut = ReplayResult::new();
-    for _ in 0..10 { replay_mut.record_success(); }
+    for _ in 0..10 {
+        replay_mut.record_success();
+    }
     let scores_mut = ObjectiveScores::from_replay(&replay_mut);
     println!("  Scores (mutated): {:?}", scores_mut.scores);
 
     let weighted_mut = scores_mut.weighted_sum(&config);
     println!("  Weighted sum (mutated): {weighted_mut:.4}");
 
-    let mut c1 = Candidate::new("c1".into(), "mutated".into(), "pm".into(), "Issue".into(), 1, now)
-        .with_parent("c0".into());
-    for (k, v) in scores_mut.into_map() { c1.set_score(k, v); }
+    let mut c1 = Candidate::new(
+        "c1".into(),
+        "mutated".into(),
+        "pm".into(),
+        "Issue".into(),
+        1,
+        now,
+    )
+    .with_parent("c0".into());
+    for (k, v) in scores_mut.into_map() {
+        c1.set_score(k, v);
+    }
 
     let added = frontier.try_add(c1);
-    println!("  Pareto frontier: c1 added={added}, frontier size={}", frontier.len());
-    println!("  Frontier members: {:?}", frontier.members.keys().collect::<Vec<_>>());
+    println!(
+        "  Pareto frontier: c1 added={added}, frontier size={}",
+        frontier.len()
+    );
+    println!(
+        "  Frontier members: {:?}",
+        frontier.members.keys().collect::<Vec<_>>()
+    );
     let c0_dominated = !frontier.members.contains_key("c0");
     println!("  c0 dominated by c1: {c0_dominated}");
 
     // Reflective dataset
-    let mut dataset = temper_evolution::gepa::reflective::ReflectiveDataset::new("pm".into(), "Issue".into());
+    let mut dataset =
+        temper_evolution::gepa::reflective::ReflectiveDataset::new("pm".into(), "Issue".into());
     for i in 0..5 {
-        dataset.add_triplet(ReflectiveTriplet::new(
-            format!("Reassign on issue-{i}"),
-            "action not found".into(),
-            "Add Reassign action".into(),
-            0.0,
-            format!("traj-{i}"),
-        ).with_action("Reassign".into()));
+        dataset.add_triplet(
+            ReflectiveTriplet::new(
+                format!("Reassign on issue-{i}"),
+                "action not found".into(),
+                "Add Reassign action".into(),
+                0.0,
+                format!("traj-{i}"),
+            )
+            .with_action("Reassign".into()),
+        );
     }
-    println!("  Reflective dataset: {} triplets, {} failures, {} successes",
-        dataset.triplets.len(), dataset.failure_count(), dataset.success_count());
+    println!(
+        "  Reflective dataset: {} triplets, {} failures, {} successes",
+        dataset.triplets.len(),
+        dataset.failure_count(),
+        dataset.success_count()
+    );
 
     // ── 9. Hot-Deploy Mutated Spec ─────────────────────────────────
     println!("\n## 9. Hot-Deploy Mutated Spec\n");
 
     // Verify Reassign fails before hot-deploy
     let r = harness
-        .dispatch(TENANT, "Issue", "hotdeploy-1", "Reassign",
-            serde_json::json!({"NewAssigneeId": "agent-2"}))
+        .dispatch(
+            TENANT,
+            "Issue",
+            "hotdeploy-1",
+            "Reassign",
+            serde_json::json!({"NewAssigneeId": "agent-2"}),
+        )
         .await;
     let reassign_before = match &r {
-        Ok(resp) => { println!("  Reassign BEFORE hot-deploy: success={}, error={:?}", resp.success, resp.error); resp.success }
-        Err(e) => { println!("  Reassign BEFORE hot-deploy: dispatch error={e}"); false }
+        Ok(resp) => {
+            println!(
+                "  Reassign BEFORE hot-deploy: success={}, error={:?}",
+                resp.success, resp.error
+            );
+            resp.success
+        }
+        Err(e) => {
+            println!("  Reassign BEFORE hot-deploy: dispatch error={e}");
+            false
+        }
     };
 
     // Build mutated spec
-    let mutated_spec = include_str!("../../../skills/project-management/issue.ioa.toml").to_string()
+    let mutated_spec = include_str!("../../../skills/project-management/issue.ioa.toml")
+        .to_string()
         + r#"
 
 [[action]]
@@ -477,7 +673,11 @@ hint = "Reassign the issue to a different implementer."
     // Verify mutated spec parses
     let parse_result = temper_spec::automaton::parse_automaton(&mutated_spec);
     match &parse_result {
-        Ok(a) => println!("  Mutated spec: PARSED OK — {} states, {} actions", a.automaton.states.len(), a.actions.len()),
+        Ok(a) => println!(
+            "  Mutated spec: PARSED OK — {} states, {} actions",
+            a.automaton.states.len(),
+            a.actions.len()
+        ),
         Err(e) => println!("  Mutated spec: PARSE FAILED — {e}"),
     }
 
@@ -485,12 +685,21 @@ hint = "Reassign the issue to a different implementer."
     {
         let mut registry = harness.platform_state.registry.write().unwrap(); // ci-ok: infallible lock
         let tenant_id = temper_runtime::tenant::TenantId::new(TENANT);
-        let existing_csdl = registry.get_tenant(&tenant_id).expect("tenant").csdl.as_ref().clone();
+        let existing_csdl = registry
+            .get_tenant(&tenant_id)
+            .expect("tenant")
+            .csdl
+            .as_ref()
+            .clone();
         let csdl_xml = temper_spec::csdl::emit_csdl_xml(&existing_csdl);
         let deploy_result = registry.try_register_tenant_with_reactions_and_constraints(
-            tenant_id, existing_csdl, csdl_xml,
+            tenant_id,
+            existing_csdl,
+            csdl_xml,
             &[("Issue", &mutated_spec)],
-            Vec::new(), None, true,
+            Vec::new(),
+            None,
+            true,
         );
         match &deploy_result {
             Ok(()) => println!("  Hot-deploy: SUCCESS"),
@@ -500,8 +709,13 @@ hint = "Reassign the issue to a different implementer."
 
     // Assign first (to satisfy guard is_true assignee_set)
     let r = harness
-        .dispatch(TENANT, "Issue", "hotdeploy-2", "Assign",
-            serde_json::json!({"AgentId": "agent-1"}))
+        .dispatch(
+            TENANT,
+            "Issue",
+            "hotdeploy-2",
+            "Assign",
+            serde_json::json!({"AgentId": "agent-1"}),
+        )
         .await;
     match &r {
         Ok(resp) => println!("  Assign: success={}", resp.success),
@@ -510,36 +724,74 @@ hint = "Reassign the issue to a different implementer."
 
     // Now Reassign should work
     let r = harness
-        .dispatch(TENANT, "Issue", "hotdeploy-2", "Reassign",
-            serde_json::json!({"NewAssigneeId": "agent-2"}))
+        .dispatch(
+            TENANT,
+            "Issue",
+            "hotdeploy-2",
+            "Reassign",
+            serde_json::json!({"NewAssigneeId": "agent-2"}),
+        )
         .await;
     let reassign_after = match &r {
         Ok(resp) => {
-            println!("  Reassign AFTER hot-deploy: success={}, status={}, error={:?}",
-                resp.success, resp.state.status, resp.error);
+            println!(
+                "  Reassign AFTER hot-deploy: success={}, status={}, error={:?}",
+                resp.success, resp.state.status, resp.error
+            );
             resp.success
         }
-        Err(e) => { println!("  Reassign AFTER hot-deploy: dispatch error={e}"); false }
+        Err(e) => {
+            println!("  Reassign AFTER hot-deploy: dispatch error={e}");
+            false
+        }
     };
 
     // ── 10. Summary ────────────────────────────────────────────────
     println!("\n======================================================================");
     println!("VERIFICATION SUMMARY");
     println!("======================================================================");
-    println!("  Spec parsing:                    {}", if evo_automaton.automaton.states.len() == 12 { "PASS" } else { "FAIL" });
+    println!(
+        "  Spec parsing:                    {}",
+        if evo_automaton.automaton.states.len() == 12 {
+            "PASS"
+        } else {
+            "FAIL"
+        }
+    );
     println!("  TransitionTable evaluation:       PASS (checked above)");
-    println!("  Skill installation (PM):          {}", if pm_result.is_ok() { "PASS" } else { "FAIL" });
-    println!("  Skill installation (evolution):   {}", if evo_result.is_ok() { "PASS" } else { "FAIL" });
+    println!(
+        "  Skill installation (PM):          {}",
+        if pm_result.is_ok() { "PASS" } else { "FAIL" }
+    );
+    println!(
+        "  Skill installation (evolution):   {}",
+        if evo_result.is_ok() { "PASS" } else { "FAIL" }
+    );
     println!("  EvolutionRun full lifecycle:       PASS (9 transitions above)");
     println!("  Verification retry loop:           PASS");
     println!("  SentinelMonitor lifecycle:         PASS");
-    println!("  Sentinel ots_failure_cluster:      {}", if ots_fired { "PASS" } else { "FAIL" });
-    println!("  Sentinel below-threshold:          {}", if !ots_below { "PASS" } else { "FAIL" });
+    println!(
+        "  Sentinel ots_failure_cluster:      {}",
+        if ots_fired { "PASS" } else { "FAIL" }
+    );
+    println!(
+        "  Sentinel below-threshold:          {}",
+        if !ots_below { "PASS" } else { "FAIL" }
+    );
     println!("  GEPA replay/scoring/Pareto:        PASS");
-    println!("  Pareto dominance (c1 > c0):        {}", if c0_dominated { "PASS" } else { "FAIL" });
+    println!(
+        "  Pareto dominance (c1 > c0):        {}",
+        if c0_dominated { "PASS" } else { "FAIL" }
+    );
     println!("  Reflective dataset:                PASS");
-    println!("  Reassign BEFORE hot-deploy:        {} (expected: false)", reassign_before);
+    println!(
+        "  Reassign BEFORE hot-deploy:        {} (expected: false)",
+        reassign_before
+    );
     println!("  Spec hot-deploy:                   PASS");
-    println!("  Reassign AFTER hot-deploy:         {} (expected: true)", reassign_after);
+    println!(
+        "  Reassign AFTER hot-deploy:         {} (expected: true)",
+        reassign_after
+    );
     println!();
 }

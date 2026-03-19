@@ -104,18 +104,43 @@ fn test_list_skills_returns_catalog() {
     let apps = list_skills();
     // Should find at least the 5 spec-bearing skills.
     let names: Vec<&str> = apps.iter().map(|e| e.name.as_str()).collect();
-    assert!(names.contains(&"project-management"), "missing project-management: {names:?}");
+    assert!(
+        names.contains(&"project-management"),
+        "missing project-management: {names:?}"
+    );
     assert!(names.contains(&"temper-fs"), "missing temper-fs: {names:?}");
-    assert!(names.contains(&"agent-orchestration"), "missing agent-orchestration: {names:?}");
-    assert!(names.contains(&"temper-agent"), "missing temper-agent: {names:?}");
+    assert!(
+        names.contains(&"agent-orchestration"),
+        "missing agent-orchestration: {names:?}"
+    );
+    assert!(
+        names.contains(&"temper-agent"),
+        "missing temper-agent: {names:?}"
+    );
     assert!(names.contains(&"evolution"), "missing evolution: {names:?}");
 
     // Check entity types for known skills.
-    let pm = apps.iter().find(|e| e.name == "project-management").unwrap();
-    assert_eq!(pm.entity_types.len(), 5, "PM entity types: {:?}", pm.entity_types);
+    let pm = apps
+        .iter()
+        .find(|e| e.name == "project-management")
+        .unwrap();
+    assert_eq!(
+        pm.entity_types.len(),
+        5,
+        "PM entity types: {:?}",
+        pm.entity_types
+    );
     let evo = apps.iter().find(|e| e.name == "evolution").unwrap();
-    assert_eq!(evo.entity_types.len(), 2, "Evo entity types: {:?}", evo.entity_types);
-    assert!(evo.skill_guide.is_some(), "evolution should have a skill guide");
+    assert_eq!(
+        evo.entity_types.len(),
+        2,
+        "Evo entity types: {:?}",
+        evo.entity_types
+    );
+    assert!(
+        evo.skill_guide.is_some(),
+        "evolution should have a skill guide"
+    );
 }
 
 #[test]
@@ -463,5 +488,8 @@ fn test_reload_picks_up_disk_changes() {
     // Just verify reload doesn't panic and produces a valid catalog.
     reload_skills();
     let skills = list_skills();
-    assert!(!skills.is_empty(), "catalog should not be empty after reload");
+    assert!(
+        !skills.is_empty(),
+        "catalog should not be empty after reload"
+    );
 }

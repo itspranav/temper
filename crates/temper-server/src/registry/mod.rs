@@ -405,7 +405,11 @@ impl SpecRegistry {
     }
 
     /// Mutable access to the IOA spec for a tenant and entity type.
-    pub fn get_spec_mut(&mut self, tenant: &TenantId, entity_type: &str) -> Option<&mut EntitySpec> {
+    pub fn get_spec_mut(
+        &mut self,
+        tenant: &TenantId,
+        entity_type: &str,
+    ) -> Option<&mut EntitySpec> {
         self.tenants
             .get_mut(tenant)
             .and_then(|tc| tc.entities.get_mut(entity_type))

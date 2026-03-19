@@ -166,7 +166,10 @@ mod tests {
         assert!(!apps.is_empty());
         // Verify a known skill is present (order depends on filesystem scan).
         let names: Vec<&str> = apps.iter().filter_map(|a| a["name"].as_str()).collect();
-        assert!(names.contains(&"project-management"), "missing project-management: {names:?}");
+        assert!(
+            names.contains(&"project-management"),
+            "missing project-management: {names:?}"
+        );
     }
 
     #[tokio::test]
@@ -225,7 +228,10 @@ mod tests {
         assert!(!apps.is_empty());
         // Verify a known skill is present (order depends on filesystem scan).
         let names: Vec<&str> = apps.iter().filter_map(|a| a["name"].as_str()).collect();
-        assert!(names.contains(&"project-management"), "missing project-management: {names:?}");
+        assert!(
+            names.contains(&"project-management"),
+            "missing project-management: {names:?}"
+        );
     }
 
     #[tokio::test]

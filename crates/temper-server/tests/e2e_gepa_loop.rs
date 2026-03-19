@@ -235,8 +235,11 @@ async fn e2e_gepa_sentinel_detects_failure_cluster() {
 
     // Run sentinel rules against these trajectory entries.
     let rules = temper_server::sentinel::default_rules();
-    let alerts =
-        temper_server::sentinel::check_rules(&rules, &harness.platform_state.server, &trajectory_entries);
+    let alerts = temper_server::sentinel::check_rules(
+        &rules,
+        &harness.platform_state.server,
+        &trajectory_entries,
+    );
 
     // The ots_trajectory_failure_cluster rule should fire (6 >= 5 threshold).
     let ots_alert = alerts
@@ -462,11 +465,23 @@ async fn e2e_gepa_verification_retry_loop() {
 
     // Drive to Verifying state.
     for (action, params) in [
-        ("Start", serde_json::json!({"SkillName": "pm", "TargetEntityType": "Issue", "AutonomyLevel": "auto"})),
-        ("SelectCandidate", serde_json::json!({"CandidateId": "c1", "SpecSource": "spec"})),
-        ("RecordEvaluation", serde_json::json!({"ReplayResultJson": "{}"})),
+        (
+            "Start",
+            serde_json::json!({"SkillName": "pm", "TargetEntityType": "Issue", "AutonomyLevel": "auto"}),
+        ),
+        (
+            "SelectCandidate",
+            serde_json::json!({"CandidateId": "c1", "SpecSource": "spec"}),
+        ),
+        (
+            "RecordEvaluation",
+            serde_json::json!({"ReplayResultJson": "{}"}),
+        ),
         ("RecordDataset", serde_json::json!({"DatasetJson": "{}"})),
-        ("RecordMutation", serde_json::json!({"MutatedSpecSource": "bad spec v1", "MutationSummary": "attempt 1"})),
+        (
+            "RecordMutation",
+            serde_json::json!({"MutatedSpecSource": "bad spec v1", "MutationSummary": "attempt 1"}),
+        ),
     ] {
         let r = harness
             .dispatch(TENANT, "EvolutionRun", evo_id, action, params)
@@ -845,11 +860,7 @@ hint = "Reassign the issue to a different implementer."
 
     // Hot-deploy: re-register the tenant with the mutated Issue spec (merge mode).
     {
-        let mut registry = harness
-            .platform_state
-            .registry
-            .write()
-            .unwrap(); // ci-ok: infallible lock
+        let mut registry = harness.platform_state.registry.write().unwrap(); // ci-ok: infallible lock
         let tenant_id = temper_runtime::tenant::TenantId::new(TENANT);
         // Get existing CSDL for merge.
         let existing_csdl = registry
@@ -971,8 +982,11 @@ async fn e2e_gepa_full_loop() {
         .collect();
 
     let rules = temper_server::sentinel::default_rules();
-    let alerts =
-        temper_server::sentinel::check_rules(&rules, &harness.platform_state.server, &trajectory_entries);
+    let alerts = temper_server::sentinel::check_rules(
+        &rules,
+        &harness.platform_state.server,
+        &trajectory_entries,
+    );
     assert!(
         alerts
             .iter()
@@ -982,7 +996,13 @@ async fn e2e_gepa_full_loop() {
 
     // --- Step 4: SentinelMonitor detects and triggers EvolutionRun ---
     let r = harness
-        .dispatch(TENANT, "SentinelMonitor", "s1", "CheckSentinel", serde_json::json!({}))
+        .dispatch(
+            TENANT,
+            "SentinelMonitor",
+            "s1",
+            "CheckSentinel",
+            serde_json::json!({}),
+        )
         .await
         .unwrap();
     assert!(r.success);
@@ -1022,14 +1042,38 @@ async fn e2e_gepa_full_loop() {
     // --- Step 5: Drive EvolutionRun through the happy path ---
     let evo_id = "evo-full-1";
     let actions = vec![
-        ("Start", serde_json::json!({"SkillName": "project-management", "TargetEntityType": "Issue", "AutonomyLevel": "auto"})),
-        ("SelectCandidate", serde_json::json!({"CandidateId": "c0", "SpecSource": "original"})),
-        ("RecordEvaluation", serde_json::json!({"ReplayResultJson": "{\"actions_attempted\":10,\"succeeded\":5}"})),
-        ("RecordDataset", serde_json::json!({"DatasetJson": "{\"triplets\":[]}"})),
-        ("RecordMutation", serde_json::json!({"MutatedSpecSource": "spec with Reassign", "MutationSummary": "Added Reassign"})),
-        ("RecordVerificationPass", serde_json::json!({"VerificationReport": "L0-L3 passed"})),
-        ("RecordScore", serde_json::json!({"ScoresJson": "{\"success_rate\":1.0,\"coverage\":1.0}"})),
-        ("RecordFrontierAutoApprove", serde_json::json!({"FrontierUpdateJson": "{\"added\":true}"})),
+        (
+            "Start",
+            serde_json::json!({"SkillName": "project-management", "TargetEntityType": "Issue", "AutonomyLevel": "auto"}),
+        ),
+        (
+            "SelectCandidate",
+            serde_json::json!({"CandidateId": "c0", "SpecSource": "original"}),
+        ),
+        (
+            "RecordEvaluation",
+            serde_json::json!({"ReplayResultJson": "{\"actions_attempted\":10,\"succeeded\":5}"}),
+        ),
+        (
+            "RecordDataset",
+            serde_json::json!({"DatasetJson": "{\"triplets\":[]}"}),
+        ),
+        (
+            "RecordMutation",
+            serde_json::json!({"MutatedSpecSource": "spec with Reassign", "MutationSummary": "Added Reassign"}),
+        ),
+        (
+            "RecordVerificationPass",
+            serde_json::json!({"VerificationReport": "L0-L3 passed"}),
+        ),
+        (
+            "RecordScore",
+            serde_json::json!({"ScoresJson": "{\"success_rate\":1.0,\"coverage\":1.0}"}),
+        ),
+        (
+            "RecordFrontierAutoApprove",
+            serde_json::json!({"FrontierUpdateJson": "{\"added\":true}"}),
+        ),
     ];
 
     for (action, params) in &actions {
@@ -1068,11 +1112,7 @@ hint = "Reassign the issue to a different implementer."
 "#;
 
     {
-        let mut registry = harness
-            .platform_state
-            .registry
-            .write()
-            .unwrap(); // ci-ok: infallible lock
+        let mut registry = harness.platform_state.registry.write().unwrap(); // ci-ok: infallible lock
         let tenant_id = temper_runtime::tenant::TenantId::new(TENANT);
         let existing_csdl = registry
             .get_tenant(&tenant_id)
@@ -1138,7 +1178,10 @@ hint = "Reassign the issue to a different implementer."
         "Reassign MUST succeed after GEPA evolution and hot-deploy: {:?}",
         r.error
     );
-    assert_eq!(r.state.status, "Backlog", "Reassign self-loop keeps Backlog");
+    assert_eq!(
+        r.state.status, "Backlog",
+        "Reassign self-loop keeps Backlog"
+    );
 
     // --- Step 8: Verify GEPA primitives agree ---
     use temper_evolution::gepa::*;
@@ -1243,7 +1286,10 @@ async fn e2e_gepa_wasm_integration_chain_fires() {
     // Start
     let r = state
         .dispatch_tenant_action(
-            &tenant, "EvolutionRun", evo_id, "Start",
+            &tenant,
+            "EvolutionRun",
+            evo_id,
+            "Start",
             serde_json::json!({
                 "SkillName": "project-management",
                 "TargetEntityType": "Issue",
@@ -1285,7 +1331,10 @@ to = "Done"
 
     let r = state
         .dispatch_tenant_action(
-            &tenant, "EvolutionRun", evo_id, "SelectCandidate",
+            &tenant,
+            "EvolutionRun",
+            evo_id,
+            "SelectCandidate",
             serde_json::json!({
                 "CandidateId": "candidate-wasm-1",
                 "SpecSource": test_spec,
@@ -1349,10 +1398,7 @@ to = "Done"
     // Even better: if we reached Proposing or Failed, it means BOTH
     // gepa-replay AND gepa-reflective WASM modules fired successfully,
     // and the chain only stopped at the claude_code adapter (expected).
-    let wasm_chain_completed = matches!(
-        final_status.as_str(),
-        "Proposing" | "Failed"
-    );
+    let wasm_chain_completed = matches!(final_status.as_str(), "Proposing" | "Failed");
     println!(
         "WASM chain completed (replay + reflective): {wasm_chain_completed}, final: {final_status}"
     );
@@ -1510,7 +1556,10 @@ MOCK_OUTPUT
     // Step 1: Start
     let r = state
         .dispatch_tenant_action(
-            &tenant, "EvolutionRun", evo_id, "Start",
+            &tenant,
+            "EvolutionRun",
+            evo_id,
+            "Start",
             serde_json::json!({
                 "SkillName": "project-management",
                 "TargetEntityType": "Issue",
@@ -1554,7 +1603,10 @@ to = "Done"
 
     let r = state
         .dispatch_tenant_action(
-            &tenant, "EvolutionRun", evo_id, "SelectCandidate",
+            &tenant,
+            "EvolutionRun",
+            evo_id,
+            "SelectCandidate",
             serde_json::json!({
                 "CandidateId": "candidate-auto-1",
                 "SpecSource": test_spec,
@@ -1565,7 +1617,10 @@ to = "Done"
         .await
         .expect("SelectCandidate should succeed");
     assert!(r.success);
-    println!("[AUTO] SelectCandidate → status: {}, effects: {:?}", r.state.status, r.custom_effects);
+    println!(
+        "[AUTO] SelectCandidate → status: {}, effects: {:?}",
+        r.state.status, r.custom_effects
+    );
 
     // Wait for the autonomous chain to progress through WASM + adapter
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
@@ -1583,13 +1638,15 @@ to = "Done"
             .await
             .expect("entity should exist");
         final_status = entity.state.status.clone();
-        event_trail = entity.state.events.iter().map(|e| e.action.clone()).collect();
+        event_trail = entity
+            .state
+            .events
+            .iter()
+            .map(|e| e.action.clone())
+            .collect();
 
         // Terminal states for this phase
-        if matches!(
-            final_status.as_str(),
-            "Verifying" | "Failed" | "Completed"
-        ) {
+        if matches!(final_status.as_str(), "Verifying" | "Failed" | "Completed") {
             break;
         }
     }
@@ -1610,7 +1667,10 @@ to = "Done"
     // Step 3: Manual verification pass (in production, this is L0-L3 cascade)
     let r = state
         .dispatch_tenant_action(
-            &tenant, "EvolutionRun", evo_id, "RecordVerificationPass",
+            &tenant,
+            "EvolutionRun",
+            evo_id,
+            "RecordVerificationPass",
             serde_json::json!({
                 "VerificationReport": "L0-L3 cascade passed. Reassign action properly defined."
             }),
@@ -1619,7 +1679,10 @@ to = "Done"
         .await
         .expect("RecordVerificationPass should succeed");
     assert!(r.success);
-    println!("[AUTO] RecordVerificationPass → status: {}, effects: {:?}", r.state.status, r.custom_effects);
+    println!(
+        "[AUTO] RecordVerificationPass → status: {}, effects: {:?}",
+        r.state.status, r.custom_effects
+    );
 
     // This triggers score_candidate (WASM) → RecordScore → update_frontier (WASM) → RecordFrontier
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
@@ -1634,7 +1697,12 @@ to = "Done"
             .await
             .expect("entity should exist");
         final_status = entity.state.status.clone();
-        event_trail = entity.state.events.iter().map(|e| e.action.clone()).collect();
+        event_trail = entity
+            .state
+            .events
+            .iter()
+            .map(|e| e.action.clone())
+            .collect();
 
         if matches!(
             final_status.as_str(),
@@ -1659,7 +1727,10 @@ to = "Done"
     // Step 4: Approve and deploy
     let r = state
         .dispatch_tenant_action(
-            &tenant, "EvolutionRun", evo_id, "Approve",
+            &tenant,
+            "EvolutionRun",
+            evo_id,
+            "Approve",
             serde_json::json!({ "ApproverId": "human-reviewer-1" }),
             &AgentContext::default(),
         )
@@ -1669,7 +1740,10 @@ to = "Done"
 
     let r = state
         .dispatch_tenant_action(
-            &tenant, "EvolutionRun", evo_id, "Deploy",
+            &tenant,
+            "EvolutionRun",
+            evo_id,
+            "Deploy",
             serde_json::json!({ "DeploymentId": "deploy-auto-1" }),
             &AgentContext::default(),
         )
@@ -1683,7 +1757,12 @@ to = "Done"
         .get_tenant_entity_state(&tenant, "EvolutionRun", evo_id)
         .await
         .expect("entity should exist");
-    let final_events: Vec<&str> = entity.state.events.iter().map(|e| e.action.as_str()).collect();
+    let final_events: Vec<&str> = entity
+        .state
+        .events
+        .iter()
+        .map(|e| e.action.as_str())
+        .collect();
 
     println!("\n=== FULL AUTONOMOUS GEPA LOOP PROOF ===");
     println!("Event trail: {:?}", final_events);
@@ -1691,16 +1770,16 @@ to = "Done"
 
     // The complete chain:
     let expected = [
-        "Start",                    // Human/agent kicks off
-        "SelectCandidate",          // Pick candidate from frontier
-        "RecordEvaluation",         // gepa-replay WASM module ✓
-        "RecordDataset",            // gepa-reflective WASM module ✓
-        "RecordMutation",           // claude_code adapter (evolution agent) ✓
-        "RecordVerificationPass",   // L0-L3 verification cascade
-        "RecordScore",              // gepa-score WASM module ✓
-        "RecordFrontier",           // gepa-pareto WASM module ✓
-        "Approve",                  // Human/agent approval gate
-        "Deploy",                   // Hot-deploy to SpecRegistry
+        "Start",                  // Human/agent kicks off
+        "SelectCandidate",        // Pick candidate from frontier
+        "RecordEvaluation",       // gepa-replay WASM module ✓
+        "RecordDataset",          // gepa-reflective WASM module ✓
+        "RecordMutation",         // claude_code adapter (evolution agent) ✓
+        "RecordVerificationPass", // L0-L3 verification cascade
+        "RecordScore",            // gepa-score WASM module ✓
+        "RecordFrontier",         // gepa-pareto WASM module ✓
+        "Approve",                // Human/agent approval gate
+        "Deploy",                 // Hot-deploy to SpecRegistry
     ];
     for step in &expected {
         assert!(

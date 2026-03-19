@@ -92,18 +92,15 @@ impl SimPlatformHarness {
     /// Useful for testing state machines in isolation without WASM integrations.
     /// The tenant and entity type must already be registered (via `install_skill`).
     pub fn register_inline_spec(&self, tenant: &str, entity_type: &str, ioa_source: &str) {
-        let automaton = temper_spec::automaton::parse_automaton(ioa_source)
-            .expect("inline IOA should parse");
+        let automaton =
+            temper_spec::automaton::parse_automaton(ioa_source).expect("inline IOA should parse");
         let table = temper_jit::table::TransitionTable::from_automaton(&automaton);
-        let mut registry = self
-            .platform_state
-            .server
-            .registry
-            .write()
-            .unwrap(); // ci-ok: infallible lock
+        let mut registry = self.platform_state.server.registry.write().unwrap(); // ci-ok: infallible lock
         let spec = registry
             .get_spec_mut(&TenantId::new(tenant), entity_type)
-            .unwrap_or_else(|| panic!("entity type '{entity_type}' not found for tenant '{tenant}'"));
+            .unwrap_or_else(|| {
+                panic!("entity type '{entity_type}' not found for tenant '{tenant}'")
+            });
         spec.swap_controller().swap(table);
         spec.integrations = automaton.integrations;
         spec.ioa_source = ioa_source.to_string();

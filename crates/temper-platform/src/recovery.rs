@@ -115,8 +115,9 @@ fn tenant_has_skill_specs(state: &PlatformState, tenant: &str, app_name: &str) -
     };
     let tenant_id = TenantId::new(tenant);
     let registry = state.registry.read().unwrap(); // ci-ok: infallible lock
-    bundle
-        .specs
-        .iter()
-        .all(|(entity_type, _)| registry.get_table(&tenant_id, entity_type.as_str()).is_some())
+    bundle.specs.iter().all(|(entity_type, _)| {
+        registry
+            .get_table(&tenant_id, entity_type.as_str())
+            .is_some()
+    })
 }

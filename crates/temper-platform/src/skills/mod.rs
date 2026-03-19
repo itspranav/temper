@@ -130,10 +130,7 @@ impl SkillCatalog {
             let canonical = compile_time_dir
                 .canonicalize()
                 .unwrap_or(compile_time_dir.clone());
-            tracing::info!(
-                "Loading skills from workspace: {}",
-                canonical.display()
-            );
+            tracing::info!("Loading skills from workspace: {}", canonical.display());
             return Self::from_dir(canonical);
         }
 
@@ -256,11 +253,7 @@ fn scan_dir_for_ioa(
     };
     let mut files: Vec<_> = entries
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .ends_with(".ioa.toml")
-        })
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".ioa.toml"))
         .collect();
     files.sort_by_key(|e| e.file_name());
 
@@ -301,11 +294,7 @@ fn find_cedar_policies(skill_dir: &Path) -> Vec<PathBuf> {
     };
     let mut files: Vec<PathBuf> = entries
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .ends_with(".cedar")
-        })
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".cedar"))
         .map(|e| e.path())
         .collect();
     files.sort();
@@ -454,8 +443,7 @@ pub async fn install_skill(
             let incoming_hash = temper_store_turso::spec_content_hash(ioa_source);
             match registry.get_spec(&tenant_id, entity_type) {
                 Some(existing) => {
-                    let existing_hash =
-                        temper_store_turso::spec_content_hash(&existing.ioa_source);
+                    let existing_hash = temper_store_turso::spec_content_hash(&existing.ioa_source);
                     if incoming_hash == existing_hash {
                         skipped.push(entity_type.to_string());
                     } else {
