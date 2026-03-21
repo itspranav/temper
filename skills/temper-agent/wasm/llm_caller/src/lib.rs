@@ -1,4 +1,4 @@
-//! LLM Caller — WASM module for calling the Anthropic Messages API.
+//! LLM Caller — WASM module for calling LLM providers (Anthropic/OpenRouter).
 //!
 //! Reads conversation from TemperFS File entity (via $value endpoint) when
 //! `conversation_file_id` is set, otherwise falls back to inline entity state.
@@ -7,6 +7,11 @@
 //! - `ProcessToolCalls` if the response contains tool_use blocks
 //! - `RecordResult` if the response is an end_turn
 //! - `Fail` if the turn budget is exceeded
+//!
+//! Supported modes:
+//! - Anthropic API key (`x-api-key`)
+//! - Anthropic OAuth token (`Authorization: Bearer sk-ant-oat...`)
+//! - OpenRouter API key (`Authorization: Bearer`, OpenAI-compatible schema)
 //!
 //! Build: `cargo build --target wasm32-unknown-unknown --release`
 
@@ -46,10 +51,11 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
             .get("model")
             .and_then(|v| v.as_str())
             .unwrap_or("claude-sonnet-4-20250514");
-        let provider = fields
+        let provider_raw = fields
             .get("provider")
             .and_then(|v| v.as_str())
             .unwrap_or("anthropic");
+        let provider = normalize_provider(provider_raw);
         let tools_enabled = fields
             .get("tools_enabled")
             .and_then(|v| v.as_str())
@@ -73,16 +79,45 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
             .and_then(|v| v.as_str())
             .unwrap_or("/workspace");
 
-        // Get API key from integration config (resolved from {secret:anthropic_api_key})
-        let api_key = ctx.config.get("api_key").cloned().unwrap_or_default();
+        // Resolve provider credentials from integration config.
+        let api_key = resolve_provider_api_key(&ctx, &provider)?;
+        if is_unresolved_secret_template(&api_key) {
+            return Err(format!(
+                "provider={provider} api key is unresolved secret template: '{api_key}'. \
+set tenant secret and retry"
+            ));
+        }
         let anthropic_api_url = ctx
             .config
             .get("anthropic_api_url")
             .cloned()
             .unwrap_or_else(|| "https://api.anthropic.com/v1/messages".to_string());
+        let openrouter_api_url = ctx
+            .config
+            .get("openrouter_api_url")
+            .cloned()
+            .unwrap_or_else(|| "https://openrouter.ai/api/v1/chat/completions".to_string());
+        let anthropic_auth_mode = ctx
+            .config
+            .get("anthropic_auth_mode")
+            .cloned()
+            .unwrap_or_else(|| "auto".to_string());
+        let openrouter_site_url = ctx
+            .config
+            .get("openrouter_site_url")
+            .cloned()
+            .unwrap_or_default();
+        let openrouter_app_name = ctx
+            .config
+            .get("openrouter_app_name")
+            .cloned()
+            .unwrap_or_else(|| "temper-agent".to_string());
 
         if api_key.is_empty() {
-            return Err("missing api_key in integration config".to_string());
+            return Err(format!(
+                "missing API key for provider={provider}. expected secrets: \
+anthropic_api_key (or api_key) for anthropic, openrouter_api_key (or api_key) for openrouter"
+            ));
         }
 
         // TemperFS conversation storage
@@ -130,7 +165,7 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
         let tools = build_tool_definitions(tools_enabled, sandbox_url, workdir);
 
         // Call LLM API
-        let response = match provider {
+        let response = match provider.as_str() {
             "anthropic" => call_anthropic(
                 &ctx,
                 &api_key,
@@ -139,6 +174,18 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
                 system_prompt,
                 &messages,
                 &tools,
+                &anthropic_auth_mode,
+            )?,
+            "openrouter" => call_openrouter(
+                &ctx,
+                &api_key,
+                &openrouter_api_url,
+                model,
+                system_prompt,
+                &messages,
+                &tools,
+                &openrouter_site_url,
+                &openrouter_app_name,
             )?,
             other => return Err(format!("unsupported LLM provider: {other}")),
         };
@@ -253,6 +300,51 @@ struct LlmResponse {
     output_tokens: i64,
 }
 
+fn normalize_provider(provider: &str) -> String {
+    let norm = provider.trim().to_ascii_lowercase();
+    if norm == "open_router" {
+        "openrouter".to_string()
+    } else {
+        norm
+    }
+}
+
+fn is_unresolved_secret_template(value: &str) -> bool {
+    value.contains("{secret:")
+}
+
+fn first_non_empty(values: &[Option<String>]) -> String {
+    for v in values.iter().flatten() {
+        if !v.trim().is_empty() {
+            return v.trim().to_string();
+        }
+    }
+    String::new()
+}
+
+fn resolve_provider_api_key(ctx: &Context, provider: &str) -> Result<String, String> {
+    let key = match provider {
+        "anthropic" => first_non_empty(&[
+            ctx.config.get("anthropic_api_key").cloned(),
+            ctx.config.get("api_key").cloned(),
+        ]),
+        "openrouter" => first_non_empty(&[
+            ctx.config.get("openrouter_api_key").cloned(),
+            ctx.config.get("api_key").cloned(),
+        ]),
+        other => return Err(format!("unsupported LLM provider: {other}")),
+    };
+    Ok(key)
+}
+
+fn detect_anthropic_oauth_mode(api_key: &str, auth_mode: &str) -> bool {
+    match auth_mode.trim().to_ascii_lowercase().as_str() {
+        "oauth" => true,
+        "api_key" => false,
+        _ => api_key.starts_with("sk-ant-oat"),
+    }
+}
+
 /// Call Anthropic Messages API.
 fn call_anthropic(
     ctx: &Context,
@@ -262,9 +354,10 @@ fn call_anthropic(
     system_prompt: &str,
     messages: &[Value],
     tools: &[Value],
+    anthropic_auth_mode: &str,
 ) -> Result<LlmResponse, String> {
     // Detect OAuth token (sk-ant-oat-*) vs standard API key
-    let is_oauth = api_key.contains("sk-ant-oat");
+    let is_oauth = detect_anthropic_oauth_mode(api_key, anthropic_auth_mode);
 
     // OAuth tokens enforce a fixed system prompt when tools are present.
     // Custom system instructions are prepended to the first user message instead.
@@ -405,6 +498,329 @@ fn call_anthropic(
         input_tokens,
         output_tokens,
     })
+}
+
+/// Call OpenRouter Chat Completions API (OpenAI-compatible schema).
+fn call_openrouter(
+    ctx: &Context,
+    api_key: &str,
+    api_url: &str,
+    model: &str,
+    system_prompt: &str,
+    messages: &[Value],
+    tools: &[Value],
+    site_url: &str,
+    app_name: &str,
+) -> Result<LlmResponse, String> {
+    let mut or_messages = Vec::<Value>::new();
+    if !system_prompt.is_empty() {
+        or_messages.push(json!({
+            "role": "system",
+            "content": system_prompt,
+        }));
+    }
+    or_messages.extend(convert_messages_to_openrouter(messages));
+
+    let openai_tools = convert_tools_to_openrouter(tools);
+    let mut body = json!({
+        "model": model,
+        "messages": or_messages,
+        "max_tokens": 4096,
+    });
+    if !openai_tools.is_empty() {
+        body["tools"] = json!(openai_tools);
+        body["tool_choice"] = json!("auto");
+    }
+
+    let body_str =
+        serde_json::to_string(&body).map_err(|e| format!("JSON serialize error: {e}"))?;
+
+    let mut headers = vec![
+        ("authorization".to_string(), format!("Bearer {api_key}")),
+        ("content-type".to_string(), "application/json".to_string()),
+    ];
+    if !site_url.trim().is_empty() {
+        headers.push(("HTTP-Referer".to_string(), site_url.trim().to_string()));
+    }
+    if !app_name.trim().is_empty() {
+        headers.push(("X-Title".to_string(), app_name.trim().to_string()));
+    }
+
+    ctx.log(
+        "info",
+        &format!(
+            "llm_caller: calling OpenRouter API, model={model}, messages={}, url={api_url}",
+            messages.len(),
+        ),
+    );
+
+    let mut last_err = String::new();
+    let mut resp = None;
+    for attempt in 0..5 {
+        if attempt > 0 {
+            ctx.log(
+                "warn",
+                &format!(
+                    "llm_caller: openrouter retry (attempt {}/5), last error: {last_err}",
+                    attempt + 1
+                ),
+            );
+        }
+        match ctx.http_call("POST", api_url, &headers, &body_str) {
+            Ok(r) if r.status == 200 => {
+                resp = Some(r);
+                break;
+            }
+            Ok(r) if matches!(r.status, 429 | 500 | 502 | 503 | 504) => {
+                last_err = format!("HTTP {}: {}", r.status, &r.body[..r.body.len().min(200)]);
+                continue;
+            }
+            Ok(r) => {
+                return Err(format!(
+                    "OpenRouter API returned {}: {}",
+                    r.status,
+                    &r.body[..r.body.len().min(500)]
+                ));
+            }
+            Err(e) => {
+                last_err = e;
+                continue;
+            }
+        }
+    }
+    let resp = resp.ok_or_else(|| format!("OpenRouter API failed after 5 attempts: {last_err}"))?;
+
+    let parsed: Value = serde_json::from_str(&resp.body)
+        .map_err(|e| format!("failed to parse OpenRouter response: {e}"))?;
+    let choice = parsed
+        .get("choices")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .cloned()
+        .unwrap_or(json!({}));
+    let message = choice.get("message").cloned().unwrap_or(json!({}));
+
+    let mut content_blocks = Vec::<Value>::new();
+    let text = extract_openrouter_text(&message);
+    if !text.is_empty() {
+        content_blocks.push(json!({
+            "type": "text",
+            "text": text,
+        }));
+    }
+
+    let mut has_tool_calls = false;
+    if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+        for (idx, tc) in tool_calls.iter().enumerate() {
+            let fn_name = tc
+                .get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown_tool");
+            let call_id = tc
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("or_tool_{}", idx + 1));
+            let args_str = tc
+                .get("function")
+                .and_then(|f| f.get("arguments"))
+                .and_then(Value::as_str)
+                .unwrap_or("{}");
+            let input = serde_json::from_str::<Value>(args_str).unwrap_or(json!({}));
+
+            content_blocks.push(json!({
+                "type": "tool_use",
+                "id": call_id,
+                "name": fn_name,
+                "input": input,
+            }));
+            has_tool_calls = true;
+        }
+    }
+
+    let usage = parsed.get("usage").cloned().unwrap_or(json!({}));
+    let input_tokens = usage
+        .get("prompt_tokens")
+        .and_then(|v| v.as_i64())
+        .or_else(|| usage.get("input_tokens").and_then(|v| v.as_i64()))
+        .unwrap_or(0);
+    let output_tokens = usage
+        .get("completion_tokens")
+        .and_then(|v| v.as_i64())
+        .or_else(|| usage.get("output_tokens").and_then(|v| v.as_i64()))
+        .unwrap_or(0);
+
+    let stop_reason = if has_tool_calls {
+        "tool_use".to_string()
+    } else {
+        "end_turn".to_string()
+    };
+
+    Ok(LlmResponse {
+        content: Value::Array(content_blocks),
+        stop_reason,
+        input_tokens,
+        output_tokens,
+    })
+}
+
+fn extract_openrouter_text(message: &Value) -> String {
+    if let Some(text) = message.get("content").and_then(Value::as_str) {
+        return text.to_string();
+    }
+    if let Some(arr) = message.get("content").and_then(Value::as_array) {
+        let mut chunks = Vec::<String>::new();
+        for item in arr {
+            if let Some(text) = item.get("text").and_then(Value::as_str) {
+                chunks.push(text.to_string());
+            } else if let Some(text) = item.get("content").and_then(Value::as_str) {
+                chunks.push(text.to_string());
+            }
+        }
+        return chunks.join("\n");
+    }
+    String::new()
+}
+
+fn stringify_content(value: &Value) -> String {
+    if let Some(s) = value.as_str() {
+        s.to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn convert_messages_to_openrouter(messages: &[Value]) -> Vec<Value> {
+    let mut out = Vec::<Value>::new();
+    for msg in messages {
+        let role = msg.get("role").and_then(Value::as_str).unwrap_or("user");
+        let content = msg.get("content").cloned().unwrap_or(json!(""));
+
+        match content {
+            Value::String(text) => {
+                out.push(json!({
+                    "role": role,
+                    "content": text,
+                }));
+            }
+            Value::Array(blocks) => {
+                if role == "assistant" {
+                    let mut text_chunks = Vec::<String>::new();
+                    let mut tool_calls = Vec::<Value>::new();
+                    for (idx, block) in blocks.iter().enumerate() {
+                        match block.get("type").and_then(Value::as_str).unwrap_or("") {
+                            "text" => {
+                                if let Some(t) = block.get("text").and_then(Value::as_str) {
+                                    text_chunks.push(t.to_string());
+                                }
+                            }
+                            "tool_use" => {
+                                let id = block
+                                    .get("id")
+                                    .and_then(Value::as_str)
+                                    .map(|s| s.to_string())
+                                    .unwrap_or_else(|| format!("tool_{}", idx + 1));
+                                let name = block
+                                    .get("name")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("unknown_tool");
+                                let input = block.get("input").cloned().unwrap_or(json!({}));
+                                tool_calls.push(json!({
+                                    "id": id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": name,
+                                        "arguments": input.to_string(),
+                                    }
+                                }));
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    let mut assistant = json!({
+                        "role": "assistant",
+                        "content": text_chunks.join("\n"),
+                    });
+                    if !tool_calls.is_empty() {
+                        assistant["tool_calls"] = json!(tool_calls);
+                    }
+                    out.push(assistant);
+                } else if role == "user" {
+                    let mut user_text = Vec::<String>::new();
+                    for block in &blocks {
+                        match block.get("type").and_then(Value::as_str).unwrap_or("") {
+                            "tool_result" => {
+                                let tool_call_id = block
+                                    .get("tool_use_id")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("unknown_tool_call");
+                                let content = stringify_content(
+                                    block.get("content").unwrap_or(&Value::String(String::new())),
+                                );
+                                out.push(json!({
+                                    "role": "tool",
+                                    "tool_call_id": tool_call_id,
+                                    "content": content,
+                                }));
+                            }
+                            "text" => {
+                                if let Some(t) = block.get("text").and_then(Value::as_str) {
+                                    user_text.push(t.to_string());
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    if !user_text.is_empty() {
+                        out.push(json!({
+                            "role": "user",
+                            "content": user_text.join("\n"),
+                        }));
+                    }
+                } else {
+                    out.push(json!({
+                        "role": role,
+                        "content": Value::Array(blocks),
+                    }));
+                }
+            }
+            other => {
+                out.push(json!({
+                    "role": role,
+                    "content": other,
+                }));
+            }
+        }
+    }
+    out
+}
+
+fn convert_tools_to_openrouter(tools: &[Value]) -> Vec<Value> {
+    let mut out = Vec::<Value>::new();
+    for tool in tools {
+        let Some(name) = tool.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let description = tool
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let parameters = tool
+            .get("input_schema")
+            .cloned()
+            .unwrap_or(json!({"type": "object", "properties": {}}));
+        out.push(json!({
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": description,
+                "parameters": parameters,
+            }
+        }));
+    }
+    out
 }
 
 /// Build tool definitions for the LLM based on enabled tools.
