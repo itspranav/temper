@@ -195,7 +195,7 @@ type = "wasm"
 module = "gepa-proposer-agent"
 on_success = "RecordMutation"
 on_failure = "Fail"
-prompt = "You are the GEPA evolution agent. Read trigger_params.DatasetJson with workflow-level triplets and patterns. Preserve triplets where preserve=true and improve failed/partial workflows using feedback. JEPA is optimizer-only here: do not introduce/remove entities, actions, or states. If missing_capabilities indicates net-new functionality, emit it as unmet-intent handoff suggestions instead of changing structure. Return the full mutated spec source and a summary."
+prompt = "You are the GEPA evolution agent. Read trigger_params.DatasetJson with workflow-level triplets and patterns. Preserve triplets where preserve=true and improve failed/partial workflows using feedback. GEPA is optimizer-only here: do not introduce/remove entities, actions, or states. If missing_capabilities indicates net-new functionality, emit it as unmet-intent handoff suggestions instead of changing structure. Return the full mutated spec source and a summary."
 
 [integration.config]
 temper_api_url = "http://127.0.0.1:4455"

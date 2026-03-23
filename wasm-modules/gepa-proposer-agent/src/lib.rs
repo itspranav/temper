@@ -248,8 +248,8 @@ Return valid compact JSON in one line with non-empty MutatedSpecSource and Mutat
                                 );
 
                                 let summary = format!(
-                                    "Optimizer-only JEPA gate rejected structural mutation ({}). \
-Forwarded {} unmet-intent handoff items; returning no-op mutation for JEPA.",
+                                    "Optimizer-only GEPA gate rejected structural mutation ({}). \
+Forwarded {} unmet-intent handoff items; returning no-op mutation for GEPA.",
                                     gate_reasons.join("; "),
                                     handoff.len()
                                 );
@@ -386,7 +386,7 @@ fn extract_entity_id(value: &Value) -> Option<String> {
 
 fn default_system_prompt() -> String {
     "You are the GEPA evolution agent operating inside TemperAgent. \
-JEPA in this run is optimizer-only: never introduce or remove entities, states, or actions. \
+GEPA in this run is optimizer-only: never introduce or remove entities, states, or actions. \
 Return only compact JSON with keys MutatedSpecSource and MutationSummary (optional UnmetIntentSuggestions). \
 Do not include markdown fences. Do not ask for permissions. \
 Do not edit files; reason over the provided spec text."
@@ -414,7 +414,7 @@ Task:\n\
 2) Propose the minimal IOA mutation that improves workflow completion while preserving successful patterns.\n\
 3) Triplets with preserve=true MUST remain valid after mutation.\n\
 4) For failed/partial workflows, apply the feedback suggestion exactly where possible.\n\
-5) JEPA optimizer-only constraint: DO NOT add/remove/rename entities, states, or actions.\n\
+5) GEPA optimizer-only constraint: DO NOT add/remove/rename entities, states, or actions.\n\
 6) If patterns.missing_capabilities indicates net-new capability is needed, list it in UnmetIntentSuggestions instead of adding it to the spec.\n\
 7) Keep schema/invariants coherent and avoid unrelated changes.\n\
 Output strict JSON only:\n\
@@ -815,7 +815,7 @@ fn report_unmet_intents(
     let mut failed = 0usize;
     let mut details = Vec::new();
     let reason = format!(
-        "JEPA optimizer-only gate blocked structural mutation: {}",
+        "GEPA optimizer-only gate blocked structural mutation: {}",
         gate_reasons.join("; ")
     );
 
