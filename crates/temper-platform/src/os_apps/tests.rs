@@ -102,7 +102,6 @@ fn test_agent_orchestration_specs_verify() {
 #[test]
 fn test_list_skills_returns_catalog() {
     let apps = list_skills();
-    // Should find at least the 5 spec-bearing skills.
     let names: Vec<&str> = apps.iter().map(|e| e.name.as_str()).collect();
     assert!(
         names.contains(&"project-management"),
@@ -119,7 +118,6 @@ fn test_list_skills_returns_catalog() {
     );
     assert!(names.contains(&"evolution"), "missing evolution: {names:?}");
 
-    // Check entity types for known skills.
     let pm = apps
         .iter()
         .find(|e| e.name == "project-management")
@@ -291,16 +289,23 @@ async fn test_install_skill_agent_orchestration_registers_entities() {
 #[tokio::test]
 async fn test_install_temper_agent_auto_installs_temper_fs() {
     let state = PlatformState::new(None);
-    let result = install_os_app(&state, "test-agent", "temper-agent").await;
-    assert!(result.is_ok(), "install failed: {:?}", result.err());
-
+    install_os_app(&state, "test-agent", "temper-agent")
+        .await
+        .expect("install temper-agent");
     let registry = state.registry.read().unwrap();
     let tenant = TenantId::new("test-agent");
-    assert!(registry.get_table(&tenant, "TemperAgent").is_some());
-    assert!(registry.get_table(&tenant, "Workspace").is_some());
-    assert!(registry.get_table(&tenant, "File").is_some());
-    assert!(registry.get_table(&tenant, "Directory").is_some());
-    assert!(registry.get_table(&tenant, "FileVersion").is_some());
+    for entity in [
+        "TemperAgent",
+        "Workspace",
+        "File",
+        "Directory",
+        "FileVersion",
+    ] {
+        assert!(
+            registry.get_table(&tenant, entity).is_some(),
+            "missing {entity}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -397,13 +402,6 @@ async fn test_install_multiple_skills_merges_and_is_idempotent() {
     );
 }
 
-/// Proves the full install → persist → reboot → restore cycle.
-///
-/// 1. Install OS app with a real Turso-backed SQLite DB.
-/// 2. Verify specs land in both registry and Turso.
-/// 3. Build a fresh PlatformState (simulating restart) with the same DB.
-/// 4. Restore registry from Turso.
-/// 5. Verify specs survived the "restart".
 #[tokio::test]
 async fn test_skill_install_survives_restart() {
     use std::sync::Arc;
@@ -411,11 +409,9 @@ async fn test_skill_install_survives_restart() {
     use temper_server::registry_bootstrap::restore_registry_from_turso;
     use temper_store_turso::TursoEventStore;
 
-    // Use a unique temp file DB for this test.
     let db_path = format!("/tmp/temper-test-{}.db", uuid::Uuid::new_v4());
     let db_url = format!("file:{db_path}");
 
-    // ── Phase A: Install into a fresh state with Turso. ─────────
     let turso = TursoEventStore::new(&db_url, None).await.unwrap();
     let mut state = PlatformState::new(None);
     state.server.event_store = Some(Arc::new(ServerEventStore::Turso(turso)));
@@ -425,7 +421,6 @@ async fn test_skill_install_survives_restart() {
     let result = result.unwrap();
     assert_eq!(result.added.len(), 5);
 
-    // Verify specs are in the in-memory registry.
     {
         let registry = state.registry.read().unwrap();
         let tenant = TenantId::new("test-ws");
@@ -433,7 +428,6 @@ async fn test_skill_install_survives_restart() {
         assert!(registry.get_table(&tenant, "Project").is_some());
     }
 
-    // Verify specs are persisted to Turso.
     let turso_ref = state
         .server
         .event_store
@@ -448,17 +442,14 @@ async fn test_skill_install_survives_restart() {
         "Issue spec not found in Turso"
     );
 
-    // Verify installed_apps record is in Turso.
     let installed = turso_ref.list_all_installed_apps().await.unwrap();
     assert!(
         installed.contains(&("test-ws".to_string(), "project-management".to_string())),
         "installed app record not found"
     );
 
-    // ── Phase B: Simulate restart — fresh state, same DB. ───────
     let turso2 = TursoEventStore::new(&db_url, None).await.unwrap();
     let state2 = PlatformState::new(None);
-    // Verify fresh registry is empty for this tenant.
     {
         let registry = state2.registry.read().unwrap();
         let tenant = TenantId::new("test-ws");
@@ -468,9 +459,6 @@ async fn test_skill_install_survives_restart() {
         );
     }
 
-    // Restore from Turso (this is what build_registry does on boot).
-    // Fetch async data outside the lock, then assign synchronously to avoid
-    // holding a RwLockWriteGuard across an await point.
     {
         use temper_server::registry::SpecRegistry;
         let mut temp_registry = SpecRegistry::new();
@@ -481,7 +469,6 @@ async fn test_skill_install_survives_restart() {
         *state2.registry.write().unwrap() = temp_registry;
     }
 
-    // Verify specs survived the restart.
     {
         let registry = state2.registry.read().unwrap();
         let tenant = TenantId::new("test-ws");
@@ -492,7 +479,6 @@ async fn test_skill_install_survives_restart() {
         assert!(registry.get_table(&tenant, "Label").is_some());
     }
 
-    // Clean up temp DB.
     let _ = std::fs::remove_file(&db_path);
     let _ = std::fs::remove_file(format!("{db_path}-wal"));
     let _ = std::fs::remove_file(format!("{db_path}-shm"));
@@ -500,7 +486,6 @@ async fn test_skill_install_survives_restart() {
 
 #[test]
 fn test_reload_picks_up_disk_changes() {
-    // Just verify reload doesn't panic and produces a valid catalog.
     reload_skills();
     let skills = list_skills();
     assert!(
