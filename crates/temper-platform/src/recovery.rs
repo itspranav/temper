@@ -10,7 +10,7 @@
 use temper_runtime::tenant::TenantId;
 use temper_server::platform_store::PlatformStore;
 
-use crate::skills;
+use crate::os_apps;
 use crate::state::PlatformState;
 
 /// Recover Cedar policies from the platform store into memory.
@@ -59,11 +59,11 @@ pub async fn recover_cedar_policies(state: &PlatformState, ps: &dyn PlatformStor
     }
 }
 
-/// Restore previously installed skills from the platform store.
+/// Restore previously installed OS apps from the platform store.
 ///
 /// Reads the durable `tenant_installed_apps` table and reinstalls any
-/// skills whose specs are not already present in the SpecRegistry.
-/// Uses the production [`skills::install_skill`] code path — no shortcuts.
+/// apps whose specs are not already present in the SpecRegistry.
+/// Uses the production [`os_apps::install_os_app`] code path — no shortcuts.
 ///
 /// This is the **production code path** — identical logic runs at CLI boot
 /// (Phase 8b) and during DST restart simulation.
@@ -71,7 +71,7 @@ pub async fn restore_installed_skills(state: &PlatformState, ps: &dyn PlatformSt
     let installed = match ps.list_all_installed_apps().await {
         Ok(apps) => apps,
         Err(e) => {
-            tracing::warn!("Failed to load installed skills: {e}");
+            tracing::warn!("Failed to load installed os-apps: {e}");
             return;
         }
     };
@@ -82,7 +82,7 @@ pub async fn restore_installed_skills(state: &PlatformState, ps: &dyn PlatformSt
             continue;
         }
 
-        match skills::install_skill(state, &tenant, &skill_name).await {
+        match os_apps::install_os_app(state, &tenant, &skill_name).await {
             Ok(result) => {
                 let all: Vec<String> = result
                     .added
@@ -110,7 +110,7 @@ pub async fn restore_installed_os_apps(state: &PlatformState, ps: &dyn PlatformS
 
 /// Check if all entity types for a skill are already registered.
 fn tenant_has_skill_specs(state: &PlatformState, tenant: &str, app_name: &str) -> bool {
-    let Some(bundle) = skills::get_skill(app_name) else {
+    let Some(bundle) = os_apps::get_os_app(app_name) else {
         return false;
     };
     let tenant_id = TenantId::new(tenant);

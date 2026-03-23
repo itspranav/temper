@@ -82,8 +82,8 @@ pub async fn dispatch_temper_method(
         "get_trajectories" | "get_insights" | "get_evolution_records" | "check_sentinel" => {
             dispatch_evolution(ctx, method, args).await
         }
-        // --- Skill Catalog ---
-        "list_apps" | "install_app" | "list_skills" | "install_skill" | "get_skill" => {
+        // --- App Catalog ---
+        "list_apps" | "install_app" | "get_app" | "list_skills" | "install_skill" | "get_skill" => {
             dispatch_skills(ctx, method, args).await
         }
         // --- Discovery ---
@@ -127,7 +127,7 @@ pub async fn dispatch_temper_method(
              upload_wasm, compile_wasm, \
              get_decisions, get_decision_status, poll_decision, \
              get_trajectories, get_insights, get_evolution_records, check_sentinel, \
-             list_apps, install_app, list_skills, install_skill, get_skill, \
+             list_apps, get_app, install_app, list_skills, get_skill, install_skill, \
              specs, spec_detail"
         )),
     }
@@ -542,7 +542,7 @@ async fn dispatch_evolution(
     }
 }
 
-/// Dispatch skill catalog methods.
+/// Dispatch app catalog methods.
 async fn dispatch_skills(
     ctx: &DispatchContext<'_>,
     method: &str,
@@ -557,13 +557,18 @@ async fn dispatch_skills(
                 &ctx.identity(),
                 ctx.api_key,
                 Method::GET,
-                "/api/skills",
+                "/api/os-apps",
                 None,
             )
             .await
         }
-        "get_skill" => {
-            let skill_name = expect_string_arg(args, 0, "skill_name", method)?;
+        "get_app" | "get_skill" => {
+            let arg_name = if method == "get_skill" {
+                "skill_name"
+            } else {
+                "app_name"
+            };
+            let skill_name = expect_string_arg(args, 0, arg_name, method)?;
             temper_request(
                 ctx.http,
                 ctx.base_url,
@@ -571,7 +576,7 @@ async fn dispatch_skills(
                 &ctx.identity(),
                 ctx.api_key,
                 Method::GET,
-                &format!("/api/skills/{skill_name}"),
+                &format!("/api/os-apps/{skill_name}"),
                 None,
             )
             .await
@@ -591,7 +596,7 @@ async fn dispatch_skills(
                 &ctx.identity(),
                 ctx.api_key,
                 Method::POST,
-                &format!("/api/skills/{skill_name}/install"),
+                &format!("/api/os-apps/{skill_name}/install"),
                 Some(&payload),
             )
             .await

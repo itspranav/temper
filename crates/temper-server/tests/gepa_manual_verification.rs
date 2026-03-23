@@ -142,8 +142,8 @@ async fn manual_gepa_verification() {
     // ── 1. Spec Parsing ─────────────────────────────────────────────
     println!("## 1. IOA Spec Parsing\n");
 
-    let evo_run_src = include_str!("../../../skills/evolution/evolution_run.ioa.toml");
-    let sentinel_src = include_str!("../../../skills/evolution/sentinel_monitor.ioa.toml");
+    let evo_run_src = include_str!("../../../os-apps/evolution/evolution_run.ioa.toml");
+    let sentinel_src = include_str!("../../../os-apps/evolution/sentinel_monitor.ioa.toml");
 
     let evo_parsed = temper_spec::automaton::parse_automaton(evo_run_src);
     match &evo_parsed {
@@ -657,7 +657,7 @@ async fn manual_gepa_verification() {
     };
 
     // Build mutated spec
-    let mutated_spec = include_str!("../../../skills/project-management/issue.ioa.toml")
+    let mutated_spec = include_str!("../../../os-apps/project-management/issue.ioa.toml")
         .to_string()
         + r#"
 

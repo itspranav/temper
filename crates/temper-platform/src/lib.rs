@@ -19,10 +19,10 @@ pub mod hooks;
 pub mod identity_cache;
 pub mod integration;
 pub mod optimization;
+pub mod os_apps;
 pub mod protocol;
 pub mod recovery;
 pub mod router;
-pub mod skills;
 pub mod spec_store;
 pub mod state;
 pub mod tenant_access;
@@ -33,8 +33,8 @@ pub use bootstrap::{
     bootstrap_agent_specs, bootstrap_operator_credential, bootstrap_system_tenant,
     persist_agent_verification, persist_system_verification,
 };
-pub use skills::{InstallResult, install_skill, list_skills};
-// Backward-compatible re-exports.
+pub use os_apps::{InstallResult, install_os_app, list_os_apps};
+// Backward-compatible skill aliases.
+pub use os_apps::{install_skill, list_skills};
 pub use protocol::{PlatformEvent, VerifyStepStatus};
-pub use skills::{install_os_app, list_os_apps};
 pub use state::PlatformState;

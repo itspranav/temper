@@ -529,7 +529,7 @@ enum SkillBootstrapSource {
 }
 
 fn tenant_has_skill_specs(state: &PlatformState, tenant: &str, app_name: &str) -> bool {
-    let Some(bundle) = temper_platform::skills::get_skill(app_name) else {
+    let Some(bundle) = temper_platform::os_apps::get_os_app(app_name) else {
         return false;
     };
     let tenant_id = TenantId::new(tenant);
@@ -577,7 +577,7 @@ pub(super) async fn bootstrap_installed_skills(state: &PlatformState, skills: &[
         if tenant_has_skill_specs(state, &tenant, &app_name) {
             continue;
         }
-        match temper_platform::install_skill(state, &tenant, &app_name).await {
+        match temper_platform::install_os_app(state, &tenant, &app_name).await {
             Ok(result) => match source {
                 SkillBootstrapSource::Persisted => {
                     let all: Vec<String> = result

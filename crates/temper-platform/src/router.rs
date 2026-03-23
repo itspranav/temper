@@ -31,6 +31,19 @@ pub fn build_platform_router(state: PlatformState) -> Router {
     // collision between temper-server's /api routes and the platform's /api routes.
     let platform_observe = Router::new()
         .route(
+            "/observe/os-apps",
+            routing::get(crate::tenant_api::list_os_apps),
+        )
+        .route(
+            "/observe/os-apps/{name}",
+            routing::get(crate::tenant_api::get_os_app_guide),
+        )
+        .route(
+            "/observe/os-apps/{name}/install",
+            routing::post(crate::tenant_api::install_os_app),
+        )
+        // Backward-compatible aliases
+        .route(
             "/observe/skills",
             routing::get(crate::tenant_api::list_skills),
         )
@@ -40,15 +53,6 @@ pub fn build_platform_router(state: PlatformState) -> Router {
         )
         .route(
             "/observe/skills/{name}/install",
-            routing::post(crate::tenant_api::install_skill),
-        )
-        // Backward-compatible aliases
-        .route(
-            "/observe/os-apps",
-            routing::get(crate::tenant_api::list_skills),
-        )
-        .route(
-            "/observe/os-apps/{name}/install",
             routing::post(crate::tenant_api::install_skill),
         )
         .route(
@@ -146,13 +150,13 @@ mod tests {
         }
     }
 
-    // ── Skill Catalog Integration Tests ───────────────────────────
+    // ── OS App Catalog Integration Tests ──────────────────────────
 
     #[tokio::test]
-    async fn test_get_skills_returns_200() {
+    async fn test_get_os_apps_returns_200() {
         let app = build_platform_router(test_state());
         let response = app
-            .oneshot(Request::get("/api/skills").body(Body::empty()).unwrap())
+            .oneshot(Request::get("/api/os-apps").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
@@ -173,10 +177,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_os_apps_alias_returns_200() {
+    async fn test_get_skills_alias_returns_200() {
         let app = build_platform_router(test_state());
         let response = app
-            .oneshot(Request::get("/api/os-apps").body(Body::empty()).unwrap())
+            .oneshot(Request::get("/api/skills").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
@@ -184,11 +188,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_install_skill_project_management() {
+    async fn test_install_os_app_project_management() {
         let app = build_platform_router(test_state());
         let response = app
             .oneshot(
-                Request::post("/api/skills/project-management/install")
+                Request::post("/api/os-apps/project-management/install")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"tenant":"test-install"}"#))
                     .unwrap(),
@@ -211,10 +215,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_observe_skills_returns_200() {
+    async fn test_get_observe_os_apps_returns_200() {
         let app = build_platform_router(test_state());
         let response = app
-            .oneshot(Request::get("/observe/skills").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get("/observe/os-apps")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -235,11 +243,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_install_skill_nonexistent_returns_404() {
+    async fn test_install_os_app_nonexistent_returns_404() {
         let app = build_platform_router(test_state());
         let response = app
             .oneshot(
-                Request::post("/api/skills/nonexistent/install")
+                Request::post("/api/os-apps/nonexistent/install")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"tenant":"test"}"#))
                     .unwrap(),

@@ -3,7 +3,7 @@ use crate::context::SecurityContext;
 use crate::error::AuthzDenial;
 
 const PM_ISSUE_POLICY: &str =
-    include_str!("../../../../skills/project-management/specs/policies/issue.cedar");
+    include_str!("../../../../os-apps/project-management/specs/policies/issue.cedar");
 
 fn admin_context() -> SecurityContext {
     SecurityContext::from_headers(&[

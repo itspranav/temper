@@ -837,7 +837,7 @@ async fn e2e_gepa_hotdeploy_and_verify() {
 
     // Now create a mutated Issue spec that adds Reassign.
     // We take the original and add a Reassign action.
-    let mutated_issue_spec = include_str!("../../../skills/project-management/issue.ioa.toml")
+    let mutated_issue_spec = include_str!("../../../os-apps/project-management/issue.ioa.toml")
         .to_string()
         + r#"
 
@@ -1098,7 +1098,7 @@ async fn e2e_gepa_full_loop() {
     assert_eq!(entity.state.status, "Deploying");
 
     // --- Step 6: Hot-deploy the mutated spec ---
-    let mutated_issue_spec = include_str!("../../../skills/project-management/issue.ioa.toml")
+    let mutated_issue_spec = include_str!("../../../os-apps/project-management/issue.ioa.toml")
         .to_string()
         + r#"
 
@@ -1219,7 +1219,7 @@ async fn e2e_gepa_wasm_integration_chain_fires() {
     let (_guard, _clock, _id_gen) = install_deterministic_context(99);
 
     // --- Build ServerState with REAL EvolutionRun spec (WITH integrations) ---
-    let evo_ioa = include_str!("../../../skills/evolution/evolution_run.ioa.toml");
+    let evo_ioa = include_str!("../../../os-apps/evolution/evolution_run.ioa.toml");
     let csdl_xml = r#"<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
   <edmx:DataServices>
@@ -1482,7 +1482,7 @@ MOCK_OUTPUT
     }
 
     // --- Build EvolutionRun spec with propose_mutation test override ---
-    let base_ioa = include_str!("../../../skills/evolution/evolution_run.ioa.toml");
+    let base_ioa = include_str!("../../../os-apps/evolution/evolution_run.ioa.toml");
     // Replace the proposer module with deterministic adapter for test-only execution.
     let mock_path = mock_script.to_str().expect("mock path to str");
     let modified_ioa = base_ioa.replace(

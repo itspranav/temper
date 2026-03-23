@@ -213,12 +213,13 @@ DEVELOPER:\n\
 \x20 await temper.upload_wasm(tenant, module_name, wasm_path) -> upload WASM module\n\
 \x20 await temper.compile_wasm(tenant, module_name, rust_source) -> compile + upload WASM\n\
 \n\
-SKILL CATALOG:\n\
-\x20 await temper.list_skills() -> available pre-built skills (name, description, entity_types)\n\
-\x20 await temper.get_skill(skill_name) -> full skill guide markdown (when to use, actions, examples)\n\
-\x20 await temper.install_skill(skill_name) -> install a skill into the current tenant\n\
-\x20 await temper.list_apps() -> alias for list_skills (backward compatible)\n\
-\x20 await temper.install_app(app_name) -> alias for install_skill (backward compatible)\n\
+APP CATALOG:\n\
+\x20 await temper.list_apps() -> available pre-built apps (name, description, entity_types)\n\
+\x20 await temper.get_app(app_name) -> full app guide markdown (when to use, actions, examples)\n\
+\x20 await temper.install_app(app_name) -> install an app into the current tenant\n\
+\x20 await temper.list_skills() -> alias for list_apps (backward compatible)\n\
+\x20 await temper.get_skill(skill_name) -> alias for get_app (backward compatible)\n\
+\x20 await temper.install_skill(skill_name) -> alias for install_app (backward compatible)\n\
 \n\
 GOVERNANCE:\n\
 \x20 await temper.get_decisions(tenant, status?) -> list decisions\n\

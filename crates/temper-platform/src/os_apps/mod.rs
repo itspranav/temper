@@ -1,11 +1,13 @@
-//! Skill Catalog — agent-installable pre-built application specs.
+//! OS App Catalog — agent-installable pre-built application specs.
 //!
-//! Skills are spec bundles (IOA TOML + CSDL + Cedar policies) loaded from
-//! the `skills/` directory at runtime. Agents discover them via
-//! `list_skills()` / `install_skill()` and developers can pre-load them
-//! with `--skill <name>`.
+//! OS apps are spec bundles (IOA TOML + CSDL + Cedar policies) loaded from
+//! the `os-apps/` directory at runtime. Agents discover them via
+//! `list_os_apps()` / `install_os_app()`.
 //!
-//! Install reuses [`crate::bootstrap::bootstrap_tenant_specs`] so every skill
+//! Backward-compatible skill aliases are preserved (`list_skills()`,
+//! `install_skill()`) to avoid breaking older callers.
+//!
+//! Install reuses [`crate::bootstrap::bootstrap_tenant_specs`] so every app
 //! goes through the same verification cascade as system specs.
 
 use std::collections::BTreeMap;
@@ -81,10 +83,10 @@ fn catalog() -> &'static RwLock<SkillCatalog> {
     CATALOG.get_or_init(|| RwLock::new(SkillCatalog::discover()))
 }
 
-/// Override the skills directory. Must be called before any catalog access.
+/// Override the OS apps directory. Must be called before any catalog access.
 ///
 /// If the catalog was already initialized, it is replaced.
-pub fn set_skills_dir(dir: PathBuf) {
+pub fn set_os_apps_dir(dir: PathBuf) {
     let new_catalog = SkillCatalog::from_dir(dir);
     match CATALOG.get() {
         Some(lock) => {
@@ -96,11 +98,11 @@ pub fn set_skills_dir(dir: PathBuf) {
     }
 }
 
-/// Re-scan the skills directory and refresh the catalog.
+/// Re-scan the OS apps directory and refresh the catalog.
 ///
-/// Call this after modifying skill files on disk to pick up changes
+/// Call this after modifying app files on disk to pick up changes
 /// without restarting the server.
-pub fn reload_skills() {
+pub fn reload_os_apps() {
     let cat = catalog().read().unwrap(); // ci-ok: infallible lock
     let dir = cat.skills_dir.clone();
     drop(cat);
@@ -108,15 +110,40 @@ pub fn reload_skills() {
     *catalog().write().unwrap() = new; // ci-ok: infallible lock
 }
 
+/// Backward-compatible alias.
+pub fn set_skills_dir(dir: PathBuf) {
+    set_os_apps_dir(dir);
+}
+
+/// Backward-compatible alias.
+pub fn reload_skills() {
+    reload_os_apps();
+}
+
 impl SkillCatalog {
     /// Discover the skills directory and scan it.
     fn discover() -> Self {
-        // Priority 1: TEMPER_SKILLS_DIR env var.
-        if let Ok(dir) = std::env::var("TEMPER_SKILLS_DIR") {
+        // Priority 1: TEMPER_OS_APPS_DIR env var.
+        if let Ok(dir) = std::env::var("TEMPER_OS_APPS_DIR") {
             // determinism-ok: env var read at startup for configuration
             let path = PathBuf::from(dir);
             if path.is_dir() {
-                tracing::info!("Loading skills from TEMPER_SKILLS_DIR: {}", path.display());
+                tracing::info!(
+                    "Loading OS apps from TEMPER_OS_APPS_DIR: {}",
+                    path.display()
+                );
+                return Self::from_dir(path);
+            }
+        }
+
+        // Priority 1b: legacy TEMPER_SKILLS_DIR env var.
+        if let Ok(dir) = std::env::var("TEMPER_SKILLS_DIR") {
+            let path = PathBuf::from(dir);
+            if path.is_dir() {
+                tracing::info!(
+                    "Loading OS apps from legacy TEMPER_SKILLS_DIR: {}",
+                    path.display()
+                );
                 return Self::from_dir(path);
             }
         }
@@ -125,25 +152,38 @@ impl SkillCatalog {
         let compile_time_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("..")
-            .join("skills");
+            .join("os-apps");
         if compile_time_dir.is_dir() {
             let canonical = compile_time_dir
                 .canonicalize()
                 .unwrap_or(compile_time_dir.clone());
-            tracing::info!("Loading skills from workspace: {}", canonical.display());
+            tracing::info!("Loading OS apps from workspace: {}", canonical.display());
             return Self::from_dir(canonical);
         }
 
-        // Priority 3: ./skills/ relative to CWD.
-        let cwd_dir = PathBuf::from("skills");
+        // Priority 3: ./os-apps/ relative to CWD.
+        let cwd_dir = PathBuf::from("os-apps");
         if cwd_dir.is_dir() {
             let canonical = cwd_dir.canonicalize().unwrap_or(cwd_dir.clone());
-            tracing::info!("Loading skills from CWD: {}", canonical.display());
+            tracing::info!("Loading OS apps from CWD: {}", canonical.display());
+            return Self::from_dir(canonical);
+        }
+
+        // Priority 4: ./skills/ (legacy fallback).
+        let legacy_cwd_dir = PathBuf::from("skills");
+        if legacy_cwd_dir.is_dir() {
+            let canonical = legacy_cwd_dir
+                .canonicalize()
+                .unwrap_or(legacy_cwd_dir.clone());
+            tracing::info!(
+                "Loading OS apps from legacy CWD skills/: {}",
+                canonical.display()
+            );
             return Self::from_dir(canonical);
         }
 
         tracing::warn!(
-            "No skills directory found. Set TEMPER_SKILLS_DIR or run from workspace root."
+            "No os-apps directory found. Set TEMPER_OS_APPS_DIR (or legacy TEMPER_SKILLS_DIR)."
         );
         Self {
             skills_dir: PathBuf::new(),
@@ -347,30 +387,30 @@ fn extract_description(guide: &str) -> Option<String> {
 
 // ── Public API ──────────────────────────────────────────────────────
 
-/// List all available skills.
-pub fn list_skills() -> Vec<SkillEntry> {
+/// List all available OS apps.
+pub fn list_os_apps() -> Vec<SkillEntry> {
     let cat = catalog().read().unwrap(); // ci-ok: infallible lock
     cat.entries.clone()
 }
 
 /// Backward-compatible alias.
-pub fn list_os_apps() -> Vec<SkillEntry> {
-    list_skills()
+pub fn list_skills() -> Vec<SkillEntry> {
+    list_os_apps()
 }
 
-/// Get the full spec bundle for a skill by name.
+/// Get the full spec bundle for an OS app by name.
 ///
 /// Reads IOA, CSDL, and Cedar files from disk on each call so changes
 /// are picked up without a rebuild.
-pub fn get_skill(name: &str) -> Option<SkillBundle> {
+pub fn get_os_app(name: &str) -> Option<SkillBundle> {
     let cat = catalog().read().unwrap(); // ci-ok: infallible lock
     let skill_dir = cat.paths.get(name)?;
     load_skill_bundle(skill_dir)
 }
 
 /// Backward-compatible alias.
-pub fn get_os_app(name: &str) -> Option<SkillBundle> {
-    get_skill(name)
+pub fn get_skill(name: &str) -> Option<SkillBundle> {
+    get_os_app(name)
 }
 
 /// Get the full skill guide markdown for a skill by name.
@@ -414,7 +454,7 @@ fn load_skill_bundle(skill_dir: &Path) -> Option<SkillBundle> {
     })
 }
 
-/// Install a skill into a tenant (workspace).
+/// Install an OS app into a tenant (workspace).
 ///
 /// Reads skill files from disk, runs the verification cascade, registers
 /// specs in the SpecRegistry, loads Cedar policies, and **persists
@@ -423,13 +463,13 @@ fn load_skill_bundle(skill_dir: &Path) -> Option<SkillBundle> {
 /// **Write ordering:** Turso first, then memory. If Turso persistence fails
 /// the operation returns an error *before* touching in-memory state, so the
 /// registry and Cedar engine stay consistent with the durable store.
-pub async fn install_skill(
+pub async fn install_os_app(
     state: &PlatformState,
     tenant: &str,
-    skill_name: &str,
+    app_name: &str,
 ) -> Result<InstallResult, String> {
-    let bundle = get_skill(skill_name)
-        .ok_or_else(|| format!("Skill '{skill_name}' not found in catalog"))?;
+    let bundle =
+        get_os_app(app_name).ok_or_else(|| format!("OS app '{app_name}' not found in catalog"))?;
     let tenant_id = TenantId::new(tenant);
 
     // Classify each bundle spec as added / updated / skipped, and compute the
@@ -458,7 +498,7 @@ pub async fn install_skill(
         // Skill installs must preserve existing tenant types.
         let merged_csdl = if let Some(existing) = registry.get_tenant(&tenant_id) {
             let incoming = parse_csdl(&bundle.csdl)
-                .map_err(|e| format!("Failed to parse CSDL for skill '{skill_name}': {e}"))?;
+                .map_err(|e| format!("Failed to parse CSDL for os-app '{app_name}': {e}"))?;
             emit_csdl_xml(&merge_csdl(&existing.csdl, &incoming))
         } else {
             bundle.csdl.clone()
@@ -517,9 +557,9 @@ pub async fn install_skill(
                 .map_err(|e| format!("Failed to persist Cedar policy: {e}"))?;
         }
         turso
-            .record_installed_app(tenant, skill_name)
+            .record_installed_app(tenant, app_name)
             .await
-            .map_err(|e| format!("Failed to record skill installation: {e}"))?;
+            .map_err(|e| format!("Failed to record os-app installation: {e}"))?;
         // Commit all specs atomically after all writes succeed.
         turso
             .commit_specs(tenant)
@@ -539,9 +579,9 @@ pub async fn install_skill(
                 .await
                 .map_err(|e| format!("Failed to persist Cedar policy: {e}"))?;
         }
-        ps.record_installed_app(tenant, skill_name)
+        ps.record_installed_app(tenant, app_name)
             .await
-            .map_err(|e| format!("Failed to record skill installation: {e}"))?;
+            .map_err(|e| format!("Failed to record os-app installation: {e}"))?;
         // Commit all specs atomically after all writes succeed.
         ps.commit_specs(tenant)
             .await
@@ -579,7 +619,7 @@ pub async fn install_skill(
             &merged_csdl,
             &specs_to_bootstrap,
             true,
-            &format!("Skill({skill_name})"),
+            &format!("OsApp({app_name})"),
             &verified_cache,
         );
     }
@@ -595,12 +635,12 @@ pub async fn install_skill(
             all_policies.push('\n');
         }
         if let Err(e) = state.server.authz.reload_policies(&all_policies) {
-            tracing::warn!("Failed to reload Cedar policies after skill install: {e}");
+            tracing::warn!("Failed to reload Cedar policies after os-app install: {e}");
         }
     }
 
     tracing::info!(
-        "Installed skill '{skill_name}' for tenant '{tenant}': \
+        "Installed os-app '{app_name}' for tenant '{tenant}': \
          added={:?} updated={:?} skipped={:?}",
         added,
         updated,
@@ -615,12 +655,12 @@ pub async fn install_skill(
 }
 
 /// Backward-compatible alias.
-pub async fn install_os_app(
+pub async fn install_skill(
     state: &PlatformState,
     tenant: &str,
-    app_name: &str,
+    skill_name: &str,
 ) -> Result<InstallResult, String> {
-    install_skill(state, tenant, app_name).await
+    install_os_app(state, tenant, skill_name).await
 }
 
 #[cfg(test)]

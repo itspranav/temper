@@ -96,7 +96,7 @@ const navItems = [
   { href: "/evolution", label: "Evolution", icon: "dna" },
   { href: "/feature-requests", label: "Feature Requests", icon: "lightbulb" },
   { href: "/integrations", label: "Integrations", icon: "box" },
-  { href: "/skills", label: "Skills", icon: "package" },
+  { href: "/os-apps", label: "Apps", icon: "package" },
 ];
 
 export default function Sidebar() {
