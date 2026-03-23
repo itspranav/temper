@@ -87,6 +87,11 @@ type = "string"
 initial = ""
 
 [[state]]
+name = "temper_api_url"
+type = "string"
+initial = "http://127.0.0.1:3000"
+
+[[state]]
 name = "sandbox_id"
 type = "string"
 initial = ""
@@ -127,8 +132,8 @@ initial = ""
 name = "Configure"
 kind = "input"
 from = ["Created"]
-params = ["system_prompt", "user_message", "model", "provider", "max_turns", "tools_enabled", "workdir", "sandbox_url"]
-hint = "Configure agent with system prompt, user message (task), model, tool settings, and optional sandbox URL."
+params = ["system_prompt", "user_message", "model", "provider", "max_turns", "tools_enabled", "workdir", "sandbox_url", "temper_api_url"]
+hint = "Configure agent with system prompt, user message (task), model, tool settings, optional sandbox URL, and optional Temper API override."
 
 [[action]]
 name = "Provision"
@@ -247,7 +252,7 @@ module = "sandbox_provisioner"
 on_failure = "Fail"
 
 [integration.config]
-temper_api_url = "http://localhost:3000"
+temper_api_url = "http://127.0.0.1:3000"
 e2b_api_key = "{secret:e2b_api_key}"
 
 [[integration]]
@@ -266,7 +271,7 @@ openrouter_api_url = "https://openrouter.ai/api/v1/chat/completions"
 anthropic_auth_mode = "auto"
 openrouter_site_url = ""
 openrouter_app_name = "temper-agent"
-temper_api_url = "http://localhost:3000"
+temper_api_url = "http://127.0.0.1:3000"
 timeout_secs = "120"
 max_response_bytes = "4194304"
 
@@ -278,7 +283,7 @@ module = "tool_runner"
 on_failure = "Fail"
 
 [integration.config]
-temper_api_url = "http://localhost:3000"
+temper_api_url = "http://127.0.0.1:3000"
 max_sync_file_bytes = "61440"
 sync_exclude = "__pycache__,node_modules,.git"
 
@@ -290,4 +295,4 @@ module = "workspace_restorer"
 on_failure = "Fail"
 
 [integration.config]
-temper_api_url = "http://localhost:3000"
+temper_api_url = "http://127.0.0.1:3000"

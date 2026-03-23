@@ -41,12 +41,9 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
             ),
         );
 
-        // Create TemperFS Workspace + File for conversation storage
-        let temper_api_url = ctx
-            .config
-            .get("temper_api_url")
-            .cloned()
-            .unwrap_or_else(|| "http://127.0.0.1:3000".to_string());
+        // Create TemperFS Workspace + File for conversation storage.
+        // Prefer per-run override from Configure state, then integration config.
+        let temper_api_url = resolve_temper_api_url(&ctx, &fields);
 
         let entity_id = ctx
             .entity_state
@@ -56,20 +53,12 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
 
         let tenant = &ctx.tenant;
 
-        let fs_result = create_conversation_storage(&ctx, &temper_api_url, tenant, entity_id);
-
-        let (workspace_id, conversation_file_id, file_manifest_id) = match fs_result {
-            Ok((ws, conv, manifest)) => (ws, conv, manifest),
-            Err(e) => {
-                ctx.log(
-                    "warn",
-                    &format!(
-                        "sandbox_provisioner: TemperFS setup failed: {e}, falling back to inline"
-                    ),
-                );
-                (String::new(), String::new(), String::new())
-            }
-        };
+        let (workspace_id, conversation_file_id, file_manifest_id) =
+            create_conversation_storage(&ctx, &temper_api_url, tenant, entity_id).map_err(|e| {
+                format!(
+                    "TemperFS bootstrap failed at {temper_api_url}/tdata (tenant={tenant}, agent={entity_id}): {e}. Ensure os-app 'temper-fs' is installed for this tenant and temper_api_url is correct."
+                )
+            })?;
 
         // Return sandbox + TemperFS details to the state machine
         set_success_result(
@@ -95,6 +84,21 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
 struct SandboxResult {
     sandbox_url: String,
     sandbox_id: String,
+}
+
+fn resolve_temper_api_url(ctx: &Context, fields: &Value) -> String {
+    fields
+        .get("temper_api_url")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            ctx.config
+                .get("temper_api_url")
+                .filter(|s| !s.is_empty())
+                .cloned()
+        })
+        .unwrap_or_else(|| "http://127.0.0.1:3000".to_string())
 }
 
 /// Provision a sandbox. Priority order:

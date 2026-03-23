@@ -125,11 +125,7 @@ anthropic_api_key (or api_key) for anthropic, openrouter_api_key (or api_key) fo
             .get("conversation_file_id")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let temper_api_url = ctx
-            .config
-            .get("temper_api_url")
-            .cloned()
-            .unwrap_or_else(|| "http://127.0.0.1:3000".to_string());
+        let temper_api_url = resolve_temper_api_url(&ctx, &fields);
         let tenant = &ctx.tenant;
 
         // Read conversation — from TemperFS if file_id set, else inline state.
@@ -983,4 +979,19 @@ fn write_conversation_to_temperfs(
             &resp.body[..resp.body.len().min(200)]
         ))
     }
+}
+
+fn resolve_temper_api_url(ctx: &Context, fields: &Value) -> String {
+    fields
+        .get("temper_api_url")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            ctx.config
+                .get("temper_api_url")
+                .filter(|s| !s.is_empty())
+                .cloned()
+        })
+        .unwrap_or_else(|| "http://127.0.0.1:3000".to_string())
 }

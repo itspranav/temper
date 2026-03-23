@@ -289,6 +289,21 @@ async fn test_install_skill_agent_orchestration_registers_entities() {
 }
 
 #[tokio::test]
+async fn test_install_temper_agent_auto_installs_temper_fs() {
+    let state = PlatformState::new(None);
+    let result = install_os_app(&state, "test-agent", "temper-agent").await;
+    assert!(result.is_ok(), "install failed: {:?}", result.err());
+
+    let registry = state.registry.read().unwrap();
+    let tenant = TenantId::new("test-agent");
+    assert!(registry.get_table(&tenant, "TemperAgent").is_some());
+    assert!(registry.get_table(&tenant, "Workspace").is_some());
+    assert!(registry.get_table(&tenant, "File").is_some());
+    assert!(registry.get_table(&tenant, "Directory").is_some());
+    assert!(registry.get_table(&tenant, "FileVersion").is_some());
+}
+
+#[tokio::test]
 async fn test_install_skill_nonexistent_returns_error() {
     let state = PlatformState::new(None);
     let result = install_skill(&state, "test", "nonexistent").await;
