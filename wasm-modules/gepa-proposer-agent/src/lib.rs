@@ -18,6 +18,8 @@ temper_module! {
             .or_else(|| ctx.trigger_params.get("SpecSource").and_then(Value::as_str))
             .ok_or("missing SpecSource in EvolutionRun state/trigger params")?;
 
+        let dataset_missing_capabilities = extract_dataset_missing_capabilities(&dataset_json);
+
         let skill_name = fields
             .get("SkillName")
             .and_then(Value::as_str)
@@ -205,12 +207,65 @@ Return valid compact JSON in one line with non-empty MutatedSpecSource and Mutat
                             .unwrap_or_default();
 
                         match extract_mutation_payload(result_text) {
-                            Ok((mutated_spec, summary)) => {
+                            Ok(payload) => {
+                                let gate = validate_optimizer_only_spec_mutation(
+                                    spec_source,
+                                    &payload.mutated_spec_source,
+                                );
+                                if gate.allowed {
+                                    let mut out = json!({
+                                        "MutatedSpecSource": payload.mutated_spec_source,
+                                        "MutationSummary": payload.mutation_summary,
+                                        "ProposerType": "temper_agent",
+                                        "ProposerAgentId": created_agent_id,
+                                    });
+                                    if !payload.unmet_intent_suggestions.is_empty() {
+                                        out["UnmetIntentSuggestions"] = Value::Array(
+                                            payload
+                                                .unmet_intent_suggestions
+                                                .iter()
+                                                .map(|s| Value::String(s.clone()))
+                                                .collect(),
+                                        );
+                                    }
+                                    return Ok(out);
+                                }
+
+                                let gate_reasons = gate.reasons();
+                                let handoff = collect_unmet_intent_handoff(
+                                    &dataset_missing_capabilities,
+                                    &payload.unmet_intent_suggestions,
+                                    &gate,
+                                );
+                                let report_outcomes = report_unmet_intents(
+                                    &ctx,
+                                    &base_url,
+                                    &headers,
+                                    skill_name,
+                                    entity_type,
+                                    &handoff,
+                                    &gate_reasons,
+                                );
+
+                                let summary = format!(
+                                    "Optimizer-only JEPA gate rejected structural mutation ({}). \
+Forwarded {} unmet-intent handoff items; returning no-op mutation for JEPA.",
+                                    gate_reasons.join("; "),
+                                    handoff.len()
+                                );
+                                ctx.log("warn", &summary);
                                 return Ok(json!({
-                                    "MutatedSpecSource": mutated_spec,
+                                    "MutatedSpecSource": spec_source,
                                     "MutationSummary": summary,
                                     "ProposerType": "temper_agent",
                                     "ProposerAgentId": created_agent_id,
+                                    "RequiresUnmetIntentLoop": true,
+                                    "UnmetIntentHandoff": handoff,
+                                    "UnmetIntentReport": report_outcomes,
+                                    "OptimizerOnlyGate": {
+                                        "blocked": true,
+                                        "reasons": gate_reasons,
+                                    },
                                 }));
                             }
                             Err(err) => {
@@ -331,7 +386,8 @@ fn extract_entity_id(value: &Value) -> Option<String> {
 
 fn default_system_prompt() -> String {
     "You are the GEPA evolution agent operating inside TemperAgent. \
-Return only compact JSON with keys MutatedSpecSource and MutationSummary. \
+JEPA in this run is optimizer-only: never introduce or remove entities, states, or actions. \
+Return only compact JSON with keys MutatedSpecSource and MutationSummary (optional UnmetIntentSuggestions). \
 Do not include markdown fences. Do not ask for permissions. \
 Do not edit files; reason over the provided spec text."
         .to_string()
@@ -358,10 +414,11 @@ Task:\n\
 2) Propose the minimal IOA mutation that improves workflow completion while preserving successful patterns.\n\
 3) Triplets with preserve=true MUST remain valid after mutation.\n\
 4) For failed/partial workflows, apply the feedback suggestion exactly where possible.\n\
-5) Check patterns.missing_capabilities and add missing [[action]] sections or transitions as needed.\n\
-6) Keep schema/invariants coherent and avoid unrelated changes.\n\
+5) JEPA optimizer-only constraint: DO NOT add/remove/rename entities, states, or actions.\n\
+6) If patterns.missing_capabilities indicates net-new capability is needed, list it in UnmetIntentSuggestions instead of adding it to the spec.\n\
+7) Keep schema/invariants coherent and avoid unrelated changes.\n\
 Output strict JSON only:\n\
-{{\"MutatedSpecSource\":\"...full spec...\",\"MutationSummary\":\"...\"}}"
+{{\"MutatedSpecSource\":\"...full spec...\",\"MutationSummary\":\"...\",\"UnmetIntentSuggestions\":[\"...\"]}}"
     )
 }
 
@@ -400,7 +457,77 @@ fn build_agent_id(
     base.chars().take(96).collect()
 }
 
-fn extract_mutation_payload(result_text: &str) -> Result<(String, String), String> {
+#[derive(Debug, Clone)]
+struct MutationPayload {
+    mutated_spec_source: String,
+    mutation_summary: String,
+    unmet_intent_suggestions: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct SpecShape {
+    automaton_name: Option<String>,
+    states: std::collections::BTreeSet<String>,
+    actions: std::collections::BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SpecShapeDelta {
+    added_states: Vec<String>,
+    removed_states: Vec<String>,
+    added_actions: Vec<String>,
+    removed_actions: Vec<String>,
+    from_automaton_name: Option<String>,
+    to_automaton_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct OptimizerOnlyGate {
+    allowed: bool,
+    delta: SpecShapeDelta,
+}
+
+impl OptimizerOnlyGate {
+    fn reasons(&self) -> Vec<String> {
+        let mut reasons = Vec::new();
+        if self.delta.from_automaton_name != self.delta.to_automaton_name {
+            reasons.push(format!(
+                "entity changed from {:?} to {:?}",
+                self.delta.from_automaton_name, self.delta.to_automaton_name
+            ));
+        }
+        if !self.delta.added_states.is_empty() {
+            reasons.push(format!(
+                "added states: {}",
+                self.delta.added_states.join(", ")
+            ));
+        }
+        if !self.delta.removed_states.is_empty() {
+            reasons.push(format!(
+                "removed states: {}",
+                self.delta.removed_states.join(", ")
+            ));
+        }
+        if !self.delta.added_actions.is_empty() {
+            reasons.push(format!(
+                "added actions: {}",
+                self.delta.added_actions.join(", ")
+            ));
+        }
+        if !self.delta.removed_actions.is_empty() {
+            reasons.push(format!(
+                "removed actions: {}",
+                self.delta.removed_actions.join(", ")
+            ));
+        }
+        if reasons.is_empty() {
+            reasons.push("unknown structural policy violation".to_string());
+        }
+        reasons
+    }
+}
+
+fn extract_mutation_payload(result_text: &str) -> Result<MutationPayload, String> {
     if result_text.trim().is_empty() {
         return Err("TemperAgent completed with empty result".to_string());
     }
@@ -422,7 +549,7 @@ fn extract_mutation_payload(result_text: &str) -> Result<(String, String), Strin
     Err("TemperAgent result missing MutatedSpecSource JSON payload".to_string())
 }
 
-fn extract_from_json_value(v: &Value) -> Option<(String, String)> {
+fn extract_from_json_value(v: &Value) -> Option<MutationPayload> {
     let spec = find_first_key(
         v,
         &[
@@ -449,7 +576,297 @@ fn extract_from_json_value(v: &Value) -> Option<(String, String)> {
     .and_then(|s| s.as_str().map(str::to_string))
     .unwrap_or_else(|| "Mutation proposed by TemperAgent".to_string());
 
-    Some((spec, summary))
+    let unmet_intent_suggestions = find_first_key(
+        v,
+        &[
+            "UnmetIntentSuggestions",
+            "unmet_intent_suggestions",
+            "missing_capabilities_handoff",
+            "unmet_handoff",
+        ],
+    )
+    .map(parse_string_vec)
+    .unwrap_or_default();
+
+    Some(MutationPayload {
+        mutated_spec_source: spec,
+        mutation_summary: summary,
+        unmet_intent_suggestions,
+    })
+}
+
+fn parse_string_vec(value: Value) -> Vec<String> {
+    match value {
+        Value::Array(items) => items
+            .into_iter()
+            .filter_map(|v| match v {
+                Value::String(s) => Some(s),
+                Value::Number(n) => Some(n.to_string()),
+                Value::Bool(b) => Some(b.to_string()),
+                _ => None,
+            })
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+        Value::String(s) => s
+            .split(',')
+            .map(|p| p.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn extract_dataset_missing_capabilities(dataset_json: &str) -> Vec<String> {
+    let parsed = serde_json::from_str::<Value>(dataset_json).unwrap_or(Value::Null);
+    let missing = parsed
+        .get("patterns")
+        .and_then(|p| p.get("missing_capabilities"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let mut out = parse_string_vec(missing);
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn validate_optimizer_only_spec_mutation(base_spec: &str, mutated_spec: &str) -> OptimizerOnlyGate {
+    let base = parse_spec_shape(base_spec);
+    let mutated = parse_spec_shape(mutated_spec);
+
+    let delta = SpecShapeDelta {
+        added_states: set_difference(&mutated.states, &base.states),
+        removed_states: set_difference(&base.states, &mutated.states),
+        added_actions: set_difference(&mutated.actions, &base.actions),
+        removed_actions: set_difference(&base.actions, &mutated.actions),
+        from_automaton_name: base.automaton_name.clone(),
+        to_automaton_name: mutated.automaton_name.clone(),
+    };
+
+    let allowed = delta.from_automaton_name == delta.to_automaton_name
+        && delta.added_states.is_empty()
+        && delta.removed_states.is_empty()
+        && delta.added_actions.is_empty()
+        && delta.removed_actions.is_empty();
+
+    OptimizerOnlyGate { allowed, delta }
+}
+
+fn parse_spec_shape(spec_source: &str) -> SpecShape {
+    let lines: Vec<&str> = spec_source.lines().collect();
+    let mut automaton_name = None;
+    let mut states = std::collections::BTreeSet::new();
+    let mut actions = std::collections::BTreeSet::new();
+
+    let mut i = 0usize;
+    while i < lines.len() {
+        let line = lines[i].trim();
+        if line == "[automaton]" {
+            i += 1;
+            while i < lines.len() {
+                let cur = lines[i].trim();
+                if cur.starts_with('[') {
+                    break;
+                }
+                if automaton_name.is_none() && cur.starts_with("name") {
+                    automaton_name = extract_first_quoted(cur);
+                }
+                if cur.starts_with("states") {
+                    let mut buf = cur.to_string();
+                    while !buf.contains(']') && i + 1 < lines.len() {
+                        i += 1;
+                        buf.push_str(lines[i].trim());
+                    }
+                    for s in extract_quoted_values(&buf) {
+                        states.insert(s);
+                    }
+                }
+                i += 1;
+            }
+            break;
+        }
+        i += 1;
+    }
+
+    let mut j = 0usize;
+    while j < lines.len() {
+        let line = lines[j].trim();
+        if line == "[[action]]" {
+            j += 1;
+            while j < lines.len() {
+                let cur = lines[j].trim();
+                if cur.starts_with('[') {
+                    break;
+                }
+                if cur.starts_with("name") {
+                    if let Some(name) = extract_first_quoted(cur) {
+                        actions.insert(name);
+                    }
+                    break;
+                }
+                j += 1;
+            }
+            continue;
+        }
+        j += 1;
+    }
+
+    SpecShape {
+        automaton_name,
+        states,
+        actions,
+    }
+}
+
+fn extract_first_quoted(line: &str) -> Option<String> {
+    let mut start = None;
+    for (idx, ch) in line.char_indices() {
+        if ch == '"' {
+            if let Some(s) = start {
+                if idx > s {
+                    return Some(line[s + 1..idx].to_string());
+                }
+                start = None;
+            } else {
+                start = Some(idx);
+            }
+        }
+    }
+    None
+}
+
+fn extract_quoted_values(raw: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut start = None;
+    for (idx, ch) in raw.char_indices() {
+        if ch == '"' {
+            if let Some(s) = start {
+                if idx > s + 1 {
+                    values.push(raw[s + 1..idx].to_string());
+                }
+                start = None;
+            } else {
+                start = Some(idx);
+            }
+        }
+    }
+    values
+}
+
+fn set_difference(
+    left: &std::collections::BTreeSet<String>,
+    right: &std::collections::BTreeSet<String>,
+) -> Vec<String> {
+    left.difference(right).cloned().collect()
+}
+
+fn collect_unmet_intent_handoff(
+    dataset_missing: &[String],
+    payload_suggestions: &[String],
+    gate: &OptimizerOnlyGate,
+) -> Vec<String> {
+    let mut set = std::collections::BTreeSet::new();
+    for item in dataset_missing {
+        let trimmed = item.trim();
+        if !trimmed.is_empty() {
+            set.insert(trimmed.to_string());
+        }
+    }
+    for item in payload_suggestions {
+        let trimmed = item.trim();
+        if !trimmed.is_empty() {
+            set.insert(trimmed.to_string());
+        }
+    }
+    for action in &gate.delta.added_actions {
+        set.insert(format!("Add action '{action}'"));
+    }
+    for state in &gate.delta.added_states {
+        set.insert(format!("Add state '{state}'"));
+    }
+    if gate.delta.from_automaton_name != gate.delta.to_automaton_name
+        && let Some(name) = gate.delta.to_automaton_name.as_ref()
+    {
+        set.insert(format!("Add entity '{name}'"));
+    }
+    set.into_iter().collect()
+}
+
+fn report_unmet_intents(
+    ctx: &Context,
+    base_url: &str,
+    headers: &[(String, String)],
+    skill_name: &str,
+    entity_type: &str,
+    intents: &[String],
+    gate_reasons: &[String],
+) -> Value {
+    if intents.is_empty() {
+        return json!({
+            "attempted": 0,
+            "reported": 0,
+            "failed": 0,
+            "details": [],
+        });
+    }
+
+    let url = format!("{base_url}/api/evolution/trajectories/unmet");
+    let mut reported = 0usize;
+    let mut failed = 0usize;
+    let mut details = Vec::new();
+    let reason = format!(
+        "JEPA optimizer-only gate blocked structural mutation: {}",
+        gate_reasons.join("; ")
+    );
+
+    for intent in intents {
+        let payload = json!({
+            "tenant": ctx.tenant,
+            "entity_type": entity_type,
+            "action": intent,
+            "intent": intent,
+            "source": "platform",
+            "error": reason,
+            "request_body": {
+                "skill_name": skill_name,
+                "target_entity_type": entity_type,
+                "origin": "gepa-proposer-agent",
+            },
+        });
+        match ctx.http_call("POST", &url, headers, &payload.to_string()) {
+            Ok(resp) if (200..300).contains(&resp.status) => {
+                reported += 1;
+                details.push(json!({
+                    "intent": intent,
+                    "status": "reported",
+                }));
+            }
+            Ok(resp) => {
+                failed += 1;
+                details.push(json!({
+                    "intent": intent,
+                    "status": "failed",
+                    "http_status": resp.status,
+                    "body": resp.body,
+                }));
+            }
+            Err(err) => {
+                failed += 1;
+                details.push(json!({
+                    "intent": intent,
+                    "status": "failed",
+                    "error": err,
+                }));
+            }
+        }
+    }
+
+    json!({
+        "attempted": intents.len(),
+        "reported": reported,
+        "failed": failed,
+        "details": details,
+    })
 }
 
 fn find_first_key(root: &Value, keys: &[&str]) -> Option<Value> {
@@ -510,6 +927,68 @@ fn extract_markdown_code_blocks(text: &str) -> Vec<String> {
     }
 
     blocks
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BASE_SPEC: &str = r#"
+[automaton]
+name = "Issue"
+states = ["Open", "Assigned", "Closed"]
+initial = "Open"
+
+[[action]]
+name = "Assign"
+kind = "input"
+from = ["Open"]
+to = "Assigned"
+
+[[action]]
+name = "Close"
+kind = "input"
+from = ["Assigned"]
+to = "Closed"
+"#;
+
+    #[test]
+    fn optimizer_gate_allows_non_structural_change() {
+        let mutated = BASE_SPEC.replace("to = \"Assigned\"", "to = \"Open\"");
+        let gate = validate_optimizer_only_spec_mutation(BASE_SPEC, &mutated);
+        assert!(gate.allowed);
+    }
+
+    #[test]
+    fn optimizer_gate_blocks_added_action() {
+        let mutated = format!(
+            "{BASE_SPEC}\n[[action]]\nname = \"Reassign\"\nkind = \"input\"\nfrom = [\"Assigned\"]\nto = \"Assigned\"\n"
+        );
+        let gate = validate_optimizer_only_spec_mutation(BASE_SPEC, &mutated);
+        assert!(!gate.allowed);
+        assert_eq!(gate.delta.added_actions, vec!["Reassign".to_string()]);
+    }
+
+    #[test]
+    fn optimizer_gate_blocks_added_state() {
+        let mutated = BASE_SPEC.replace(
+            "states = [\"Open\", \"Assigned\", \"Closed\"]",
+            "states = [\"Open\", \"Assigned\", \"Closed\", \"Critical\"]",
+        );
+        let gate = validate_optimizer_only_spec_mutation(BASE_SPEC, &mutated);
+        assert!(!gate.allowed);
+        assert_eq!(gate.delta.added_states, vec!["Critical".to_string()]);
+    }
+
+    #[test]
+    fn dataset_missing_capabilities_extracts_array() {
+        let raw = r#"{"patterns":{"missing_capabilities":["Reassign","PromoteToCritical"]}}"#;
+        let out = extract_dataset_missing_capabilities(raw);
+        assert_eq!(
+            out,
+            vec!["PromoteToCritical".to_string(), "Reassign".to_string()]
+        );
+    }
 }
 
 fn sleep_tick(
