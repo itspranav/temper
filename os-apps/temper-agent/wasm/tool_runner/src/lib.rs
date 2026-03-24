@@ -82,12 +82,8 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
             .get("conversation_file_id")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        // Temper API URL: read from integration config, default to localhost
-        let temper_api_url = ctx
-            .config
-            .get("temper_api_url")
-            .cloned()
-            .unwrap_or_else(|| "http://127.0.0.1:3000".to_string());
+        // Temper API URL: prefer Configure override in state, then integration config.
+        let temper_api_url = resolve_temper_api_url(&ctx, &fields);
         let tenant = &ctx.tenant;
 
         // Read current conversation and append tool results
@@ -1183,4 +1179,19 @@ fn sync_files_to_temperfs(
         .map_err(|e| format!("manifest write failed: {e}"))?;
 
     Ok(synced_count)
+}
+
+fn resolve_temper_api_url(ctx: &Context, fields: &Value) -> String {
+    fields
+        .get("temper_api_url")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            ctx.config
+                .get("temper_api_url")
+                .filter(|s| !s.is_empty())
+                .cloned()
+        })
+        .unwrap_or_else(|| "http://127.0.0.1:3000".to_string())
 }

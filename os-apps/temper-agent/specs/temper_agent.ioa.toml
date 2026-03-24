@@ -87,6 +87,11 @@ type = "string"
 initial = ""
 
 [[state]]
+name = "temper_api_url"
+type = "string"
+initial = "http://127.0.0.1:3000"
+
+[[state]]
 name = "sandbox_id"
 type = "string"
 initial = ""
@@ -127,8 +132,8 @@ initial = ""
 name = "Configure"
 kind = "input"
 from = ["Created"]
-params = ["system_prompt", "user_message", "model", "provider", "max_turns", "tools_enabled", "workdir", "sandbox_url"]
-hint = "Configure agent with system prompt, user message (task), model, tool settings, and optional sandbox URL."
+params = ["system_prompt", "user_message", "model", "provider", "max_turns", "tools_enabled", "workdir", "sandbox_url", "temper_api_url"]
+hint = "Configure agent with system prompt, user message (task), model, tool settings, optional sandbox URL, and optional Temper API override."
 
 [[action]]
 name = "Provision"
