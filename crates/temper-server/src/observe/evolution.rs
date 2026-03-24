@@ -7,7 +7,8 @@ mod records_list;
 mod trajectories;
 
 pub(crate) use operations::{
-    handle_evolution_stream, handle_feature_requests, handle_sentinel_check, handle_unmet_intents,
+    handle_evolution_analyze, handle_evolution_materialize, handle_evolution_stream,
+    handle_feature_requests, handle_intent_evidence, handle_sentinel_check, handle_unmet_intents,
     handle_update_feature_request,
 };
 pub(crate) use records_detail::{handle_decide, handle_get_evolution_record};

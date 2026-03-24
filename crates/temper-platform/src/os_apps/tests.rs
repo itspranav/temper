@@ -1,4 +1,7 @@
 use super::*;
+use std::collections::HashMap;
+
+use temper_authz::SecurityContext;
 use temper_runtime::tenant::TenantId;
 use temper_spec::automaton;
 use temper_spec::csdl::parse_csdl;
@@ -102,7 +105,7 @@ fn test_agent_orchestration_specs_verify() {
 #[test]
 fn test_list_skills_returns_catalog() {
     let apps = list_skills();
-    // Should find at least the 5 spec-bearing skills.
+    // Should find the built-in spec-bearing skills.
     let names: Vec<&str> = apps.iter().map(|e| e.name.as_str()).collect();
     assert!(
         names.contains(&"project-management"),
@@ -118,6 +121,10 @@ fn test_list_skills_returns_catalog() {
         "missing temper-agent: {names:?}"
     );
     assert!(names.contains(&"evolution"), "missing evolution: {names:?}");
+    assert!(
+        names.contains(&"intent-discovery"),
+        "missing intent-discovery: {names:?}"
+    );
 
     // Check entity types for known skills.
     let pm = apps
@@ -141,6 +148,47 @@ fn test_list_skills_returns_catalog() {
         evo.skill_guide.is_some(),
         "evolution should have a skill guide"
     );
+}
+
+#[test]
+fn test_intent_discovery_specs_parse() {
+    let bundle = get_skill("intent-discovery").expect("intent-discovery skill not found");
+    for (entity_type, ioa_source) in &bundle.specs {
+        let result = automaton::parse_automaton(ioa_source);
+        assert!(
+            result.is_ok(),
+            "IntentDiscovery spec {} failed to parse: {:?}",
+            entity_type,
+            result.err()
+        );
+    }
+}
+
+#[test]
+fn test_intent_discovery_csdl_parses() {
+    let bundle = get_skill("intent-discovery").expect("intent-discovery skill not found");
+    let result = parse_csdl(&bundle.csdl);
+    assert!(
+        result.is_ok(),
+        "IntentDiscovery CSDL failed to parse: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn test_intent_discovery_specs_verify() {
+    let bundle = get_skill("intent-discovery").expect("intent-discovery skill not found");
+    for (entity_type, ioa_source) in &bundle.specs {
+        let cascade = VerificationCascade::from_ioa(ioa_source)
+            .with_sim_seeds(3)
+            .with_prop_test_cases(40);
+        let result = cascade.run();
+        assert!(
+            result.all_passed,
+            "IntentDiscovery spec {} failed verification",
+            entity_type
+        );
+    }
 }
 
 #[test]
@@ -220,6 +268,16 @@ fn test_get_skill_agent_orchestration() {
 #[test]
 fn test_get_skill_temper_agent() {
     let bundle = get_skill("temper-agent");
+    assert!(bundle.is_some());
+    let bundle = bundle.unwrap();
+    assert_eq!(bundle.specs.len(), 1);
+    assert!(!bundle.csdl.is_empty());
+    assert!(!bundle.cedar_policies.is_empty());
+}
+
+#[test]
+fn test_get_skill_intent_discovery() {
+    let bundle = get_skill("intent-discovery");
     assert!(bundle.is_some());
     let bundle = bundle.unwrap();
     assert_eq!(bundle.specs.len(), 1);
@@ -379,6 +437,53 @@ async fn test_install_multiple_skills_merges_and_is_idempotent() {
             "Organization".to_string(),
             "Project".to_string(),
         ]
+    );
+}
+
+#[tokio::test]
+async fn test_install_skill_activates_tenant_cedar_policies() {
+    let state = PlatformState::new(None);
+
+    install_skill(&state, "test-authz", "project-management")
+        .await
+        .expect("install project-management");
+
+    let admin_ctx = SecurityContext::from_headers(&[
+        ("X-Temper-Principal-Id".to_string(), "admin-1".to_string()),
+        ("X-Temper-Principal-Kind".to_string(), "admin".to_string()),
+    ]);
+    let mut issue_attrs = HashMap::new();
+    issue_attrs.insert("id".to_string(), serde_json::json!("issue-1"));
+
+    let admin_decision = state.server.authz.authorize_for_tenant(
+        "test-authz",
+        &admin_ctx,
+        "MoveToTodo",
+        "Issue",
+        &issue_attrs,
+    );
+    assert!(
+        admin_decision.is_allowed(),
+        "expected admin Issue.MoveToTodo to be allowed after skill install: {admin_decision:?}"
+    );
+
+    install_skill(&state, "test-authz", "temper-agent")
+        .await
+        .expect("install temper-agent");
+
+    let mut agent_attrs = HashMap::new();
+    agent_attrs.insert("id".to_string(), serde_json::json!("agent-1"));
+
+    let configure_decision = state.server.authz.authorize_for_tenant(
+        "test-authz",
+        &admin_ctx,
+        "Configure",
+        "TemperAgent",
+        &agent_attrs,
+    );
+    assert!(
+        configure_decision.is_allowed(),
+        "expected admin TemperAgent.Configure to be allowed after skill install: {configure_decision:?}"
     );
 }
 

@@ -42,11 +42,7 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
         );
 
         // Create TemperFS Workspace + File for conversation storage
-        let temper_api_url = ctx
-            .config
-            .get("temper_api_url")
-            .cloned()
-            .unwrap_or_else(|| "http://127.0.0.1:3000".to_string());
+        let temper_api_url = temper_api_url(&ctx);
 
         let entity_id = ctx
             .entity_state
@@ -95,6 +91,13 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
 struct SandboxResult {
     sandbox_url: String,
     sandbox_id: String,
+}
+
+fn temper_api_url(ctx: &Context) -> String {
+    match ctx.config.get("temper_api_url").map(String::as_str) {
+        Some(value) if !value.trim().is_empty() && !value.contains("{secret:") => value.to_string(),
+        _ => "http://127.0.0.1:3000".to_string(),
+    }
 }
 
 /// Provision a sandbox. Priority order:

@@ -804,6 +804,33 @@ fn normalize_pythonish_json(input: &str) -> String {
     out
 }
 
+/// Run the MCP server on stdio with JSON-RPC over newline-delimited JSON.
+pub async fn run_stdio_server(config: McpConfig) -> Result<()> {
+    let mut ctx = RuntimeContext::from_config(&config)?;
+    let stdin = BufReader::new(io::stdin());
+    let mut lines = stdin.lines();
+    let mut stdout = io::stdout();
+
+    while let Some(line) = lines.next_line().await? {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        if let Some(response) = dispatch_json_line(&mut ctx, line).await {
+            let encoded = serde_json::to_string(&response)?;
+            stdout.write_all(encoded.as_bytes()).await?;
+            stdout.write_all(b"\n").await?;
+            stdout.flush().await?;
+        }
+    }
+
+    // Finalize and upload OTS trajectory on session close.
+    ctx.finalize_trajectory().await;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -861,31 +888,4 @@ await temper.create("tenant-b", "Task", {"Title": "x"})
             "expected tenant-b/Task metadata"
         );
     }
-}
-
-/// Run the MCP server on stdio with JSON-RPC over newline-delimited JSON.
-pub async fn run_stdio_server(config: McpConfig) -> Result<()> {
-    let mut ctx = RuntimeContext::from_config(&config)?;
-    let stdin = BufReader::new(io::stdin());
-    let mut lines = stdin.lines();
-    let mut stdout = io::stdout();
-
-    while let Some(line) = lines.next_line().await? {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        if let Some(response) = dispatch_json_line(&mut ctx, line).await {
-            let encoded = serde_json::to_string(&response)?;
-            stdout.write_all(encoded.as_bytes()).await?;
-            stdout.write_all(b"\n").await?;
-            stdout.flush().await?;
-        }
-    }
-
-    // Finalize and upload OTS trajectory on session close.
-    ctx.finalize_trajectory().await;
-
-    Ok(())
 }

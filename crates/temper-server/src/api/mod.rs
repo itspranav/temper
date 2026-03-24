@@ -30,6 +30,8 @@ use crate::state::ServerState;
 /// - POST   /api/evolution/records/{id}/decide          -> developer decision on record
 /// - POST   /api/evolution/trajectories/unmet           -> report unmet user intent
 /// - POST   /api/evolution/sentinel/check               -> trigger sentinel health check
+/// - POST   /api/evolution/analyze                      -> run IntentDiscovery loop
+/// - POST   /api/evolution/materialize                  -> persist O/P/A/I + PM issues
 pub fn build_api_router() -> Router<ServerState> {
     Router::new()
         .route(
@@ -56,6 +58,14 @@ pub fn build_api_router() -> Router<ServerState> {
         .route(
             "/evolution/sentinel/check",
             post(crate::observe::evolution::handle_sentinel_check),
+        )
+        .route(
+            "/evolution/analyze",
+            post(crate::observe::evolution::handle_evolution_analyze),
+        )
+        .route(
+            "/evolution/materialize",
+            post(crate::observe::evolution::handle_evolution_materialize),
         )
         // OTS trajectory endpoints (full agent execution traces for GEPA)
         .route(
@@ -198,9 +208,43 @@ async fn handle_policy_suggestions(
     if let Some(resp) = require_policy_auth(&state, &headers, &tenant).await {
         return resp;
     }
-    let suggestions = match state.suggestion_engine.read() {
-        Ok(engine) => engine.suggestions(),
-        Err(_) => vec![],
+    let suggestions = if let Some(turso) = state.persistent_store_for_tenant(&tenant).await {
+        match turso.load_policy_denial_patterns(&tenant).await {
+            Ok(rows) if !rows.is_empty() => {
+                let mut engine = crate::state::policy_suggestions::PolicySuggestionEngine::new();
+                for row in rows {
+                    let distinct_resource_ids =
+                        serde_json::from_str::<Vec<String>>(&row.distinct_resource_ids_json)
+                            .unwrap_or_default();
+                    engine.record_denial_snapshot(
+                        row.agent_type.as_deref(),
+                        &row.action,
+                        &row.resource_type,
+                        row.count.max(0) as usize,
+                        &row.first_seen,
+                        &row.last_seen,
+                        distinct_resource_ids,
+                    );
+                }
+                engine.suggestions()
+            }
+            Ok(_) => match state.suggestion_engine.read() {
+                Ok(engine) => engine.suggestions(),
+                Err(_) => vec![],
+            },
+            Err(e) => {
+                tracing::warn!(error = %e, tenant, "failed to load persisted policy suggestions");
+                match state.suggestion_engine.read() {
+                    Ok(engine) => engine.suggestions(),
+                    Err(_) => vec![],
+                }
+            }
+        }
+    } else {
+        match state.suggestion_engine.read() {
+            Ok(engine) => engine.suggestions(),
+            Err(_) => vec![],
+        }
     };
     (
         StatusCode::OK,

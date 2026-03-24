@@ -160,8 +160,14 @@ pub(crate) async fn handle_unmet_intent(
         success: false,
         from_status: None,
         to_status: None,
-        agent_id: None,
-        session_id: None,
+        agent_id: body
+            .get("agent_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        session_id: body
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
         authz_denied: None,
         denied_resource: None,
         denied_module: None,
@@ -182,7 +188,11 @@ pub(crate) async fn handle_unmet_intent(
         spec_governed: None,
         agent_type: None,
         request_body: body.get("request_body").cloned(),
-        intent: Some(intent.to_string()),
+        intent: body
+            .get("intent")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .or_else(|| Some(intent.to_string())),
     };
     state
         .persist_trajectory_entry(&entry)

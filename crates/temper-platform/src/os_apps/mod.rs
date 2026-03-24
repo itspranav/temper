@@ -320,6 +320,22 @@ fn find_csdl(skill_dir: &Path) -> Option<PathBuf> {
     if specs.exists() {
         return Some(specs);
     }
+    // Then a dedicated csdl/ directory.
+    let csdl_dir = skill_dir.join("csdl");
+    if csdl_dir.is_dir() {
+        let Ok(entries) = std::fs::read_dir(&csdl_dir) else {
+            return None;
+        };
+        let mut files: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".csdl.xml"))
+            .map(|e| e.path())
+            .collect();
+        files.sort();
+        if let Some(first) = files.into_iter().next() {
+            return Some(first);
+        }
+    }
     None
 }
 
@@ -626,16 +642,19 @@ pub async fn install_os_app(
 
     // ── Step 3: Load Cedar policies into memory. ────────────────────
     if let Some(ref policy_text) = combined_policy {
-        let mut policies = state.server.tenant_policies.write().unwrap(); // ci-ok: infallible lock
-        policies.insert(tenant.to_string(), policy_text.clone());
-        // Rebuild the authorization engine with all policies.
-        let mut all_policies = String::new();
-        for text in policies.values() {
-            all_policies.push_str(text);
-            all_policies.push('\n');
-        }
-        if let Err(e) = state.server.authz.reload_policies(&all_policies) {
-            tracing::warn!("Failed to reload Cedar policies after os-app install: {e}");
+        if let Err(e) = state
+            .server
+            .authz
+            .reload_tenant_policies(tenant, policy_text)
+        {
+            tracing::warn!(
+                tenant,
+                error = %e,
+                "Failed to reload tenant Cedar policies after os-app install"
+            );
+        } else {
+            let mut policies = state.server.tenant_policies.write().unwrap(); // ci-ok: infallible lock
+            policies.insert(tenant.to_string(), policy_text.clone());
         }
     }
 
