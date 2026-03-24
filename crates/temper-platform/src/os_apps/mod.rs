@@ -683,4 +683,4 @@ pub async fn install_skill(
 }
 
 #[cfg(test)]
-mod tests;
+mod mod_test;

@@ -217,13 +217,15 @@ async fn handle_policy_suggestions(
                         serde_json::from_str::<Vec<String>>(&row.distinct_resource_ids_json)
                             .unwrap_or_default();
                     engine.record_denial_snapshot(
-                        row.agent_type.as_deref(),
-                        &row.action,
-                        &row.resource_type,
-                        row.count.max(0) as usize,
-                        &row.first_seen,
-                        &row.last_seen,
-                        distinct_resource_ids,
+                        crate::state::policy_suggestions::DenialSnapshot {
+                            agent_type: row.agent_type.as_deref(),
+                            action: &row.action,
+                            resource_type: &row.resource_type,
+                            count: row.count.max(0) as usize,
+                            first_seen: &row.first_seen,
+                            last_seen: &row.last_seen,
+                            distinct_resource_ids,
+                        },
                     );
                 }
                 engine.suggestions()

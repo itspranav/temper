@@ -42,6 +42,16 @@ pub struct GroupedPattern {
     pub total_denials: usize,
 }
 
+pub struct DenialSnapshot<'a> {
+    pub agent_type: Option<&'a str>,
+    pub action: &'a str,
+    pub resource_type: &'a str,
+    pub count: usize,
+    pub first_seen: &'a str,
+    pub last_seen: &'a str,
+    pub distinct_resource_ids: Vec<String>,
+}
+
 /// A suggested Cedar policy derived from denial patterns.
 #[derive(Debug, Clone, Serialize)]
 pub struct PolicySuggestion {
@@ -175,20 +185,10 @@ impl PolicySuggestionEngine {
     }
 
     /// Rehydrate a persisted denial pattern snapshot.
-    #[allow(clippy::too_many_arguments)]
-    pub fn record_denial_snapshot(
-        &mut self,
-        agent_type: Option<&str>,
-        action: &str,
-        resource_type: &str,
-        count: usize,
-        first_seen: &str,
-        last_seen: &str,
-        distinct_resource_ids: impl IntoIterator<Item = String>,
-    ) {
-        let agent_type_owned = agent_type.map(String::from);
+    pub fn record_denial_snapshot(&mut self, snapshot: DenialSnapshot<'_>) {
+        let agent_type_owned = snapshot.agent_type.map(String::from);
         let mut distinct_ids = BTreeSet::new();
-        for resource_id in distinct_resource_ids {
+        for resource_id in snapshot.distinct_resource_ids {
             distinct_ids.insert(resource_id);
             if distinct_ids.len() >= DISTINCT_RESOURCE_IDS_BUDGET {
                 break;
@@ -198,31 +198,31 @@ impl PolicySuggestionEngine {
         self.per_action.insert(
             (
                 agent_type_owned.clone(),
-                action.to_string(),
-                resource_type.to_string(),
+                snapshot.action.to_string(),
+                snapshot.resource_type.to_string(),
             ),
             DenialPattern {
                 agent_type: agent_type_owned.clone(),
-                action: action.to_string(),
-                resource_type: resource_type.to_string(),
-                count,
-                first_seen: first_seen.to_string(),
-                last_seen: last_seen.to_string(),
+                action: snapshot.action.to_string(),
+                resource_type: snapshot.resource_type.to_string(),
+                count: snapshot.count,
+                first_seen: snapshot.first_seen.to_string(),
+                last_seen: snapshot.last_seen.to_string(),
                 distinct_resource_ids: distinct_ids,
             },
         );
 
         let grouped = self
             .per_type
-            .entry((agent_type_owned.clone(), resource_type.to_string()))
+            .entry((agent_type_owned.clone(), snapshot.resource_type.to_string()))
             .or_insert_with(|| GroupedPattern {
                 agent_type: agent_type_owned,
-                resource_type: resource_type.to_string(),
+                resource_type: snapshot.resource_type.to_string(),
                 denied_actions: BTreeSet::new(),
                 total_denials: 0,
             });
-        grouped.denied_actions.insert(action.to_string());
-        grouped.total_denials += count;
+        grouped.denied_actions.insert(snapshot.action.to_string());
+        grouped.total_denials += snapshot.count;
 
         self.enforce_per_action_budget();
         self.enforce_per_type_budget();
@@ -433,33 +433,33 @@ mod tests {
     #[test]
     fn snapshot_rehydration_generates_grouped_suggestion() {
         let mut engine = PolicySuggestionEngine::new();
-        engine.record_denial_snapshot(
-            Some("planner"),
-            "read",
-            "Issue",
-            3,
-            "2026-03-23T10:00:00Z",
-            "2026-03-23T10:00:00Z",
-            vec!["ISSUE-1".to_string()],
-        );
-        engine.record_denial_snapshot(
-            Some("planner"),
-            "write",
-            "Issue",
-            4,
-            "2026-03-23T10:00:00Z",
-            "2026-03-23T11:00:00Z",
-            vec!["ISSUE-2".to_string()],
-        );
-        engine.record_denial_snapshot(
-            Some("planner"),
-            "delete",
-            "Issue",
-            5,
-            "2026-03-23T10:00:00Z",
-            "2026-03-23T12:00:00Z",
-            vec!["ISSUE-3".to_string()],
-        );
+        engine.record_denial_snapshot(DenialSnapshot {
+            agent_type: Some("planner"),
+            action: "read",
+            resource_type: "Issue",
+            count: 3,
+            first_seen: "2026-03-23T10:00:00Z",
+            last_seen: "2026-03-23T10:00:00Z",
+            distinct_resource_ids: vec!["ISSUE-1".to_string()],
+        });
+        engine.record_denial_snapshot(DenialSnapshot {
+            agent_type: Some("planner"),
+            action: "write",
+            resource_type: "Issue",
+            count: 4,
+            first_seen: "2026-03-23T10:00:00Z",
+            last_seen: "2026-03-23T11:00:00Z",
+            distinct_resource_ids: vec!["ISSUE-2".to_string()],
+        });
+        engine.record_denial_snapshot(DenialSnapshot {
+            agent_type: Some("planner"),
+            action: "delete",
+            resource_type: "Issue",
+            count: 5,
+            first_seen: "2026-03-23T10:00:00Z",
+            last_seen: "2026-03-23T12:00:00Z",
+            distinct_resource_ids: vec!["ISSUE-3".to_string()],
+        });
 
         let suggestions = engine.suggestions();
         assert_eq!(suggestions.len(), 1);

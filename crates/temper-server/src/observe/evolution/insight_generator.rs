@@ -1,11 +1,8 @@
 //! Trajectory → InsightRecord pipeline.
-//!
-//! Aggregates trajectory log entries by (entity_type, action), computes
-//! success rates and volumes, then generates `InsightRecord`s using the
-//! classification and priority scoring from `temper-evolution`.
+//! Aggregates trajectory log entries by `(entity_type, action)` and generates
+//! `InsightRecord`s using `temper-evolution` classification and priority scoring.
 
 use std::collections::{BTreeMap, BTreeSet};
-
 use tracing::instrument;
 
 use temper_evolution::insight::{classify_insight, compute_priority_score};
@@ -81,7 +78,9 @@ pub(crate) fn generate_insights(entries: &[crate::state::TrajectoryEntry]) -> Ve
         } else {
             signal.failures += 1;
         }
-        if entry.authz_denied == Some(true) {
+        if entry.authz_denied == Some(true)
+            || categorize_error(entry.error.as_deref()) == "AuthzDenied"
+        {
             signal.authz_denials += 1;
         }
         if let Some(ref err) = entry.error
@@ -741,8 +740,9 @@ pub(crate) fn generate_intent_evidence(
         } else {
             accum.failure_count += 1;
             let error_pattern = categorize_error(entry.error.as_deref());
+            let is_authz_denied = error_pattern == "AuthzDenied";
             accum.failure_patterns.insert(error_pattern);
-            if entry.authz_denied == Some(true) {
+            if entry.authz_denied == Some(true) || is_authz_denied {
                 accum.authz_denials += 1;
             }
         }
