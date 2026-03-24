@@ -178,6 +178,25 @@ CREATE TABLE IF NOT EXISTS policies (
 pub const ALTER_POLICIES_ADD_ENABLED: &str =
     "ALTER TABLE policies ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1";
 
+/// Durable per-tenant authorization denial patterns used to reconstruct
+/// policy suggestions across process restarts.
+pub const CREATE_POLICY_DENIAL_PATTERNS_TABLE: &str = "\
+CREATE TABLE IF NOT EXISTS policy_denial_patterns (
+    tenant TEXT NOT NULL,
+    agent_type TEXT NOT NULL DEFAULT '',
+    action TEXT NOT NULL,
+    resource_type TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    first_seen TEXT NOT NULL,
+    last_seen TEXT NOT NULL,
+    distinct_resource_ids_json TEXT NOT NULL DEFAULT '[]',
+    PRIMARY KEY (tenant, agent_type, action, resource_type)
+);";
+
+pub const CREATE_POLICY_DENIAL_PATTERNS_TENANT_INDEX: &str = "\
+CREATE INDEX IF NOT EXISTS idx_policy_denial_patterns_tenant
+    ON policy_denial_patterns(tenant, last_seen DESC);";
+
 /// Tracks which OS apps are installed per tenant (workspace).
 ///
 /// On boot, `restore_registry_from_turso()` reads the `specs` table to reload

@@ -42,6 +42,16 @@ pub struct GroupedPattern {
     pub total_denials: usize,
 }
 
+pub struct DenialSnapshot<'a> {
+    pub agent_type: Option<&'a str>,
+    pub action: &'a str,
+    pub resource_type: &'a str,
+    pub count: usize,
+    pub first_seen: &'a str,
+    pub last_seen: &'a str,
+    pub distinct_resource_ids: Vec<String>,
+}
+
 /// A suggested Cedar policy derived from denial patterns.
 #[derive(Debug, Clone, Serialize)]
 pub struct PolicySuggestion {
@@ -169,6 +179,50 @@ impl PolicySuggestionEngine {
             });
         grouped.denied_actions.insert(action.to_string());
         grouped.total_denials += 1;
+
+        self.enforce_per_action_budget();
+        self.enforce_per_type_budget();
+    }
+
+    /// Rehydrate a persisted denial pattern snapshot.
+    pub fn record_denial_snapshot(&mut self, snapshot: DenialSnapshot<'_>) {
+        let agent_type_owned = snapshot.agent_type.map(String::from);
+        let mut distinct_ids = BTreeSet::new();
+        for resource_id in snapshot.distinct_resource_ids {
+            distinct_ids.insert(resource_id);
+            if distinct_ids.len() >= DISTINCT_RESOURCE_IDS_BUDGET {
+                break;
+            }
+        }
+
+        self.per_action.insert(
+            (
+                agent_type_owned.clone(),
+                snapshot.action.to_string(),
+                snapshot.resource_type.to_string(),
+            ),
+            DenialPattern {
+                agent_type: agent_type_owned.clone(),
+                action: snapshot.action.to_string(),
+                resource_type: snapshot.resource_type.to_string(),
+                count: snapshot.count,
+                first_seen: snapshot.first_seen.to_string(),
+                last_seen: snapshot.last_seen.to_string(),
+                distinct_resource_ids: distinct_ids,
+            },
+        );
+
+        let grouped = self
+            .per_type
+            .entry((agent_type_owned.clone(), snapshot.resource_type.to_string()))
+            .or_insert_with(|| GroupedPattern {
+                agent_type: agent_type_owned,
+                resource_type: snapshot.resource_type.to_string(),
+                denied_actions: BTreeSet::new(),
+                total_denials: 0,
+            });
+        grouped.denied_actions.insert(snapshot.action.to_string());
+        grouped.total_denials += snapshot.count;
 
         self.enforce_per_action_budget();
         self.enforce_per_type_budget();
@@ -374,5 +428,42 @@ mod tests {
         let suggestions = engine.suggestions();
         assert_eq!(suggestions.len(), 1);
         assert!(suggestions[0].description.contains("all agents"));
+    }
+
+    #[test]
+    fn snapshot_rehydration_generates_grouped_suggestion() {
+        let mut engine = PolicySuggestionEngine::new();
+        engine.record_denial_snapshot(DenialSnapshot {
+            agent_type: Some("planner"),
+            action: "read",
+            resource_type: "Issue",
+            count: 3,
+            first_seen: "2026-03-23T10:00:00Z",
+            last_seen: "2026-03-23T10:00:00Z",
+            distinct_resource_ids: vec!["ISSUE-1".to_string()],
+        });
+        engine.record_denial_snapshot(DenialSnapshot {
+            agent_type: Some("planner"),
+            action: "write",
+            resource_type: "Issue",
+            count: 4,
+            first_seen: "2026-03-23T10:00:00Z",
+            last_seen: "2026-03-23T11:00:00Z",
+            distinct_resource_ids: vec!["ISSUE-2".to_string()],
+        });
+        engine.record_denial_snapshot(DenialSnapshot {
+            agent_type: Some("planner"),
+            action: "delete",
+            resource_type: "Issue",
+            count: 5,
+            first_seen: "2026-03-23T10:00:00Z",
+            last_seen: "2026-03-23T12:00:00Z",
+            distinct_resource_ids: vec!["ISSUE-3".to_string()],
+        });
+
+        let suggestions = engine.suggestions();
+        assert_eq!(suggestions.len(), 1);
+        assert!(suggestions[0].grouped);
+        assert!(suggestions[0].description.contains("Issue"));
     }
 }

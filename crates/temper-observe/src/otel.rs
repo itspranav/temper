@@ -91,6 +91,26 @@ fn read_non_empty_env(var_name: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn resolve_deployment_environment() -> Option<String> {
+    if let Some(environment) = read_non_empty_env("LOGFIRE_ENVIRONMENT") {
+        return Some(environment);
+    }
+
+    let resource_attrs = read_non_empty_env("OTEL_RESOURCE_ATTRIBUTES")?;
+    for raw_pair in resource_attrs.split(',') {
+        let Some((key, value)) = raw_pair.split_once('=') else {
+            continue;
+        };
+        if key.trim() == "deployment.environment.name" {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
 fn resolve_otel_config() -> Option<ResolvedOtelConfig> {
     let otlp_endpoint = read_non_empty_env("OTLP_ENDPOINT");
     let otel_exporter_endpoint = read_non_empty_env("OTEL_EXPORTER_OTLP_ENDPOINT");
@@ -290,8 +310,13 @@ pub fn init_tracing(
         }
     }
 
+    let mut resource_attrs = vec![KeyValue::new("service.name", service_name.to_string())];
+    if let Some(environment) = resolve_deployment_environment() {
+        resource_attrs.push(KeyValue::new("deployment.environment.name", environment));
+    }
+
     let resource = Resource::builder_empty()
-        .with_attributes([KeyValue::new("service.name", service_name.to_string())])
+        .with_attributes(resource_attrs)
         .build();
 
     // --- Traces ---

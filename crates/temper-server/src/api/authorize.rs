@@ -101,6 +101,12 @@ pub(crate) struct AuditRequest {
     success: bool,
     #[serde(default)]
     error: Option<String>,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    request_body: Option<serde_json::Value>,
+    #[serde(default)]
+    intent: Option<String>,
     /// Tool result summary (accepted for forward compatibility).
     #[serde(default)]
     #[allow(dead_code)]
@@ -134,15 +140,15 @@ pub(crate) async fn handle_audit(
         to_status: None,
         error: body.error,
         agent_id: Some(body.agent_id),
-        session_id: None,
+        session_id: body.session_id,
         authz_denied: None,
         denied_resource: None,
         denied_module: None,
         source: Some(TrajectorySource::Entity),
         spec_governed: Some(false),
         agent_type: None,
-        request_body: None,
-        intent: None,
+        request_body: body.request_body,
+        intent: body.intent,
     };
 
     if let Err(e) = state.persist_trajectory_entry(&entry).await {

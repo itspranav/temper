@@ -260,6 +260,50 @@ async fn list_entity_ids_excludes_entities_with_deleted_tombstones() {
 }
 
 #[tokio::test]
+async fn policy_denial_patterns_roundtrip_and_merge() {
+    let store = make_store("policy-denials").await;
+    let tenant = format!("tenant-{}", uuid::Uuid::new_v4());
+
+    store
+        .upsert_policy_denial_pattern(
+            &tenant,
+            Some("planner"),
+            "read",
+            "Issue",
+            "ISSUE-1",
+            "2026-03-23T10:00:00Z",
+        )
+        .await
+        .unwrap();
+    store
+        .upsert_policy_denial_pattern(
+            &tenant,
+            Some("planner"),
+            "read",
+            "Issue",
+            "ISSUE-2",
+            "2026-03-23T11:00:00Z",
+        )
+        .await
+        .unwrap();
+
+    let rows = store.load_policy_denial_patterns(&tenant).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!(row.agent_type.as_deref(), Some("planner"));
+    assert_eq!(row.action, "read");
+    assert_eq!(row.resource_type, "Issue");
+    assert_eq!(row.count, 2);
+    assert_eq!(row.first_seen, "2026-03-23T10:00:00Z");
+    assert_eq!(row.last_seen, "2026-03-23T11:00:00Z");
+
+    let ids: Vec<String> = serde_json::from_str(&row.distinct_resource_ids_json).unwrap();
+    assert_eq!(ids.len(), 2);
+    assert!(ids.contains(&"ISSUE-1".to_string()));
+    assert!(ids.contains(&"ISSUE-2".to_string()));
+}
+
+#[tokio::test]
 async fn migrate_is_idempotent() {
     let store = make_store("migrate-idempotent").await;
 

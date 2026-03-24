@@ -156,6 +156,10 @@ pub fn build_observe_router() -> Router<ServerState> {
             "/entities/{entity_type}/{entity_id}/history",
             get(entities::handle_get_entity_history),
         )
+        .route(
+            "/entities/{entity_type}/{entity_id}/wait",
+            get(entities::handle_wait_for_entity_state),
+        )
         .route("/events/stream", get(entities::handle_event_stream))
         .route(
             "/verification-status",
@@ -195,6 +199,10 @@ pub fn build_observe_router() -> Router<ServerState> {
         .route(
             "/evolution/unmet-intents",
             get(evolution::handle_unmet_intents),
+        )
+        .route(
+            "/evolution/intent-evidence",
+            get(evolution::handle_intent_evidence),
         )
         .route(
             "/evolution/feature-requests",

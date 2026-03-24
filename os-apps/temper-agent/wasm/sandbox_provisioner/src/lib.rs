@@ -92,11 +92,11 @@ fn resolve_temper_api_url(ctx: &Context, fields: &Value) -> String {
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
-        .or_else(|| {
-            ctx.config
-                .get("temper_api_url")
-                .filter(|s| !s.is_empty())
-                .cloned()
+        .or_else(|| match ctx.config.get("temper_api_url").map(String::as_str) {
+            Some(value) if !value.trim().is_empty() && !value.contains("{secret:") => {
+                Some(value.to_string())
+            }
+            _ => None,
         })
         .unwrap_or_else(|| "http://127.0.0.1:3000".to_string())
 }
