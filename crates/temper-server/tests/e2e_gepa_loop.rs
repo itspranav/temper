@@ -1465,7 +1465,9 @@ async fn e2e_gepa_full_autonomous_loop_with_adapter() {
 
     // --- Create mock "claude" script that returns a mutated spec ---
     let mock_dir = std::env::temp_dir().join("gepa-mock-adapter-test"); // determinism-ok: test harness
+    let mock_workdir = mock_dir.join("workspace");
     std::fs::create_dir_all(&mock_dir).expect("create mock dir");
+    std::fs::create_dir_all(&mock_workdir).expect("create mock workdir");
     let mock_script = mock_dir.join("mock-claude");
     let verify_script = mock_dir.join("mock-verify");
     {
@@ -1517,6 +1519,7 @@ MOCK_OUTPUT
     // Replace proposer + verifier integrations with deterministic adapters for test-only execution.
     let mock_path = mock_script.to_str().expect("mock path to str");
     let verify_path = verify_script.to_str().expect("verify path to str");
+    let mock_workdir = mock_workdir.to_str().expect("mock workdir to str");
     let modified_ioa = base_ioa
         .replace(
         "type = \"wasm\"\nmodule = \"gepa-proposer-agent\"",
@@ -1527,7 +1530,8 @@ MOCK_OUTPUT
             &format!(
                 "type = \"adapter\"\nadapter = \"claude_code\"\ncommand = \"{verify_path}\"\non_success = \"RecordVerificationPass\""
             ),
-        );
+        )
+        .replace("workdir = \"/tmp/workspace\"", &format!("workdir = \"{mock_workdir}\""));
 
     let csdl_xml = r#"<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
