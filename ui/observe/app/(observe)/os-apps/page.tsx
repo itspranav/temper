@@ -2,8 +2,8 @@
 
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { fetchOsApps, installOsApp, fetchSpecs } from "@/lib/api";
-import { useSSERefresh } from "@/lib/hooks";
-import type { OsAppsResponse, SpecSummary } from "@/lib/types";
+import { usePolling } from "@/lib/hooks";
+import type { SkillsResponse, SpecSummary } from "@/lib/types";
 import ErrorDisplay from "@/components/ErrorDisplay";
 import StatCard from "@/components/StatCard";
 
@@ -19,7 +19,7 @@ export default function OsAppsPage() {
     try {
       await fetchOsApps();
     } catch (err) {
-      setInitialError(err instanceof Error ? err.message : "Failed to load OS apps");
+      setInitialError(err instanceof Error ? err.message : "Failed to load apps");
     } finally {
       setInitialLoading(false);
     }
@@ -29,15 +29,15 @@ export default function OsAppsPage() {
     loadInitial();
   }, [loadInitial]);
 
-  const appsPoll = useSSERefresh<OsAppsResponse>({
+  const appsPoll = usePolling<SkillsResponse>({
     fetcher: fetchOsApps,
-    sseKinds: ["OsApps"],
+    interval: 10000,
     enabled: !initialLoading && !initialError,
   });
 
-  const specsPoll = useSSERefresh<SpecSummary[]>({
+  const specsPoll = usePolling<SpecSummary[]>({
     fetcher: fetchSpecs,
-    sseKinds: ["Specs"],
+    interval: 10000,
     enabled: !initialLoading && !initialError,
   });
 
@@ -94,26 +94,23 @@ export default function OsAppsPage() {
   }
 
   if (initialError) {
-    return <ErrorDisplay title="Cannot load OS apps" message={initialError} retry={loadInitial} />;
+    return <ErrorDisplay title="Cannot load apps" message={initialError} retry={loadInitial} />;
   }
 
   return (
     <div className="animate-fade-in">
-      {/* Header */}
       <div className="mb-6">
-        <h1 className="text-2xl text-[var(--color-text-primary)] tracking-tight font-serif">OS Apps</h1>
+        <h1 className="text-2xl text-[var(--color-text-primary)] tracking-tight font-serif">Apps</h1>
         <p className="text-sm text-[var(--color-text-muted)] mt-0.5">
           Pre-built application specs ready to install
         </p>
       </div>
 
-      {/* Stats */}
       <div className="grid grid-cols-2 gap-3 mb-6">
         <StatCard label="Available" value={apps?.apps.length ?? 0} />
         <StatCard label="Installed" value={installedCount} />
       </div>
 
-      {/* Install result banner */}
       {installResult && (
         <div
           className={`mb-4 px-4 py-2.5 rounded text-[13px] ${
@@ -128,7 +125,6 @@ export default function OsAppsPage() {
         </div>
       )}
 
-      {/* App cards */}
       {apps && apps.apps.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {apps.apps.map((app) => {
@@ -136,11 +132,7 @@ export default function OsAppsPage() {
             const isInstalling = installing === app.name;
 
             return (
-              <div
-                key={app.name}
-                className="glass rounded-[2px] p-5 flex flex-col gap-3"
-              >
-                {/* Title row */}
+              <div key={app.name} className="glass rounded-[2px] p-5 flex flex-col gap-3">
                 <div className="flex items-start justify-between">
                   <div>
                     <h3 className="text-[15px] font-semibold text-[var(--color-text-primary)] tracking-tight">
@@ -163,12 +155,10 @@ export default function OsAppsPage() {
                   )}
                 </div>
 
-                {/* Description */}
                 <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed">
                   {app.description}
                 </p>
 
-                {/* Entity type chips */}
                 <div className="flex flex-wrap gap-1.5">
                   {app.entity_types.map((et) => (
                     <span
@@ -189,7 +179,7 @@ export default function OsAppsPage() {
         </div>
       ) : (
         <div className="glass rounded-[2px] p-6 text-center">
-          <p className="text-sm text-[var(--color-text-secondary)]">No OS apps available in the catalog.</p>
+          <p className="text-sm text-[var(--color-text-secondary)]">No apps available in the catalog.</p>
         </div>
       )}
     </div>

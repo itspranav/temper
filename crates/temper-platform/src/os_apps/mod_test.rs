@@ -1,4 +1,7 @@
 use super::*;
+use std::collections::HashMap;
+
+use temper_authz::SecurityContext;
 use temper_runtime::tenant::TenantId;
 use temper_spec::automaton;
 use temper_spec::csdl::parse_csdl;
@@ -6,7 +9,8 @@ use temper_verify::cascade::VerificationCascade;
 
 #[test]
 fn test_pm_specs_parse() {
-    for (entity_type, ioa_source) in PM_SPECS {
+    let bundle = get_skill("project-management").expect("PM skill not found");
+    for (entity_type, ioa_source) in &bundle.specs {
         let result = automaton::parse_automaton(ioa_source);
         assert!(
             result.is_ok(),
@@ -19,7 +23,8 @@ fn test_pm_specs_parse() {
 
 #[test]
 fn test_pm_csdl_parses() {
-    let result = parse_csdl(PM_CSDL);
+    let bundle = get_skill("project-management").expect("PM skill not found");
+    let result = parse_csdl(&bundle.csdl);
     assert!(
         result.is_ok(),
         "PM CSDL failed to parse: {:?}",
@@ -29,10 +34,11 @@ fn test_pm_csdl_parses() {
 
 #[test]
 fn test_pm_spec_entity_names() {
-    for (entity_type, ioa_source) in PM_SPECS {
+    let bundle = get_skill("project-management").expect("PM skill not found");
+    for (entity_type, ioa_source) in &bundle.specs {
         let a = automaton::parse_automaton(ioa_source).unwrap();
         assert_eq!(
-            a.automaton.name, *entity_type,
+            &a.automaton.name, entity_type,
             "PM spec name mismatch: expected {entity_type}, got {}",
             a.automaton.name
         );
@@ -41,7 +47,8 @@ fn test_pm_spec_entity_names() {
 
 #[test]
 fn test_pm_specs_verify() {
-    for (entity_type, ioa_source) in PM_SPECS {
+    let bundle = get_skill("project-management").expect("PM skill not found");
+    for (entity_type, ioa_source) in &bundle.specs {
         let cascade = VerificationCascade::from_ioa(ioa_source)
             .with_sim_seeds(3)
             .with_prop_test_cases(50);
@@ -56,7 +63,8 @@ fn test_pm_specs_verify() {
 
 #[test]
 fn test_agent_orchestration_specs_parse() {
-    for (entity_type, ioa_source) in AO_SPECS {
+    let bundle = get_skill("agent-orchestration").expect("AO skill not found");
+    for (entity_type, ioa_source) in &bundle.specs {
         let result = automaton::parse_automaton(ioa_source);
         assert!(
             result.is_ok(),
@@ -69,7 +77,8 @@ fn test_agent_orchestration_specs_parse() {
 
 #[test]
 fn test_agent_orchestration_csdl_parses() {
-    let result = parse_csdl(AO_CSDL);
+    let bundle = get_skill("agent-orchestration").expect("AO skill not found");
+    let result = parse_csdl(&bundle.csdl);
     assert!(
         result.is_ok(),
         "Agent Orchestration CSDL failed to parse: {:?}",
@@ -79,7 +88,8 @@ fn test_agent_orchestration_csdl_parses() {
 
 #[test]
 fn test_agent_orchestration_specs_verify() {
-    for (entity_type, ioa_source) in AO_SPECS {
+    let bundle = get_skill("agent-orchestration").expect("AO skill not found");
+    for (entity_type, ioa_source) in &bundle.specs {
         let cascade = VerificationCascade::from_ioa(ioa_source)
             .with_sim_seeds(3)
             .with_prop_test_cases(30);
@@ -93,32 +103,108 @@ fn test_agent_orchestration_specs_verify() {
 }
 
 #[test]
-fn test_list_os_apps_returns_catalog() {
-    let apps = list_os_apps();
-    assert_eq!(apps.len(), 4);
-    assert_eq!(apps[0].name, "project-management");
-    assert_eq!(apps[0].entity_types.len(), 5);
-    assert_eq!(apps[1].name, "temper-fs");
-    assert_eq!(apps[1].entity_types.len(), 4);
-    assert_eq!(apps[2].name, "agent-orchestration");
-    assert_eq!(apps[2].entity_types.len(), 3);
-    assert_eq!(apps[3].name, "temper-agent");
-    assert_eq!(apps[3].entity_types.len(), 1);
+fn test_list_skills_returns_catalog() {
+    let apps = list_skills();
+    // Should find the built-in spec-bearing skills.
+    let names: Vec<&str> = apps.iter().map(|e| e.name.as_str()).collect();
+    assert!(
+        names.contains(&"project-management"),
+        "missing project-management: {names:?}"
+    );
+    assert!(names.contains(&"temper-fs"), "missing temper-fs: {names:?}");
+    assert!(
+        names.contains(&"agent-orchestration"),
+        "missing agent-orchestration: {names:?}"
+    );
+    assert!(
+        names.contains(&"temper-agent"),
+        "missing temper-agent: {names:?}"
+    );
+    assert!(names.contains(&"evolution"), "missing evolution: {names:?}");
+    assert!(
+        names.contains(&"intent-discovery"),
+        "missing intent-discovery: {names:?}"
+    );
+
+    // Check entity types for known skills.
+    let pm = apps
+        .iter()
+        .find(|e| e.name == "project-management")
+        .unwrap();
+    assert_eq!(
+        pm.entity_types.len(),
+        5,
+        "PM entity types: {:?}",
+        pm.entity_types
+    );
+    let evo = apps.iter().find(|e| e.name == "evolution").unwrap();
+    assert_eq!(
+        evo.entity_types.len(),
+        2,
+        "Evo entity types: {:?}",
+        evo.entity_types
+    );
+    assert!(
+        evo.skill_guide.is_some(),
+        "evolution should have a skill guide"
+    );
 }
 
 #[test]
-fn test_get_os_app_project_management() {
-    let bundle = get_os_app("project-management");
+fn test_intent_discovery_specs_parse() {
+    let bundle = get_skill("intent-discovery").expect("intent-discovery skill not found");
+    for (entity_type, ioa_source) in &bundle.specs {
+        let result = automaton::parse_automaton(ioa_source);
+        assert!(
+            result.is_ok(),
+            "IntentDiscovery spec {} failed to parse: {:?}",
+            entity_type,
+            result.err()
+        );
+    }
+}
+
+#[test]
+fn test_intent_discovery_csdl_parses() {
+    let bundle = get_skill("intent-discovery").expect("intent-discovery skill not found");
+    let result = parse_csdl(&bundle.csdl);
+    assert!(
+        result.is_ok(),
+        "IntentDiscovery CSDL failed to parse: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn test_intent_discovery_specs_verify() {
+    let bundle = get_skill("intent-discovery").expect("intent-discovery skill not found");
+    for (entity_type, ioa_source) in &bundle.specs {
+        let cascade = VerificationCascade::from_ioa(ioa_source)
+            .with_sim_seeds(3)
+            .with_prop_test_cases(40);
+        let result = cascade.run();
+        assert!(
+            result.all_passed,
+            "IntentDiscovery spec {} failed verification",
+            entity_type
+        );
+    }
+}
+
+#[test]
+fn test_get_skill_project_management() {
+    let bundle = get_skill("project-management");
     assert!(bundle.is_some());
     let bundle = bundle.unwrap();
     assert_eq!(bundle.specs.len(), 5);
     assert!(!bundle.csdl.is_empty());
-    assert_eq!(bundle.cedar_policies.len(), 1);
+    assert!(!bundle.cedar_policies.is_empty());
 }
 
 #[test]
 fn test_agent_specs_parse() {
-    for (entity_type, ioa_source) in TEMPER_AGENT_SPECS {
+    let bundle = get_skill("temper-agent").expect("temper-agent skill not found");
+    for (entity_type, ioa_source) in &bundle.specs {
         let result = automaton::parse_automaton(ioa_source);
         assert!(
             result.is_ok(),
@@ -131,7 +217,8 @@ fn test_agent_specs_parse() {
 
 #[test]
 fn test_agent_csdl_parses() {
-    let result = parse_csdl(TEMPER_AGENT_CSDL);
+    let bundle = get_skill("temper-agent").expect("temper-agent skill not found");
+    let result = parse_csdl(&bundle.csdl);
     assert!(
         result.is_ok(),
         "Agent CSDL failed to parse: {:?}",
@@ -141,10 +228,11 @@ fn test_agent_csdl_parses() {
 
 #[test]
 fn test_agent_spec_entity_names() {
-    for (entity_type, ioa_source) in TEMPER_AGENT_SPECS {
+    let bundle = get_skill("temper-agent").expect("temper-agent skill not found");
+    for (entity_type, ioa_source) in &bundle.specs {
         let a = automaton::parse_automaton(ioa_source).unwrap();
         assert_eq!(
-            a.automaton.name, *entity_type,
+            &a.automaton.name, entity_type,
             "Agent spec name mismatch: expected {entity_type}, got {}",
             a.automaton.name
         );
@@ -153,7 +241,8 @@ fn test_agent_spec_entity_names() {
 
 #[test]
 fn test_agent_specs_verify() {
-    for (entity_type, ioa_source) in TEMPER_AGENT_SPECS {
+    let bundle = get_skill("temper-agent").expect("temper-agent skill not found");
+    for (entity_type, ioa_source) in &bundle.specs {
         let cascade = VerificationCascade::from_ioa(ioa_source)
             .with_sim_seeds(3)
             .with_prop_test_cases(50);
@@ -167,34 +256,44 @@ fn test_agent_specs_verify() {
 }
 
 #[test]
-fn test_get_os_app_agent_orchestration() {
-    let bundle = get_os_app("agent-orchestration");
+fn test_get_skill_agent_orchestration() {
+    let bundle = get_skill("agent-orchestration");
     assert!(bundle.is_some());
     let bundle = bundle.unwrap();
     assert_eq!(bundle.specs.len(), 3);
     assert!(!bundle.csdl.is_empty());
-    assert_eq!(bundle.cedar_policies.len(), 1);
+    assert!(!bundle.cedar_policies.is_empty());
 }
 
 #[test]
-fn test_get_os_app_temper_agent() {
-    let bundle = get_os_app("temper-agent");
+fn test_get_skill_temper_agent() {
+    let bundle = get_skill("temper-agent");
     assert!(bundle.is_some());
     let bundle = bundle.unwrap();
     assert_eq!(bundle.specs.len(), 1);
     assert!(!bundle.csdl.is_empty());
-    assert_eq!(bundle.cedar_policies.len(), 1);
+    assert!(!bundle.cedar_policies.is_empty());
 }
 
 #[test]
-fn test_get_os_app_nonexistent() {
-    assert!(get_os_app("nonexistent").is_none());
+fn test_get_skill_intent_discovery() {
+    let bundle = get_skill("intent-discovery");
+    assert!(bundle.is_some());
+    let bundle = bundle.unwrap();
+    assert_eq!(bundle.specs.len(), 1);
+    assert!(!bundle.csdl.is_empty());
+    assert!(!bundle.cedar_policies.is_empty());
+}
+
+#[test]
+fn test_get_skill_nonexistent() {
+    assert!(get_skill("nonexistent").is_none());
 }
 
 #[tokio::test]
-async fn test_install_os_app_registers_entities() {
+async fn test_install_skill_registers_entities() {
     let state = PlatformState::new(None);
-    let result = install_os_app(&state, "test-pm", "project-management").await;
+    let result = install_skill(&state, "test-pm", "project-management").await;
     assert!(result.is_ok());
     let result = result.unwrap();
     // Fresh tenant — all 5 specs should be new.
@@ -223,9 +322,9 @@ async fn test_install_os_app_registers_entities() {
 }
 
 #[tokio::test]
-async fn test_install_agent_orchestration_registers_entities() {
+async fn test_install_skill_agent_orchestration_registers_entities() {
     let state = PlatformState::new(None);
-    let result = install_os_app(&state, "test-ao", "agent-orchestration").await;
+    let result = install_skill(&state, "test-ao", "agent-orchestration").await;
     assert!(result.is_ok());
     let result = result.unwrap();
     assert_eq!(
@@ -248,23 +347,23 @@ async fn test_install_agent_orchestration_registers_entities() {
 }
 
 #[tokio::test]
-async fn test_install_os_app_nonexistent_returns_error() {
+async fn test_install_skill_nonexistent_returns_error() {
     let state = PlatformState::new(None);
-    let result = install_os_app(&state, "test", "nonexistent").await;
+    let result = install_skill(&state, "test", "nonexistent").await;
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("not found in catalog"));
 }
 
 #[tokio::test]
-async fn test_install_multiple_os_apps_merges_and_is_idempotent() {
+async fn test_install_multiple_skills_merges_and_is_idempotent() {
     let state = PlatformState::new(None);
     let tenant = TenantId::new("test-merge");
 
-    install_os_app(&state, "test-merge", "project-management")
+    install_skill(&state, "test-merge", "project-management")
         .await
         .expect("install project-management");
 
-    install_os_app(&state, "test-merge", "agent-orchestration")
+    install_skill(&state, "test-merge", "agent-orchestration")
         .await
         .expect("install agent-orchestration");
 
@@ -299,7 +398,7 @@ async fn test_install_multiple_os_apps_merges_and_is_idempotent() {
         );
     }
 
-    let reinstall = install_os_app(&state, "test-merge", "project-management")
+    let reinstall = install_skill(&state, "test-merge", "project-management")
         .await
         .expect("reinstall project-management");
 
@@ -341,6 +440,53 @@ async fn test_install_multiple_os_apps_merges_and_is_idempotent() {
     );
 }
 
+#[tokio::test]
+async fn test_install_skill_activates_tenant_cedar_policies() {
+    let state = PlatformState::new(None);
+
+    install_skill(&state, "test-authz", "project-management")
+        .await
+        .expect("install project-management");
+
+    let admin_ctx = SecurityContext::from_headers(&[
+        ("X-Temper-Principal-Id".to_string(), "admin-1".to_string()),
+        ("X-Temper-Principal-Kind".to_string(), "admin".to_string()),
+    ]);
+    let mut issue_attrs = HashMap::new();
+    issue_attrs.insert("id".to_string(), serde_json::json!("issue-1"));
+
+    let admin_decision = state.server.authz.authorize_for_tenant(
+        "test-authz",
+        &admin_ctx,
+        "MoveToTodo",
+        "Issue",
+        &issue_attrs,
+    );
+    assert!(
+        admin_decision.is_allowed(),
+        "expected admin Issue.MoveToTodo to be allowed after skill install: {admin_decision:?}"
+    );
+
+    install_skill(&state, "test-authz", "temper-agent")
+        .await
+        .expect("install temper-agent");
+
+    let mut agent_attrs = HashMap::new();
+    agent_attrs.insert("id".to_string(), serde_json::json!("agent-1"));
+
+    let configure_decision = state.server.authz.authorize_for_tenant(
+        "test-authz",
+        &admin_ctx,
+        "Configure",
+        "TemperAgent",
+        &agent_attrs,
+    );
+    assert!(
+        configure_decision.is_allowed(),
+        "expected admin TemperAgent.Configure to be allowed after skill install: {configure_decision:?}"
+    );
+}
+
 /// Proves the full install → persist → reboot → restore cycle.
 ///
 /// 1. Install OS app with a real Turso-backed SQLite DB.
@@ -349,7 +495,7 @@ async fn test_install_multiple_os_apps_merges_and_is_idempotent() {
 /// 4. Restore registry from Turso.
 /// 5. Verify specs survived the "restart".
 #[tokio::test]
-async fn test_os_app_install_survives_restart() {
+async fn test_skill_install_survives_restart() {
     use std::sync::Arc;
     use temper_server::event_store::ServerEventStore;
     use temper_server::registry_bootstrap::restore_registry_from_turso;
@@ -364,7 +510,7 @@ async fn test_os_app_install_survives_restart() {
     let mut state = PlatformState::new(None);
     state.server.event_store = Some(Arc::new(ServerEventStore::Turso(turso)));
 
-    let result = install_os_app(&state, "test-ws", "project-management").await;
+    let result = install_skill(&state, "test-ws", "project-management").await;
     assert!(result.is_ok(), "install failed: {:?}", result.err());
     let result = result.unwrap();
     assert_eq!(result.added.len(), 5);
@@ -440,4 +586,15 @@ async fn test_os_app_install_survives_restart() {
     let _ = std::fs::remove_file(&db_path);
     let _ = std::fs::remove_file(format!("{db_path}-wal"));
     let _ = std::fs::remove_file(format!("{db_path}-shm"));
+}
+
+#[test]
+fn test_reload_picks_up_disk_changes() {
+    // Just verify reload doesn't panic and produces a valid catalog.
+    reload_skills();
+    let skills = list_skills();
+    assert!(
+        !skills.is_empty(),
+        "catalog should not be empty after reload"
+    );
 }

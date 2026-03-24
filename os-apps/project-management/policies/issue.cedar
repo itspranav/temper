@@ -12,6 +12,22 @@ permit(
   resource is Issue
 );
 
+// --- System-created backlog/triage work items for automated evolution ---
+
+permit(
+  principal is Admin,
+  action in [Action::"create", Action::"read", Action::"list", Action::"SetDescription", Action::"SetPriority", Action::"MoveToTriage", Action::"MoveToTodo"],
+  resource is Issue
+);
+
+permit(
+  principal,
+  action in [Action::"create", Action::"read", Action::"list", Action::"SetDescription", Action::"SetPriority", Action::"MoveToTriage", Action::"MoveToTodo"],
+  resource is Issue
+) when {
+  principal.agent_type == "system"
+};
+
 // --- Triage & Prioritization: supervisors and humans ---
 
 permit(

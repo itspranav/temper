@@ -170,6 +170,18 @@ impl WasmHost for AuthorizedWasmHost {
         // Logging is always allowed — no authorization check needed.
         self.inner.log(level, message);
     }
+
+    fn evaluate_spec(
+        &self,
+        ioa_source: &str,
+        current_state: &str,
+        action: &str,
+        params_json: &str,
+    ) -> Result<String, String> {
+        // Spec evaluation is a local computation — no authorization needed.
+        self.inner
+            .evaluate_spec(ioa_source, current_state, action, params_json)
+    }
 }
 
 #[cfg(test)]
@@ -269,6 +281,29 @@ mod tests {
 
         let result = host.get_secret("KEY");
         assert_eq!(result, Ok("val".into()));
+    }
+
+    #[test]
+    fn allow_gate_delegates_evaluate_spec() {
+        let ioa_source = "[automaton]\nname = \"Issue\"";
+        let ioa_hash = format!("{:x}", ioa_source.len());
+        let inner = Arc::new(SimWasmHost::new().with_spec_eval_response(
+            &ioa_hash,
+            "Reassign",
+            r#"{"success":true,"new_state":"InProgress"}"#,
+        ));
+        let gate = Arc::new(AllowAllGate);
+        let host = AuthorizedWasmHost::new(inner, gate, test_ctx());
+
+        let result = host.evaluate_spec(ioa_source, "Backlog", "Reassign", "{}");
+        assert!(
+            result.is_ok(),
+            "evaluate_spec should delegate to inner host"
+        );
+        assert!(
+            result.unwrap_or_default().contains(r#""success":true"#),
+            "expected canned evaluate_spec response from inner host"
+        );
     }
 
     #[test]

@@ -21,6 +21,7 @@ mod constraints;
 mod event_store;
 mod evolution;
 mod instrumentation;
+pub mod ots;
 mod policy;
 mod secrets;
 mod specs;
@@ -163,6 +164,12 @@ impl TursoEventStore {
         conn.execute(schema::CREATE_POLICIES_TABLE, ())
             .await
             .map_err(storage_error)?;
+        conn.execute(schema::CREATE_POLICY_DENIAL_PATTERNS_TABLE, ())
+            .await
+            .map_err(storage_error)?;
+        conn.execute(schema::CREATE_POLICY_DENIAL_PATTERNS_TENANT_INDEX, ())
+            .await
+            .map_err(storage_error)?;
         // Migration: add `enabled` column to existing `policies` tables.
         let _ = conn.execute(schema::ALTER_POLICIES_ADD_ENABLED, ()).await;
         conn.execute(schema::CREATE_TENANT_INSTALLED_APPS_TABLE, ())
@@ -219,6 +226,20 @@ impl TursoEventStore {
             .await
             .map_err(storage_error)?;
 
+        // OTS trajectory storage — full agent execution traces for GEPA.
+        conn.execute(schema::CREATE_OTS_TRAJECTORIES_TABLE, ())
+            .await
+            .map_err(storage_error)?;
+        conn.execute(schema::CREATE_OTS_TRAJECTORIES_AGENT_INDEX, ())
+            .await
+            .map_err(storage_error)?;
+        conn.execute(schema::CREATE_OTS_TRAJECTORIES_TENANT_INDEX, ())
+            .await
+            .map_err(storage_error)?;
+        conn.execute(schema::CREATE_OTS_TRAJECTORIES_OUTCOME_INDEX, ())
+            .await
+            .map_err(storage_error)?;
+
         Ok(())
     }
 
@@ -244,6 +265,27 @@ impl TursoEventStore {
 // ---------------------------------------------------------------------------
 
 pub use policy::PolicyRow;
+
+/// Durable denial-pattern row used to rebuild policy suggestions.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PolicyDenialPatternRow {
+    /// Tenant that owns the denial history.
+    pub tenant: String,
+    /// Agent type, when known.
+    pub agent_type: Option<String>,
+    /// Action that was denied.
+    pub action: String,
+    /// Resource type that was denied.
+    pub resource_type: String,
+    /// Total denial count for this pattern.
+    pub count: i64,
+    /// First timestamp seen for the pattern.
+    pub first_seen: String,
+    /// Most recent timestamp seen for the pattern.
+    pub last_seen: String,
+    /// JSON array of sampled resource IDs.
+    pub distinct_resource_ids_json: String,
+}
 
 /// Row returned by [`TursoEventStore::load_specs()`].
 #[derive(Debug, Clone)]

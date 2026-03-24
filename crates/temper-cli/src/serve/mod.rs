@@ -56,7 +56,7 @@ struct LoadedTenantSpecs {
 pub async fn run(
     port: u16,
     apps: Vec<(String, String)>,
-    os_apps: Vec<String>,
+    skills: Vec<String>,
     storage: StorageBackend,
     storage_explicit: bool,
     observe: bool,
@@ -153,8 +153,8 @@ pub async fn run(
     // Phase 8: Bootstrap system + agent tenants
     bootstrap::bootstrap_tenants(&state, &apps).await;
 
-    // Phase 8b: Restore persisted OS apps + apply CLI `--os-app` requests.
-    bootstrap::bootstrap_installed_os_apps(&state, &os_apps).await;
+    // Phase 8b: Restore persisted skills + apply CLI `--skill` requests.
+    bootstrap::bootstrap_installed_skills(&state, &skills).await;
 
     // Phase 9: Bind, start background tasks, serve
     let router = build_platform_router(state.clone());

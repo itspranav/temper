@@ -76,6 +76,9 @@ pub(super) async fn dispatch_json_value(ctx: &mut RuntimeContext, raw: Value) ->
                 }
             }
 
+            // Initialize OTS trajectory capture after handshake.
+            ctx.init_trajectory();
+
             Ok(json!({
                 "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": {
@@ -120,9 +123,24 @@ pub(super) async fn dispatch_json_value(ctx: &mut RuntimeContext, raw: Value) ->
             };
 
             let tool_result = match params.name.as_str() {
-                "execute" => ctx.run_execute(code).await,
+                "execute" => {
+                    if is_flush_trajectory_request(code) {
+                        ctx.flush_trajectory().await.map(|trajectory_id| {
+                            json!({
+                                "trajectory_id": trajectory_id,
+                                "status": "flushed",
+                            })
+                            .to_string()
+                        })
+                    } else {
+                        ctx.run_execute(code).await
+                    }
+                }
                 other => Err(anyhow!(format!("unknown tool '{other}'"))),
             };
+
+            // Record the execute call as an OTS trajectory turn.
+            ctx.record_execute_turn(code, &tool_result);
 
             Ok(match tool_result {
                 Ok(text) => json!({
@@ -195,9 +213,13 @@ DEVELOPER:\n\
 \x20 await temper.upload_wasm(tenant, module_name, wasm_path) -> upload WASM module\n\
 \x20 await temper.compile_wasm(tenant, module_name, rust_source) -> compile + upload WASM\n\
 \n\
-OS APP CATALOG:\n\
+APP CATALOG:\n\
 \x20 await temper.list_apps() -> available pre-built apps (name, description, entity_types)\n\
-\x20 await temper.install_app(app_name) -> install an OS app into the current tenant\n\
+\x20 await temper.get_app(app_name) -> full app guide markdown (when to use, actions, examples)\n\
+\x20 await temper.install_app(app_name) -> install an app into the current tenant\n\
+\x20 await temper.list_skills() -> alias for list_apps (backward compatible)\n\
+\x20 await temper.get_skill(skill_name) -> alias for get_app (backward compatible)\n\
+\x20 await temper.install_skill(skill_name) -> alias for install_app (backward compatible)\n\
 \n\
 GOVERNANCE:\n\
 \x20 await temper.get_decisions(tenant, status?) -> list decisions\n\
@@ -219,6 +241,8 @@ Source should use `temper_wasm_sdk::prelude::*` and the `temper_module!` macro.\
 CEDAR GOVERNANCE: actions may be denied by Cedar policy. Denied actions create\n\
 decisions for human approval in the Observe UI or via `temper decide` CLI.\n\
 Use poll_decision(tenant, decision_id) to wait for the human decision.\n\
+OTS FLUSH: `await temper.flush_trajectory()` uploads a mid-session OTS snapshot\n\
+without ending the session.\n\
 You cannot approve or set policies — only humans can do that.";
 
     vec![json!({
@@ -236,4 +260,9 @@ You cannot approve or set policies — only humans can do that.";
             "additionalProperties": false
         }
     })]
+}
+
+fn is_flush_trajectory_request(code: &str) -> bool {
+    let compact = code.split_whitespace().collect::<String>();
+    compact.contains("temper.flush_trajectory()")
 }

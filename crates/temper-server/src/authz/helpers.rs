@@ -261,6 +261,20 @@ pub(crate) async fn record_authz_denial(
             &traj.timestamp,
         );
     }
+    if let Some(turso) = state.persistent_store_for_tenant(input.tenant).await
+        && let Err(e) = turso
+            .upsert_policy_denial_pattern(
+                input.tenant,
+                traj.agent_type.as_deref(),
+                input.action,
+                input.resource_type,
+                input.resource_id,
+                &traj.timestamp,
+            )
+            .await
+    {
+        tracing::warn!(error = %e, tenant = input.tenant, "failed to persist denial pattern");
+    }
 
     pd
 }

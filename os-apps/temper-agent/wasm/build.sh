@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build all WASM modules for the temper-agent OS app.
+# Build all WASM modules for the temper-agent skill.
 # Usage: cd os-apps/temper-agent/wasm && ./build.sh
 set -euo pipefail
 

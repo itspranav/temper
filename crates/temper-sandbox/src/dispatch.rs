@@ -82,8 +82,10 @@ pub async fn dispatch_temper_method(
         "get_trajectories" | "get_insights" | "get_evolution_records" | "check_sentinel" => {
             dispatch_evolution(ctx, method, args).await
         }
-        // --- OS App Catalog ---
-        "list_apps" | "install_app" => dispatch_os_apps(ctx, method, args).await,
+        // --- App Catalog ---
+        "list_apps" | "install_app" | "get_app" | "list_skills" | "install_skill" | "get_skill" => {
+            dispatch_skills(ctx, method, args).await
+        }
         // --- Discovery ---
         "specs" => {
             temper_request(
@@ -125,7 +127,7 @@ pub async fn dispatch_temper_method(
              upload_wasm, compile_wasm, \
              get_decisions, get_decision_status, poll_decision, \
              get_trajectories, get_insights, get_evolution_records, check_sentinel, \
-             list_apps, install_app, \
+             list_apps, get_app, install_app, list_skills, get_skill, install_skill, \
              specs, spec_detail"
         )),
     }
@@ -540,14 +542,14 @@ async fn dispatch_evolution(
     }
 }
 
-/// Dispatch OS app catalog methods.
-async fn dispatch_os_apps(
+/// Dispatch app catalog methods.
+async fn dispatch_skills(
     ctx: &DispatchContext<'_>,
     method: &str,
     args: &[MontyObject],
 ) -> Result<Value, String> {
     match method {
-        "list_apps" => {
+        "list_apps" | "list_skills" => {
             temper_request(
                 ctx.http,
                 ctx.base_url,
@@ -560,8 +562,32 @@ async fn dispatch_os_apps(
             )
             .await
         }
-        "install_app" => {
-            let app_name = expect_string_arg(args, 0, "app_name", method)?;
+        "get_app" | "get_skill" => {
+            let arg_name = if method == "get_skill" {
+                "skill_name"
+            } else {
+                "app_name"
+            };
+            let skill_name = expect_string_arg(args, 0, arg_name, method)?;
+            temper_request(
+                ctx.http,
+                ctx.base_url,
+                ctx.tenant,
+                &ctx.identity(),
+                ctx.api_key,
+                Method::GET,
+                &format!("/api/os-apps/{skill_name}"),
+                None,
+            )
+            .await
+        }
+        "install_app" | "install_skill" => {
+            let arg_name = if method == "install_skill" {
+                "skill_name"
+            } else {
+                "app_name"
+            };
+            let skill_name = expect_string_arg(args, 0, arg_name, method)?;
             let payload = serde_json::json!({ "tenant": ctx.tenant });
             temper_request(
                 ctx.http,
@@ -570,12 +596,12 @@ async fn dispatch_os_apps(
                 &ctx.identity(),
                 ctx.api_key,
                 Method::POST,
-                &format!("/api/os-apps/{app_name}/install"),
+                &format!("/api/os-apps/{skill_name}/install"),
                 Some(&payload),
             )
             .await
         }
-        _ => unreachable!("dispatch_os_apps called with non-os-app method"),
+        _ => unreachable!("dispatch_skills called with non-skill method"),
     }
 }
 

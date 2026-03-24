@@ -8,12 +8,16 @@ description = "MCP stdio server for Temper Code Mode tools"
 
 [dependencies]
 temper-sandbox = { workspace = true }
+temper-ots = { workspace = true }
+temper-runtime = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "rt", "macros"] }
 reqwest = { workspace = true }
+sha2 = { workspace = true }
 tracing = { workspace = true }
+hostname = { workspace = true }
 
 # pydantic/monty Rust sandbox crate
 monty = { git = "https://github.com/pydantic/monty.git", package = "monty", rev = "bf7c7ef" }

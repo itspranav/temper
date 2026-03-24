@@ -34,5 +34,7 @@ pub use bootstrap::{
     persist_agent_verification, persist_system_verification,
 };
 pub use os_apps::{InstallResult, install_os_app, list_os_apps};
+// Backward-compatible skill aliases.
+pub use os_apps::{install_skill, list_skills};
 pub use protocol::{PlatformEvent, VerifyStepStatus};
 pub use state::PlatformState;

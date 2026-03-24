@@ -2225,6 +2225,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostname"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "617aaa3557aef3810a6369d0a99fac8a080891b68bd9f9812a1eeda0c0730cbd"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "windows-link",
+]
+
+[[package]]
 name = "http"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5599,10 +5610,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum 0.8.8",
+ "hostname",
  "monty",
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
+ "temper-ots",
  "temper-runtime",
  "temper-sandbox",
  "temper-server",
@@ -5658,6 +5672,18 @@ dependencies = [
  "temper-runtime",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "temper-ots"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "temper-runtime",
+ "tokio-test",
+ "uuid",
 ]
 
 [[package]]

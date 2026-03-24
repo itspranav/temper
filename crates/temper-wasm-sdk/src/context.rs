@@ -237,6 +237,49 @@ impl Context {
         }
     }
 
+    /// Evaluate a single transition against an IOA spec via the host.
+    ///
+    /// The host builds a `TransitionTable` from the IOA source and evaluates
+    /// the given action from the given state. Returns parsed JSON result with
+    /// `success`, `new_state`, `error`, and `guard_result` fields.
+    pub fn evaluate_spec(
+        &self,
+        ioa_source: &str,
+        current_state: &str,
+        action: &str,
+        params_json: &str,
+    ) -> Result<Value, String> {
+        let response = unsafe {
+            let ptr = addr_of!(host::SPEC_EVAL_BUF) as *const u8;
+            let len = host::host_evaluate_spec(
+                ioa_source.as_ptr() as i32,
+                ioa_source.len() as i32,
+                current_state.as_ptr() as i32,
+                current_state.len() as i32,
+                action.as_ptr() as i32,
+                action.len() as i32,
+                params_json.as_ptr() as i32,
+                params_json.len() as i32,
+                ptr as i32,
+                host::SPEC_EVAL_BUF_LEN as i32,
+            );
+            if len == -1 {
+                return Err("evaluate_spec call failed".to_string());
+            }
+            if len == -2 {
+                return Err("evaluate_spec response too large for buffer".to_string());
+            }
+            if len <= 0 {
+                return Err("evaluate_spec returned empty response".to_string());
+            }
+            let slice = core::slice::from_raw_parts(ptr, len as usize);
+            String::from_utf8_lossy(slice).to_string()
+        };
+
+        serde_json::from_str(&response)
+            .map_err(|e| format!("failed to parse evaluate_spec response: {e}"))
+    }
+
     /// Log a message via the host.
     pub fn log(&self, level: &str, msg: &str) {
         unsafe {

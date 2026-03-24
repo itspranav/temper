@@ -2,6 +2,7 @@ use super::*;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use std::sync::Arc;
+use std::time::Duration;
 use temper_runtime::ActorSystem;
 use temper_runtime::scheduler::sim_now;
 use temper_runtime::tenant::TenantId;
@@ -12,6 +13,7 @@ use tower::ServiceExt;
 use crate::event_store::ServerEventStore;
 use crate::registry::SpecRegistry;
 use crate::request_context::AgentContext;
+use crate::state::TrajectoryEntry;
 
 const CSDL_XML: &str = include_str!("../../../../test-fixtures/specs/model.csdl.xml");
 const ORDER_IOA: &str = include_str!("../../../../test-fixtures/specs/order.ioa.toml");
@@ -390,6 +392,88 @@ async fn test_entity_history_empty_for_unknown() {
     assert!(events.is_empty());
 }
 
+#[tokio::test]
+async fn test_entity_wait_returns_terminal_state() {
+    let state = test_state_with_registry();
+    let tenant = TenantId::default();
+    let create = state
+        .dispatch_tenant_action(
+            &tenant,
+            "Order",
+            "order-wait-1",
+            "AddItem",
+            serde_json::json!({}),
+            &AgentContext::default(),
+        )
+        .await;
+    assert!(create.is_ok(), "AddItem failed: {create:?}");
+
+    let delayed_state = state.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        delayed_state
+            .dispatch_tenant_action(
+                &TenantId::default(),
+                "Order",
+                "order-wait-1",
+                "SubmitOrder",
+                serde_json::json!({}),
+                &AgentContext::default(),
+            )
+            .await
+            .expect("SubmitOrder should succeed");
+    });
+
+    let app = build_app_with_state(state);
+    let response = app
+        .oneshot(system_get(
+            "/observe/entities/Order/order-wait-1/wait?statuses=Submitted&timeout_ms=1000&poll_ms=10",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "Submitted");
+    assert_eq!(json["timed_out"], false);
+}
+
+#[tokio::test]
+async fn test_entity_wait_times_out_with_current_state() {
+    let state = test_state_with_registry();
+    let tenant = TenantId::default();
+    let create = state
+        .dispatch_tenant_action(
+            &tenant,
+            "Order",
+            "order-wait-timeout",
+            "AddItem",
+            serde_json::json!({}),
+            &AgentContext::default(),
+        )
+        .await;
+    assert!(create.is_ok(), "AddItem failed: {create:?}");
+
+    let app = build_app_with_state(state);
+    let response = app
+        .oneshot(system_get(
+            "/observe/entities/Order/order-wait-timeout/wait?statuses=Submitted&timeout_ms=50&poll_ms=10",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "Draft");
+    assert_eq!(json["timed_out"], true);
+}
+
 // -- Health endpoint tests --
 
 #[tokio::test]
@@ -641,6 +725,81 @@ async fn test_trajectories_empty_when_no_actions() {
     assert_eq!(json["success_rate"], 0.0);
     let failed = json["failed_intents"].as_array().unwrap();
     assert!(failed.is_empty());
+}
+
+#[tokio::test]
+async fn test_intent_evidence_returns_richer_intent_candidates() {
+    let state = test_state_with_turso().await;
+    let intent = "Send an invoice to the customer";
+
+    state
+        .persist_trajectory_entry(&TrajectoryEntry {
+            timestamp: sim_now().to_rfc3339(),
+            tenant: "default".to_string(),
+            entity_type: "Invoice".to_string(),
+            entity_id: "invoice-1".to_string(),
+            action: "GenerateInvoice".to_string(),
+            success: false,
+            from_status: None,
+            to_status: None,
+            error: Some("EntitySetNotFound: Invoice".to_string()),
+            agent_id: Some("agent-1".to_string()),
+            session_id: Some("session-1".to_string()),
+            authz_denied: None,
+            denied_resource: None,
+            denied_module: None,
+            source: None,
+            spec_governed: None,
+            agent_type: None,
+            request_body: Some(serde_json::json!({"customer_id":"c-1"})),
+            intent: Some(intent.to_string()),
+        })
+        .await
+        .unwrap();
+    state
+        .persist_trajectory_entry(&TrajectoryEntry {
+            timestamp: sim_now().to_rfc3339(),
+            tenant: "default".to_string(),
+            entity_type: "InvoiceDraft".to_string(),
+            entity_id: "draft-1".to_string(),
+            action: "CreateDraft".to_string(),
+            success: true,
+            from_status: None,
+            to_status: None,
+            error: None,
+            agent_id: Some("agent-1".to_string()),
+            session_id: Some("session-1".to_string()),
+            authz_denied: None,
+            denied_resource: None,
+            denied_module: None,
+            source: None,
+            spec_governed: None,
+            agent_type: None,
+            request_body: Some(serde_json::json!({"customer_id":"c-1"})),
+            intent: Some(intent.to_string()),
+        })
+        .await
+        .unwrap();
+
+    let app = build_app_with_state(state);
+    let response = app
+        .oneshot(system_get("/observe/evolution/intent-evidence"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let candidates = json["intent_candidates"].as_array().unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(
+        candidates[0]["intent_title"],
+        "Send An Invoice To The Customer"
+    );
+    assert_eq!(candidates[0]["suggested_kind"], "workaround");
+    assert_eq!(json["workaround_patterns"][0]["occurrences"], 1);
 }
 
 // -- Sentinel endpoint tests --

@@ -30,7 +30,7 @@ async fn dst_rollback_install_failure_is_atomic() {
 
         // Try installing PM app — some installs will fail due to heavy faults.
         let install_result = harness
-            .install_os_app("rollback-test", "project-management")
+            .install_skill("rollback-test", "project-management")
             .await;
 
         match install_result {
@@ -80,7 +80,7 @@ async fn dst_rollback_dispatch_with_store_faults() {
 
         // Re-install PM on the faulty harness (no platform faults, so this succeeds).
         faulty_harness
-            .install_os_app(tenant, "project-management")
+            .install_skill(tenant, "project-management")
             .await
             .unwrap_or_else(|e| panic!("seed {seed}: install PM on faulty harness failed: {e}"));
 

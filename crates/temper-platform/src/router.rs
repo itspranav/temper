@@ -35,8 +35,25 @@ pub fn build_platform_router(state: PlatformState) -> Router {
             routing::get(crate::tenant_api::list_os_apps),
         )
         .route(
+            "/observe/os-apps/{name}",
+            routing::get(crate::tenant_api::get_os_app_guide),
+        )
+        .route(
             "/observe/os-apps/{name}/install",
             routing::post(crate::tenant_api::install_os_app),
+        )
+        // Backward-compatible aliases
+        .route(
+            "/observe/skills",
+            routing::get(crate::tenant_api::list_skills),
+        )
+        .route(
+            "/observe/skills/{name}",
+            routing::get(crate::tenant_api::get_skill_guide),
+        )
+        .route(
+            "/observe/skills/{name}/install",
+            routing::post(crate::tenant_api::install_skill),
         )
         .route(
             "/observe/tenants/{id}",
@@ -133,7 +150,7 @@ mod tests {
         }
     }
 
-    // ── OS App Catalog Integration Tests ───────────────────────────
+    // ── OS App Catalog Integration Tests ──────────────────────────
 
     #[tokio::test]
     async fn test_get_os_apps_returns_200() {
@@ -151,7 +168,23 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let apps = json["apps"].as_array().unwrap();
         assert!(!apps.is_empty());
-        assert_eq!(apps[0]["name"], "project-management");
+        // Verify a known skill is present (order depends on filesystem scan).
+        let names: Vec<&str> = apps.iter().filter_map(|a| a["name"].as_str()).collect();
+        assert!(
+            names.contains(&"project-management"),
+            "missing project-management: {names:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_skills_alias_returns_200() {
+        let app = build_platform_router(test_state());
+        let response = app
+            .oneshot(Request::get("/api/skills").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
@@ -201,7 +234,12 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let apps = json["apps"].as_array().unwrap();
         assert!(!apps.is_empty());
-        assert_eq!(apps[0]["name"], "project-management");
+        // Verify a known skill is present (order depends on filesystem scan).
+        let names: Vec<&str> = apps.iter().filter_map(|a| a["name"].as_str()).collect();
+        assert!(
+            names.contains(&"project-management"),
+            "missing project-management: {names:?}"
+        );
     }
 
     #[tokio::test]

@@ -247,7 +247,7 @@ module = "sandbox_provisioner"
 on_failure = "Fail"
 
 [integration.config]
-temper_api_url = "http://localhost:3000"
+temper_api_url = "{secret:temper_api_url}"
 e2b_api_key = "{secret:e2b_api_key}"
 
 [[integration]]
@@ -259,8 +259,15 @@ on_failure = "Fail"
 
 [integration.config]
 api_key = "{secret:anthropic_api_key}"
-temper_api_url = "http://localhost:3000"
-timeout_secs = "120"
+anthropic_api_key = "{secret:anthropic_api_key}"
+openrouter_api_key = "{secret:openrouter_api_key}"
+anthropic_api_url = "https://api.anthropic.com/v1/messages"
+openrouter_api_url = "https://openrouter.ai/api/v1/chat/completions"
+anthropic_auth_mode = "auto"
+openrouter_site_url = ""
+openrouter_app_name = "temper-agent"
+temper_api_url = "{secret:temper_api_url}"
+timeout_secs = "300"
 max_response_bytes = "4194304"
 
 [[integration]]
@@ -271,9 +278,11 @@ module = "tool_runner"
 on_failure = "Fail"
 
 [integration.config]
-temper_api_url = "http://localhost:3000"
+temper_api_url = "{secret:temper_api_url}"
 max_sync_file_bytes = "61440"
 sync_exclude = "__pycache__,node_modules,.git"
+logfire_read_token = "{secret:logfire_read_token}"
+logfire_api_base = "https://logfire-us.pydantic.dev"
 
 [[integration]]
 name = "restore_workspace"
@@ -283,4 +292,4 @@ module = "workspace_restorer"
 on_failure = "Fail"
 
 [integration.config]
-temper_api_url = "http://localhost:3000"
+temper_api_url = "{secret:temper_api_url}"

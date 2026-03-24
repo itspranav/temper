@@ -4,6 +4,7 @@
 //! responses for deterministic testing.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
@@ -59,7 +60,33 @@ pub trait WasmHost: Send + Sync {
 
     /// Log a message at the given level.
     fn log(&self, level: &str, message: &str);
+
+    /// Evaluate a single transition against an IOA spec.
+    ///
+    /// Generic platform capability: any WASM module can validate transitions.
+    /// The host builds a TransitionTable from the IOA source and evaluates
+    /// the given action from the given state with the given parameters.
+    ///
+    /// Returns a JSON result: `{ "success": bool, "new_state": str, "error": str|null, "guard_result": str|null }`
+    ///
+    /// Default: not supported (overridden in temper-server where temper-jit is available).
+    fn evaluate_spec(
+        &self,
+        _ioa_source: &str,
+        _current_state: &str,
+        _action: &str,
+        _params_json: &str,
+    ) -> Result<String, String> {
+        Err("evaluate_spec not supported by this host".to_string())
+    }
 }
+
+/// Callback for evaluating IOA spec transitions.
+///
+/// Injected by `temper-server` where `temper-jit` is available.
+/// Keeps the dependency boundary clean: `temper-wasm` never depends on `temper-jit`.
+pub type SpecEvaluatorFn =
+    Arc<dyn Fn(&str, &str, &str, &str) -> Result<String, String> + Send + Sync>;
 
 /// Production host: real HTTP calls via reqwest, real secrets.
 pub struct ProductionWasmHost {
@@ -67,6 +94,8 @@ pub struct ProductionWasmHost {
     client: reqwest::Client,
     /// Secrets from env vars or a secret store.
     secrets: BTreeMap<String, String>,
+    /// Optional spec evaluator (provided by temper-server at construction).
+    spec_evaluator: Option<SpecEvaluatorFn>,
 }
 
 impl ProductionWasmHost {
@@ -84,7 +113,14 @@ impl ProductionWasmHost {
                 .build()
                 .unwrap_or_default(),
             secrets,
+            spec_evaluator: None,
         }
+    }
+
+    /// Create with a spec evaluator for `host_evaluate_spec` support.
+    pub fn with_spec_evaluator(mut self, evaluator: SpecEvaluatorFn) -> Self {
+        self.spec_evaluator = Some(evaluator);
+        self
     }
 }
 
@@ -217,6 +253,19 @@ impl WasmHost for ProductionWasmHost {
             _ => tracing::debug!(target: "wasm_guest", "{}", message),
         }
     }
+
+    fn evaluate_spec(
+        &self,
+        ioa_source: &str,
+        current_state: &str,
+        action: &str,
+        params_json: &str,
+    ) -> Result<String, String> {
+        match &self.spec_evaluator {
+            Some(evaluator) => evaluator(ioa_source, current_state, action, params_json),
+            None => Err("evaluate_spec not supported by this host".to_string()),
+        }
+    }
 }
 
 /// Parse Connect protocol binary frames from a response body.
@@ -280,6 +329,8 @@ pub struct SimWasmHost {
     connect_responses: BTreeMap<String, Vec<String>>,
     /// Canned secrets.
     secrets: BTreeMap<String, String>,
+    /// Canned evaluate_spec responses: (ioa_source_hash, action) -> result JSON.
+    spec_eval_responses: BTreeMap<(String, String), String>,
     /// Default response for URLs not in the map.
     default_response: (u16, String),
     /// Default binary response for URLs not in the binary map.
@@ -294,6 +345,7 @@ impl SimWasmHost {
             binary_responses: BTreeMap::new(),
             connect_responses: BTreeMap::new(),
             secrets: BTreeMap::new(),
+            spec_eval_responses: BTreeMap::new(),
             default_response: (200, r#"{"ok": true}"#.to_string()),
             default_binary_response: (200, Vec::new()),
         }
@@ -334,6 +386,20 @@ impl SimWasmHost {
     /// Set the default binary response for unmatched URLs.
     pub fn with_default_binary_response(mut self, status: u16, bytes: Vec<u8>) -> Self {
         self.default_binary_response = (status, bytes);
+        self
+    }
+
+    /// Add a canned evaluate_spec response for a given action.
+    pub fn with_spec_eval_response(
+        mut self,
+        ioa_hash: &str,
+        action: &str,
+        result_json: &str,
+    ) -> Self {
+        self.spec_eval_responses.insert(
+            (ioa_hash.to_string(), action.to_string()),
+            result_json.to_string(),
+        );
         self
     }
 }
@@ -394,6 +460,21 @@ impl WasmHost for SimWasmHost {
 
     fn log(&self, level: &str, message: &str) {
         tracing::debug!(target: "wasm_guest_sim", level = level, "{}", message);
+    }
+
+    fn evaluate_spec(
+        &self,
+        ioa_source: &str,
+        _current_state: &str,
+        action: &str,
+        _params_json: &str,
+    ) -> Result<String, String> {
+        // Use a simple hash of the IOA source for lookup
+        let hash = format!("{:x}", ioa_source.len());
+        self.spec_eval_responses
+            .get(&(hash, action.to_string()))
+            .cloned()
+            .ok_or_else(|| format!("sim: no canned response for action '{action}'"))
     }
 }
 

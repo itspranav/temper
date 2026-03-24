@@ -485,17 +485,21 @@ export interface FeatureRequest {
   created_at: string;
 }
 
-// --- OS App types ---
-export interface OsApp {
+// --- Skill types ---
+export interface Skill {
   name: string;
   description: string;
   entity_types: string[];
   version: string;
 }
 
-export interface OsAppsResponse {
-  apps: OsApp[];
+export interface SkillsResponse {
+  apps: Skill[];
 }
+
+// Backward-compatible aliases.
+export type OsApp = Skill;
+export type OsAppsResponse = SkillsResponse;
 
 // --- Extended evolution record detail ---
 export interface EvolutionRecordDetail extends EvolutionRecord {

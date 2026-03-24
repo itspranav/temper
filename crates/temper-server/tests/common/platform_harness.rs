@@ -2,7 +2,7 @@
 //!
 //! Orchestrates deterministic simulation of the full platform lifecycle using
 //! **PRODUCTION code** (`install_os_app`, `dispatch_tenant_action`,
-//! `recover_cedar_policies`, `restore_installed_os_apps`,
+//! `recover_cedar_policies`, `restore_installed_skills`,
 //! `restore_registry_from_platform_store`, `populate_index_from_store`)
 //! with simulated storage backends.
 //!
@@ -76,11 +76,7 @@ impl SimPlatformHarness {
     }
 
     /// Install an OS app using PRODUCTION code.
-    pub async fn install_os_app(
-        &self,
-        tenant: &str,
-        app_name: &str,
-    ) -> Result<Vec<String>, String> {
+    pub async fn install_skill(&self, tenant: &str, app_name: &str) -> Result<Vec<String>, String> {
         install_os_app(&self.platform_state, tenant, app_name)
             .await
             .map(|r| {
@@ -89,6 +85,25 @@ impl SimPlatformHarness {
                 all.extend(r.skipped);
                 all
             })
+    }
+
+    /// Override an existing entity's IOA spec inline (hot-swap).
+    ///
+    /// Useful for testing state machines in isolation without WASM integrations.
+    /// The tenant and entity type must already be registered (via `install_skill`).
+    pub fn register_inline_spec(&self, tenant: &str, entity_type: &str, ioa_source: &str) {
+        let automaton =
+            temper_spec::automaton::parse_automaton(ioa_source).expect("inline IOA should parse");
+        let table = temper_jit::table::TransitionTable::from_automaton(&automaton);
+        let mut registry = self.platform_state.server.registry.write().unwrap(); // ci-ok: infallible lock
+        let spec = registry
+            .get_spec_mut(&TenantId::new(tenant), entity_type)
+            .unwrap_or_else(|| {
+                panic!("entity type '{entity_type}' not found for tenant '{tenant}'")
+            });
+        spec.swap_controller().swap(table);
+        spec.integrations = automaton.integrations;
+        spec.ioa_source = ioa_source.to_string();
     }
 
     /// Dispatch an action using PRODUCTION code.
@@ -121,7 +136,7 @@ impl SimPlatformHarness {
     /// 2. Wire the same durable stores
     /// 3. [`restore_registry_from_platform_store`] — production spec recovery
     /// 4. [`temper_platform::recovery::recover_cedar_policies`] — production Cedar recovery
-    /// 5. [`temper_platform::recovery::restore_installed_os_apps`] — production OS app recovery
+    /// 5. [`temper_platform::recovery::restore_installed_skills`] — production skill recovery
     /// 6. [`populate_index_from_store`] — production index population
     pub async fn restart(&mut self) {
         self.restart_count += 1;
@@ -157,8 +172,8 @@ impl SimPlatformHarness {
         )
         .await;
 
-        // 5. Restore installed OS apps — PRODUCTION code.
-        temper_platform::recovery::restore_installed_os_apps(
+        // 5. Restore installed skills — PRODUCTION code.
+        temper_platform::recovery::restore_installed_skills(
             &new_state,
             self.sim_platform_store.as_ref(),
         )

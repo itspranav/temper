@@ -71,6 +71,22 @@ pub async fn bearer_auth_check(
     if let Some(ref expected) = state.api_token
         && constant_time_eq(token.as_bytes(), expected.as_bytes())
     {
+        if !req.headers().contains_key("x-temper-principal-kind") {
+            req.headers_mut().insert(
+                "x-temper-principal-kind",
+                "admin"
+                    .parse()
+                    .expect("valid x-temper-principal-kind header"),
+            );
+        }
+        if !req.headers().contains_key("x-temper-principal-id") {
+            req.headers_mut().insert(
+                "x-temper-principal-id",
+                "api-key-holder"
+                    .parse()
+                    .expect("valid x-temper-principal-id header"),
+            );
+        }
         return Ok(next.run(req).await);
     }
 
