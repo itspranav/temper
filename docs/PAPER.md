@@ -35,13 +35,9 @@ Cedar authorization with a default-deny posture.  Denied actions surface to the
 human for approval.  Policies accumulate as agents work.  Every transition is
 recorded with agent identity, before/after state, and the authorization decision.
 
-The system is implemented as a 25-crate Rust workspace with 950+ tests.  Three
-pre-built capabilities ship with the platform (project management, filesystem, agent
-orchestration).  A reference e-commerce application demonstrates the full
-development flow across three verified entity types.  A pre-built rule index
-yields sub-30ns action evaluation; end-to-end benchmarks through the full HTTP
-stack with PostgreSQL persistence show ~18ms per action and ~2,200 persisted
-actions per second under concurrent load.
+Three pre-built capabilities ship with the platform (project management, filesystem,
+agent orchestration).  A reference e-commerce application demonstrates the full
+development flow across three verified entity types.
 
 We do not claim this approach generalizes to all backend systems.  For the
 substantial class of applications whose core logic is state machine shaped --
@@ -185,9 +181,6 @@ the Evolution Engine.  Unmet user intents become observation records, which
 surface as structured proposals for specification changes.  Approved changes
 run through the verification cascade and deploy via hot-swap, closing the
 loop between production behavior and system evolution.
-
-The framework is implemented in Rust (edition 2024) as 25 crates plus a
-reference application, totaling 950+ tests.
 
 ---
 
@@ -923,34 +916,7 @@ observability data, with a safety checker ensuring correctness.
 
 ## 11. Evaluation
 
-### 11.1 Test Coverage
-
-The Temper workspace contains 950+ tests across 25 crates and one reference
-application. Key categories:
-
-| Category                       | Count | Crates                                     |
-|--------------------------------|------:|--------------------------------------------|
-| Actor runtime and scheduler    |    19 | temper-runtime                             |
-| Specification parsing          |    20 | temper-spec                                |
-| OData query/path parsing       |    35 | temper-odata                               |
-| Code generation                |     6 | temper-codegen                             |
-| Verification (SMT+model+sim+prop) |  38 | temper-verify                              |
-| Entity actor DST tests         |     7 | temper-server                              |
-| HTTP + multi-tenant tests      |    33 | temper-server                              |
-| Evolution records and chains   |    23 | temper-evolution                           |
-| JIT tables and hot-swap        |    15 | temper-jit                                 |
-| Authorization engine           |    10 | temper-authz                               |
-| Observability and trajectory   |    29 | temper-observe                             |
-| Optimizer actors and safety    |    15 | temper-optimize                            |
-| Storage (Postgres, Redis)      |    25 | temper-store-postgres, temper-store-redis   |
-| CLI subcommands                |    15 | temper-cli                                 |
-| Platform (deploy + bootstrap)  |    53 | temper-platform                            |
-| Compile-first E2E              |     3 | temper-platform                            |
-| Platform E2E shared registry   |     6 | temper-platform                            |
-| Reference app DST tests        |    19 | ecommerce-reference                        |
-| Reference app cascade tests    |     3 | ecommerce-reference                        |
-
-### 11.2 Reference E-Commerce Application
+### 11.1 Reference E-Commerce Application
 
 The reference e-commerce application (`reference-apps/ecommerce/`) demonstrates the
 complete self-hosted development flow: specs, verification cascade, deterministic

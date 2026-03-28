@@ -93,7 +93,7 @@ A system that evolves its own descriptions raises a concern: changes humans cann
 
 ## 8. Where This Stands
 
-Temper is version 0.1.0. The constructor works. The description format is stabilizing. The evolution loop runs end-to-end in testing. 950+ tests pass across 25 crates.
+Temper is version 0.1.0. The constructor works. The description format is stabilizing. The evolution loop runs end-to-end in testing.
 
 **The constructor can do this today.** Parse a description (I/O Automaton spec + data model + authorization policies). Run a four-level verification cascade. Deploy it as a live actor with event sourcing, a generated API, and authorization enforcement. Hot-reload when the description changes. Record every entity transition. Capture full agent execution traces through the MCP bridge. Run the GEPA against those traces to propose description changes. Enforce cross-entity invariants (both hard constraints and eventual consistency with bounded convergence). Surface denied actions to the human for approval.
 
