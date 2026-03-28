@@ -219,7 +219,12 @@ pub(crate) async fn handle_entity_event_stream(
 ) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, StatusCode> {
     require_observe_auth(&state, &headers, "read_events", "Entity")?;
     let tenant = extract_tenant(&headers, &state).map_err(|(code, _)| code)?;
-    let since = params.since.unwrap_or(0);
+    let since = headers
+        .get("last-event-id")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .or(params.since)
+        .unwrap_or(0);
     let rx = state.entity_observe_tx.subscribe();
     let replay_events = state
         .replay_entity_observe_events(tenant.as_str(), &entity_type, &entity_id, since)
@@ -228,7 +233,12 @@ pub(crate) async fn handle_entity_event_stream(
     let replay_high_water = replay_events.last().map(|event| event.seq).unwrap_or(since);
     let replay = replay_events.into_iter().map(|event| {
         let data = serde_json::to_string(&event.data).unwrap_or_default();
-        Ok::<Event, Infallible>(Event::default().event(&event.event_name).data(data))
+        Ok::<Event, Infallible>(
+            Event::default()
+                .id(event.seq.to_string())
+                .event(&event.event_name)
+                .data(data),
+        )
     });
     let replay_stream = tokio_stream::iter(replay);
 
@@ -243,7 +253,12 @@ pub(crate) async fn handle_entity_event_stream(
                 && event.seq > replay_high_water =>
         {
             let data = serde_json::to_string(&event.data).unwrap_or_default();
-            Some(Ok(Event::default().event(&event.event_name).data(data)))
+            Some(Ok(
+                Event::default()
+                    .id(event.seq.to_string())
+                    .event(&event.event_name)
+                    .data(data),
+            ))
         }
         Ok(_) => None,
         Err(_) => None,
