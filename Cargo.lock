@@ -5547,6 +5547,7 @@ dependencies = [
  "temper-store-postgres",
  "temper-store-redis",
  "temper-store-turso",
+ "temper-transport",
  "temper-verify",
  "tempfile",
  "termimad",
@@ -5883,6 +5884,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-transport"
+version = "0.1.0"
+dependencies = [
+ "axum 0.8.8",
+ "futures-util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tokio-tungstenite",
+ "tracing",
+]
+
+[[package]]
 name = "temper-verify"
 version = "0.1.0"
 dependencies = [
@@ -6212,7 +6228,9 @@ checksum = "489a59b6730eda1b0171fcfda8b121f4bee2b35cba8645ca35c5f7ba3eb736c1"
 dependencies = [
  "futures-util",
  "log",
+ "native-tls",
  "tokio",
+ "tokio-native-tls",
  "tungstenite",
 ]
 
@@ -6546,6 +6564,7 @@ dependencies = [
  "http 1.4.0",
  "httparse",
  "log",
+ "native-tls",
  "rand 0.9.2",
  "sha1",
  "thiserror 2.0.18",
