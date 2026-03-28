@@ -253,12 +253,10 @@ pub(crate) async fn handle_entity_event_stream(
                 && event.seq > replay_high_water =>
         {
             let data = serde_json::to_string(&event.data).unwrap_or_default();
-            Some(Ok(
-                Event::default()
-                    .id(event.seq.to_string())
-                    .event(&event.event_name)
-                    .data(data),
-            ))
+            Some(Ok(Event::default()
+                .id(event.seq.to_string())
+                .event(&event.event_name)
+                .data(data)))
         }
         Ok(_) => None,
         Err(_) => None,
