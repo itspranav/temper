@@ -157,12 +157,12 @@ pub fn build_observe_router() -> Router<ServerState> {
             get(entities::handle_get_entity_history),
         )
         .route(
-            "/entities/{entity_type}/{entity_id}/wait",
-            get(entities::handle_wait_for_entity_state),
-        )
-        .route(
             "/entities/{entity_type}/{entity_id}/events",
             get(entities::handle_entity_event_stream),
+        )
+        .route(
+            "/entities/{entity_type}/{entity_id}/wait",
+            get(entities::handle_wait_for_entity_state),
         )
         .route("/events/stream", get(entities::handle_event_stream))
         .route(
