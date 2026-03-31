@@ -550,6 +550,31 @@ pub(super) fn link_host_functions(linker: &mut Linker<HostState>) -> Result<(), 
         )
         .map_err(|e| WasmError::Compilation(format!("failed to link host_hash_stream: {e}")))?;
 
+    // host_get_time(buf_ptr, buf_len) -> i32
+    // Writes the current UTC time as "YYYYMMDDTHHMMSSz" (Sig V4 format) into buf.
+    // Returns bytes written, or -1 on error.
+    linker
+        .func_wrap(
+            "env",
+            "host_get_time",
+            |mut caller: Caller<'_, HostState>, buf_ptr: i32, buf_len: i32| -> i32 {
+                let memory = caller.get_export("memory").and_then(|e| e.into_memory());
+                let Some(memory) = memory else {
+                    return -1;
+                };
+
+                let now = chrono::Utc::now();
+                let formatted = now.format("%Y%m%dT%H%M%SZ").to_string();
+                let bytes = formatted.as_bytes();
+                if bytes.len() > buf_len as usize {
+                    return -1;
+                }
+                let _ = memory.write(&mut caller, buf_ptr as usize, bytes);
+                bytes.len() as i32
+            },
+        )
+        .map_err(|e| WasmError::Compilation(format!("failed to link host_get_time: {e}")))?;
+
     // host_evaluate_spec(ioa_ptr, ioa_len, state_ptr, state_len,
     //                    action_ptr, action_len, params_ptr, params_len,
     //                    result_buf_ptr, result_buf_len) -> i32
