@@ -243,8 +243,7 @@ fn lint_spawn_effect(
         target_action,
         findings,
     );
-    let available_params =
-        available_spawn_params(action, parent_snake, copy_fields.as_deref());
+    let available_params = available_spawn_params(action, parent_snake, copy_fields.as_deref());
     lint_spawn_param_mapping(
         entity_name,
         &action.name,
