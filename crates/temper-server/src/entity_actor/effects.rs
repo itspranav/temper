@@ -359,8 +359,7 @@ pub fn apply_effects(
                     if let Some(parent_obj) = state.fields.as_object() {
                         for field_name in fields_to_copy {
                             if let Some(value) = parent_obj.get(field_name) {
-                                copied_field_values
-                                    .insert(field_name.clone(), value.clone());
+                                copied_field_values.insert(field_name.clone(), value.clone());
                             }
                         }
                     }
