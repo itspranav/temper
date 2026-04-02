@@ -81,6 +81,7 @@ pub enum ResolvedEffect {
         entity_id_source: String,
         initial_action: Option<String>,
         store_id_in: Option<String>,
+        copy_fields: Option<Vec<String>>,
     },
 }
 
@@ -267,11 +268,13 @@ fn translate_single_effect(effect: &Effect) -> ResolvedEffect {
             entity_id_source,
             initial_action,
             store_id_in,
+            copy_fields,
         } => ResolvedEffect::Spawn {
             entity_type: entity_type.clone(),
             entity_id_source: entity_id_source.clone(),
             initial_action: initial_action.clone(),
             store_id_in: store_id_in.clone(),
+            copy_fields: copy_fields.clone(),
         },
     }
 }

@@ -36,6 +36,11 @@ pub struct SpawnRequest {
     pub initial_action: Option<String>,
     /// Optional field on the parent to store the child's ID.
     pub store_id_in: Option<String>,
+    /// Optional list of field names to copy from parent state into child's initial_action params.
+    pub copy_fields: Option<Vec<String>>,
+    /// Field values copied from parent state (populated when copy_fields is Some).
+    #[serde(default)]
+    pub copied_field_values: serde_json::Map<String, serde_json::Value>,
 }
 
 /// A deferred schedule-at request — resolved after `sync_fields`.
@@ -325,6 +330,7 @@ pub fn apply_effects(
                 entity_id_source,
                 initial_action,
                 store_id_in,
+                copy_fields,
             } => {
                 // Resolve child entity ID from params or generate UUID
                 let child_id = if entity_id_source == "{uuid}" {
@@ -347,11 +353,26 @@ pub fn apply_effects(
                     );
                 }
 
+                // Copy named fields from parent state into spawn request
+                let mut copied_field_values = serde_json::Map::new();
+                if let Some(fields_to_copy) = copy_fields {
+                    if let Some(parent_obj) = state.fields.as_object() {
+                        for field_name in fields_to_copy {
+                            if let Some(value) = parent_obj.get(field_name) {
+                                copied_field_values
+                                    .insert(field_name.clone(), value.clone());
+                            }
+                        }
+                    }
+                }
+
                 spawn_requests.push(SpawnRequest {
                     entity_type: entity_type.clone(),
                     entity_id: child_id.clone(),
                     initial_action: initial_action.clone(),
                     store_id_in: store_id_in.clone(),
+                    copy_fields: copy_fields.clone(),
+                    copied_field_values,
                 });
 
                 tracing::info!(
@@ -827,6 +848,74 @@ effect = [{ type = "schedule_at", field = "next_run_at", action = "Trigger" }]
         assert!(
             result.scheduled_actions.is_empty(),
             "missing field should produce no scheduled actions"
+        );
+    }
+
+    #[test]
+    fn test_spawn_with_copy_fields() {
+        let _guard = temper_runtime::scheduler::install_deterministic_context(42);
+
+        let spec = r#"
+[automaton]
+name = "Agent"
+states = ["Ready", "Spawning"]
+initial = "Ready"
+
+[[state]]
+name = "system_prompt"
+type = "string"
+initial = ""
+
+[[state]]
+name = "model"
+type = "string"
+initial = ""
+
+[[action]]
+name = "Launch"
+from = ["Ready"]
+to = "Spawning"
+effect = [
+    { type = "spawn", entity_type = "Session", entity_id_source = "{uuid}", initial_action = "Configure", store_id_in = "last_session_id", copy_fields = "system_prompt,model" },
+]
+"#;
+
+        let table = temper_jit::table::TransitionTable::from_ioa_source(spec);
+        let mut state = EntityState {
+            entity_type: "Agent".into(),
+            entity_id: "agent-1".into(),
+            status: "Ready".into(),
+            item_count: 0,
+            counters: std::collections::BTreeMap::new(),
+            booleans: std::collections::BTreeMap::new(),
+            lists: std::collections::BTreeMap::new(),
+            fields: serde_json::json!({
+                "system_prompt": "You are a helpful assistant",
+                "model": "claude-3-opus"
+            }),
+            events: std::collections::VecDeque::new(),
+            total_event_count: 0,
+            sequence_nr: 0,
+        };
+
+        let result = process_action(&mut state, &table, "Launch", &serde_json::json!({}));
+
+        assert!(result.success, "action should succeed");
+        assert_eq!(result.spawn_requests.len(), 1);
+
+        let req = &result.spawn_requests[0];
+        assert_eq!(req.entity_type, "Session");
+        assert_eq!(
+            req.copy_fields.as_ref().unwrap(),
+            &vec!["system_prompt".to_string(), "model".to_string()]
+        );
+        assert_eq!(
+            req.copied_field_values.get("system_prompt").unwrap(),
+            "You are a helpful assistant"
+        );
+        assert_eq!(
+            req.copied_field_values.get("model").unwrap(),
+            "claude-3-opus"
         );
     }
 }

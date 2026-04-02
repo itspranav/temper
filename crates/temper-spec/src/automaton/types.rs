@@ -177,6 +177,8 @@ pub enum Effect {
         initial_action: Option<String>,
         /// Optional field on the parent to store the child's ID.
         store_id_in: Option<String>,
+        /// Optional list of field names to copy from parent state into child's initial_action params.
+        copy_fields: Option<Vec<String>>,
     },
 }
 

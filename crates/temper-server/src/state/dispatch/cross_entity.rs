@@ -193,6 +193,7 @@ impl crate::state::ServerState {
             let initial_action = req.initial_action.clone();
             let parent_params = action_params.clone();
             let agent = agent_ctx.clone();
+            let copied_fields = req.copied_field_values.clone();
 
             tokio::spawn(async move {
                 // determinism-ok: spawn dispatch is a background side-effect
@@ -229,6 +230,10 @@ impl crate::state::ServerState {
                                 parent_params.as_object().cloned().unwrap_or_default();
                             for (key, value) in parent_fields {
                                 initial_action_params.insert(key, value);
+                            }
+                            // Merge copied field values (take precedence over parent params)
+                            for (key, value) in &copied_fields {
+                                initial_action_params.insert(key.clone(), value.clone());
                             }
                             if let Err(e) = state
                                 .dispatch_tenant_action(

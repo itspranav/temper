@@ -177,11 +177,34 @@ fn lint_spawn_effect(
     let Effect::Spawn {
         entity_type,
         initial_action,
+        copy_fields,
         ..
     } = effect
     else {
         return;
     };
+
+    // Warn if copy_fields references undeclared state vars on the parent
+    if let Some(fields) = copy_fields {
+        let parent_automaton = automata.get(entity_name);
+        if let Some(parent) = parent_automaton {
+            let parent_vars: BTreeSet<String> =
+                parent.state.iter().map(|s| s.name.clone()).collect();
+            for field_name in fields {
+                if !parent_vars.contains(field_name) {
+                    findings.push(BundleLintFinding {
+                        entity: entity_name.to_string(),
+                        code: "spawn_copy_field_unknown".to_string(),
+                        severity: LintSeverity::Warning,
+                        message: format!(
+                            "action '{}' spawn copy_fields references unknown state var '{}' on '{}'",
+                            action.name, field_name, entity_name
+                        ),
+                    });
+                }
+            }
+        }
+    }
 
     let Some(target_automaton) = automata.get(entity_type) else {
         findings.push(BundleLintFinding::error(
@@ -227,6 +250,7 @@ fn lint_spawn_effect(
         entity_type,
         initial_action_name,
         target_action,
+        copy_fields.as_deref(),
         findings,
     );
 }
@@ -273,13 +297,19 @@ fn lint_spawn_param_mapping(
     entity_type: &str,
     initial_action_name: &str,
     target_action: &super::Action,
+    copy_fields: Option<&[String]>,
     findings: &mut Vec<BundleLintFinding>,
 ) {
     if target_action.params.is_empty() {
         return;
     }
 
-    let available_params = available_spawn_params(action, parent_snake);
+    let mut available_params = available_spawn_params(action, parent_snake);
+    if let Some(fields) = copy_fields {
+        for f in fields {
+            available_params.insert(f.clone());
+        }
+    }
     let missing_params: Vec<String> = target_action
         .params
         .iter()

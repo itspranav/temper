@@ -130,11 +130,13 @@ fn convert_effect(effect: ResolvedEffect) -> Effect {
             entity_id_source,
             initial_action,
             store_id_in,
+            copy_fields,
         } => Effect::SpawnEntity {
             entity_type,
             entity_id_source,
             initial_action,
             store_id_in,
+            copy_fields,
         },
     }
 }
@@ -277,6 +279,7 @@ effect = [{ type = "spawn", entity_type = "SubTask", entity_id_source = "{uuid}"
                     entity_id_source,
                     initial_action,
                     store_id_in,
+                    ..
                 } if entity_type == "SubTask"
                     && entity_id_source == "{uuid}"
                     && initial_action.as_deref() == Some("Begin")
@@ -286,6 +289,42 @@ effect = [{ type = "spawn", entity_type = "SubTask", entity_id_source = "{uuid}"
         assert!(
             has_spawn,
             "expected SpawnEntity effect, got: {:?}",
+            rule.effects
+        );
+    }
+
+    #[test]
+    fn test_spawn_with_copy_fields_passes_through() {
+        let spec = r#"
+[automaton]
+name = "Parent"
+states = ["Idle", "Active"]
+initial = "Idle"
+
+[[action]]
+name = "Start"
+from = ["Idle"]
+to = "Active"
+effect = [{ type = "spawn", entity_type = "Session", entity_id_source = "{uuid}", initial_action = "Configure", store_id_in = "last_session_id", copy_fields = "system_prompt,model,tools_enabled" }]
+"#;
+
+        let table = TransitionTable::from_ioa_source(spec);
+        let rule = table.rules.iter().find(|r| r.name == "Start").unwrap();
+
+        let has_spawn = rule.effects.iter().any(|e| {
+            matches!(
+                e,
+                Effect::SpawnEntity {
+                    entity_type,
+                    copy_fields: Some(fields),
+                    ..
+                } if entity_type == "Session"
+                    && fields == &vec!["system_prompt".to_string(), "model".to_string(), "tools_enabled".to_string()]
+            )
+        });
+        assert!(
+            has_spawn,
+            "expected SpawnEntity with copy_fields, got: {:?}",
             rule.effects
         );
     }

@@ -95,11 +95,20 @@ fn parse_effect_fields(
             if entity_type.is_empty() {
                 None
             } else {
+                let copy_fields = fields.get("copy_fields").and_then(|s| {
+                    let names: Vec<String> = s
+                        .split(',')
+                        .map(|f| f.trim().to_string())
+                        .filter(|f| !f.is_empty())
+                        .collect();
+                    if names.is_empty() { None } else { Some(names) }
+                });
                 Some(Effect::Spawn {
                     entity_type,
                     entity_id_source: fields.get("entity_id_source").cloned().unwrap_or_default(),
                     initial_action: fields.get("initial_action").cloned(),
                     store_id_in: fields.get("store_id_in").cloned(),
+                    copy_fields,
                 })
             }
         }

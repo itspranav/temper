@@ -225,6 +225,7 @@ fn is_verifiable_classification() {
             entity_id_source: "s".into(),
             initial_action: None,
             store_id_in: None,
+            copy_fields: None,
         }
         .is_verifiable()
     );

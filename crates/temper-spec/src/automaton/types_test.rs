@@ -129,11 +129,13 @@ effect = [
             entity_id_source,
             initial_action,
             store_id_in,
+            copy_fields,
         } => {
             assert_eq!(entity_type, "Child");
             assert_eq!(entity_id_source, "{uuid}");
             assert_eq!(initial_action.as_deref(), Some("Init"));
             assert_eq!(store_id_in.as_deref(), Some("child_id"));
+            assert!(copy_fields.is_none());
         }
         other => panic!("expected Spawn, got {other:?}"),
     }

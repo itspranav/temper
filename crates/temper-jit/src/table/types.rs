@@ -141,6 +141,7 @@ pub enum Effect {
         entity_id_source: String,
         initial_action: Option<String>,
         store_id_in: Option<String>,
+        copy_fields: Option<Vec<String>>,
     },
 }
 
