@@ -305,12 +305,16 @@ impl EntityActor {
                                 if result.success {
                                     // Shared effect application — same code as handle() and simulation.
                                     let from_status = event.from_status.clone();
-                                    let (_custom_effects, _scheduled_actions, _spawn_requests) =
-                                        super::effects::apply_effects(
-                                            state,
-                                            &result.effects,
-                                            &event.params,
-                                        );
+                                    let (
+                                        _custom_effects,
+                                        _scheduled_actions,
+                                        _spawn_requests,
+                                        _schedule_at_requests,
+                                    ) = super::effects::apply_effects(
+                                        state,
+                                        &result.effects,
+                                        &event.params,
+                                    );
                                     super::effects::apply_new_state_fallback(
                                         state,
                                         &from_status,

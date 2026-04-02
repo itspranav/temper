@@ -96,6 +96,26 @@ Recurring timers are achieved through a self-scheduling spec pattern — each su
 
 **Why this approach**: No new infrastructure (no separate timer service, no cron, no database table). Timers are just delayed messages through the existing dispatch pipeline. The self-scheduling pattern eliminates the need for a recurring timer primitive while remaining verifiable.
 
+### Sub-Decision 3b: Schedule-At (Absolute Timestamp Timer)
+
+A `schedule_at` effect type reads an absolute ISO 8601 timestamp from an entity field and schedules an action at that time:
+
+```toml
+[[action]]
+name = "TriggerComplete"
+from = ["Active"]
+params = ["last_session_id", "last_result", "next_run_at"]
+effect = [{ type = "schedule_at", field = "next_run_at", action = "Trigger" }]
+```
+
+Computed as `delay = target - now` (clamped to 0 if the timestamp is in the past). Reuses the same `ScheduledAction` dispatch path as `schedule`.
+
+**Key design detail**: `schedule_at` is a *deferred effect* — it is collected during `apply_effects()` but resolved AFTER `sync_fields()` in `process_action_with_xref()`. This ensures that WASM-provided params (like a computed `next_run_at`) are available in entity state when the timestamp field is read.
+
+**Motivation**: Enables self-scheduling entities where the next run time is computed by WASM integrations (e.g., cron expression parsing). Eliminates the need for polling infrastructure — no external cron trigger, no heartbeat hacks, no scheduler entities.
+
+**DST compliance**: Uses `sim_now()` for timestamp comparison, so simulation tests see deterministic scheduling. Same non-durable timer model as `schedule` — reconstructed from event replay on restart.
+
 ## Rollout Plan
 
 1. **Phase 0 (This ADR)** — Document decisions before any code.

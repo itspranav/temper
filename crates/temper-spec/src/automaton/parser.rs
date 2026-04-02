@@ -152,6 +152,9 @@ fn format_effects(effects: &[Effect]) -> String {
             } => format!("Schedule(\"{action}\", {delay_seconds})"),
             Effect::ListAppend { var } => format!("ListAppend({var})"),
             Effect::ListRemoveAt { var } => format!("ListRemoveAt({var})"),
+            Effect::ScheduleAt { action, field } => {
+                format!("ScheduleAt(\"{action}\", {field})")
+            }
             Effect::Spawn {
                 entity_type,
                 entity_id_source,

@@ -133,6 +133,8 @@ pub enum Effect {
     Custom(String),
     /// Schedule a delayed action (timer fires after delay_seconds).
     ScheduleAction { action: String, delay_seconds: u64 },
+    /// Schedule an action at an absolute timestamp read from an entity field.
+    ScheduleAtAction { action: String, field: String },
     /// Spawn a child entity as a post-transition effect.
     SpawnEntity {
         entity_type: String,

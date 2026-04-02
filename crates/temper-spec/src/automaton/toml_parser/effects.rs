@@ -59,6 +59,15 @@ fn parse_effect_fields(
                 })
             }
         }
+        "schedule_at" => {
+            let action = fields.get("action").cloned().unwrap_or_default();
+            let field = fields.get("field").cloned().unwrap_or_default();
+            if action.is_empty() || field.is_empty() {
+                None
+            } else {
+                Some(Effect::ScheduleAt { action, field })
+            }
+        }
         "increment" => fields
             .get("var")
             .cloned()
@@ -122,6 +131,16 @@ fn parse_legacy_effect(value: &str) -> Option<Effect> {
 
     if let Some(event) = parse_prefixed_identifier(value, "emit ") {
         return Some(Effect::Emit { event });
+    }
+
+    if let Some(rest) = value.strip_prefix("schedule_at ") {
+        let parts: Vec<&str> = rest.splitn(2, ' ').collect();
+        if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
+            return Some(Effect::ScheduleAt {
+                field: parts[0].to_string(),
+                action: parts[1].to_string(),
+            });
+        }
     }
 
     parse_prefixed_identifier(value, "trigger ").map(|name| Effect::Trigger { name })

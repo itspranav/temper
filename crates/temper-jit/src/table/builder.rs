@@ -124,6 +124,7 @@ fn convert_effect(effect: ResolvedEffect) -> Effect {
             action,
             delay_seconds,
         },
+        ResolvedEffect::ScheduleAt { action, field } => Effect::ScheduleAtAction { action, field },
         ResolvedEffect::Spawn {
             entity_type,
             entity_id_source,

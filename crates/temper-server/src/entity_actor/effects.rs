@@ -38,6 +38,18 @@ pub struct SpawnRequest {
     pub store_id_in: Option<String>,
 }
 
+/// A deferred schedule-at request — resolved after `sync_fields`.
+///
+/// Unlike `ScheduledAction` (fixed delay), a `ScheduleAtRequest` reads an absolute
+/// ISO 8601 timestamp from an entity field and computes the delay at resolution time.
+#[derive(Debug, Clone)]
+pub struct ScheduleAtRequest {
+    /// The action name to dispatch.
+    pub action: String,
+    /// The entity field containing the ISO 8601 timestamp.
+    pub field: String,
+}
+
 /// Maximum cross-entity lookups per transition (TigerStyle budget).
 pub const MAX_CROSS_ENTITY_LOOKUPS: usize = 4;
 /// Maximum entity spawns per transition (TigerStyle budget).
@@ -149,10 +161,14 @@ pub fn process_action_with_xref(
             let from_status = state.status.clone();
             let to_status = transition_result.new_state.clone();
 
-            let (custom_effects, scheduled_actions, spawn_requests) =
+            let (custom_effects, scheduled_actions, spawn_requests, schedule_at_requests) =
                 apply_effects(state, &transition_result.effects, params);
             apply_new_state_fallback(state, &from_status, &to_status);
             sync_fields(state, params);
+
+            // Resolve deferred schedule_at requests now that fields are synced
+            let mut all_scheduled = scheduled_actions;
+            all_scheduled.extend(resolve_schedule_at_requests(state, &schedule_at_requests));
 
             let event = EntityEvent {
                 action: action.to_string(),
@@ -166,7 +182,7 @@ pub fn process_action_with_xref(
                 success: true,
                 event: Some(event),
                 custom_effects,
-                scheduled_actions,
+                scheduled_actions: all_scheduled,
                 spawn_requests,
                 error: None,
             }
@@ -205,15 +221,21 @@ pub fn process_action_with_xref(
 /// - `params` — The action parameters (needed for `ListAppend` / `ListRemoveAt`).
 ///
 /// # Returns
-/// A tuple of (custom effect names, scheduled actions).
+/// A tuple of (custom effect names, scheduled actions, spawn requests, schedule-at requests).
 pub fn apply_effects(
     state: &mut EntityState,
     effects: &[Effect],
     params: &serde_json::Value,
-) -> (Vec<String>, Vec<ScheduledAction>, Vec<SpawnRequest>) {
+) -> (
+    Vec<String>,
+    Vec<ScheduledAction>,
+    Vec<SpawnRequest>,
+    Vec<ScheduleAtRequest>,
+) {
     let mut custom_effects = Vec::new();
     let mut scheduled_actions = Vec::new();
     let mut spawn_requests = Vec::new();
+    let mut schedule_at_requests = Vec::new();
 
     for effect in effects {
         match effect {
@@ -340,10 +362,72 @@ pub fn apply_effects(
                     "spawn entity request"
                 );
             }
+            Effect::ScheduleAtAction { action, field } => {
+                schedule_at_requests.push(ScheduleAtRequest {
+                    action: action.clone(),
+                    field: field.clone(),
+                });
+                tracing::info!(
+                    entity_type = %state.entity_type,
+                    entity_id = %state.entity_id,
+                    scheduled_action = %action,
+                    field = %field,
+                    "schedule_at request (deferred until field resolution)"
+                );
+            }
         }
     }
 
-    (custom_effects, scheduled_actions, spawn_requests)
+    (
+        custom_effects,
+        scheduled_actions,
+        spawn_requests,
+        schedule_at_requests,
+    )
+}
+
+/// Resolve deferred `schedule_at` requests into [`ScheduledAction`]s.
+///
+/// Must be called AFTER [`sync_fields`] so that entity fields contain
+/// the latest param values. Reads the named field as an ISO 8601
+/// timestamp, computes `delay = target - now` (clamped to 0 if past).
+pub fn resolve_schedule_at_requests(
+    state: &EntityState,
+    requests: &[ScheduleAtRequest],
+) -> Vec<ScheduledAction> {
+    if requests.is_empty() {
+        return Vec::new();
+    }
+    let now = sim_now();
+    requests
+        .iter()
+        .filter_map(|req| {
+            let field_value = state.fields.get(&req.field).and_then(|v| v.as_str())?;
+            let target = chrono::DateTime::parse_from_rfc3339(field_value)
+                .ok()
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .or_else(|| {
+                    // Fallback: try parsing without timezone suffix (assume UTC)
+                    chrono::NaiveDateTime::parse_from_str(field_value, "%Y-%m-%dT%H:%M:%S")
+                        .ok()
+                        .map(|ndt| ndt.and_utc())
+                })?;
+            let delay_seconds = (target - now).num_seconds().max(0) as u64;
+            tracing::info!(
+                entity_type = %state.entity_type,
+                entity_id = %state.entity_id,
+                action = %req.action,
+                field = %req.field,
+                target = %target,
+                delay_seconds,
+                "schedule_at resolved"
+            );
+            Some(ScheduledAction {
+                action: req.action.clone(),
+                delay_seconds,
+            })
+        })
+        .collect()
 }
 
 /// Apply the `new_state` fallback from a TransitionResult.
@@ -480,7 +564,7 @@ effect = [{ type = "schedule", action = "Refresh", delay_seconds = 2700 }]
             sequence_nr: 0,
         };
 
-        let (custom, scheduled, _spawns) =
+        let (custom, scheduled, _spawns, _schedule_at) =
             apply_effects(&mut state, &effects, &serde_json::json!({}));
 
         assert!(custom.is_empty());
@@ -597,5 +681,152 @@ guard = [
             "should succeed with cross-entity boolean = true"
         );
         assert_eq!(state.status, "Deployed");
+    }
+
+    #[test]
+    fn test_schedule_at_resolves_from_field_after_sync() {
+        let _guard = temper_runtime::scheduler::install_deterministic_context(42);
+
+        let spec = r#"
+[automaton]
+name = "CronJob"
+states = ["Active"]
+initial = "Active"
+
+[[state]]
+name = "next_run_at"
+type = "string"
+initial = ""
+
+[[action]]
+name = "TriggerComplete"
+from = ["Active"]
+params = ["next_run_at"]
+effect = [{ type = "schedule_at", field = "next_run_at", action = "Trigger" }]
+"#;
+
+        let table = temper_jit::table::TransitionTable::from_ioa_source(spec);
+        let mut state = EntityState {
+            entity_type: "CronJob".into(),
+            entity_id: "cron-1".into(),
+            status: "Active".into(),
+            item_count: 0,
+            counters: std::collections::BTreeMap::new(),
+            booleans: std::collections::BTreeMap::new(),
+            lists: std::collections::BTreeMap::new(),
+            fields: serde_json::json!({}),
+            events: std::collections::VecDeque::new(),
+            total_event_count: 0,
+            sequence_nr: 0,
+        };
+
+        // Provide next_run_at as a param (simulates WASM callback)
+        let future_time = sim_now() + chrono::Duration::seconds(300);
+        let future_iso = future_time.to_rfc3339();
+        let params = serde_json::json!({ "next_run_at": future_iso });
+
+        let result = process_action(&mut state, &table, "TriggerComplete", &params);
+
+        assert!(result.success, "action should succeed");
+        assert_eq!(
+            result.scheduled_actions.len(),
+            1,
+            "should have one scheduled action"
+        );
+        assert_eq!(result.scheduled_actions[0].action, "Trigger");
+        // Delay should be ~300 seconds (sim_now is deterministic)
+        assert_eq!(result.scheduled_actions[0].delay_seconds, 300);
+    }
+
+    #[test]
+    fn test_schedule_at_past_timestamp_fires_immediately() {
+        let _guard = temper_runtime::scheduler::install_deterministic_context(42);
+
+        let spec = r#"
+[automaton]
+name = "CronJob"
+states = ["Active"]
+initial = "Active"
+
+[[state]]
+name = "next_run_at"
+type = "string"
+initial = ""
+
+[[action]]
+name = "TriggerComplete"
+from = ["Active"]
+params = ["next_run_at"]
+effect = [{ type = "schedule_at", field = "next_run_at", action = "Trigger" }]
+"#;
+
+        let table = temper_jit::table::TransitionTable::from_ioa_source(spec);
+        let mut state = EntityState {
+            entity_type: "CronJob".into(),
+            entity_id: "cron-1".into(),
+            status: "Active".into(),
+            item_count: 0,
+            counters: std::collections::BTreeMap::new(),
+            booleans: std::collections::BTreeMap::new(),
+            lists: std::collections::BTreeMap::new(),
+            fields: serde_json::json!({}),
+            events: std::collections::VecDeque::new(),
+            total_event_count: 0,
+            sequence_nr: 0,
+        };
+
+        // Provide a timestamp in the past
+        let past_time = sim_now() - chrono::Duration::seconds(60);
+        let past_iso = past_time.to_rfc3339();
+        let params = serde_json::json!({ "next_run_at": past_iso });
+
+        let result = process_action(&mut state, &table, "TriggerComplete", &params);
+
+        assert!(result.success);
+        assert_eq!(result.scheduled_actions.len(), 1);
+        assert_eq!(
+            result.scheduled_actions[0].delay_seconds, 0,
+            "past timestamp should fire immediately"
+        );
+    }
+
+    #[test]
+    fn test_schedule_at_missing_field_skips() {
+        let _guard = temper_runtime::scheduler::install_deterministic_context(42);
+
+        let spec = r#"
+[automaton]
+name = "CronJob"
+states = ["Active"]
+initial = "Active"
+
+[[action]]
+name = "Complete"
+from = ["Active"]
+effect = [{ type = "schedule_at", field = "next_run_at", action = "Trigger" }]
+"#;
+
+        let table = temper_jit::table::TransitionTable::from_ioa_source(spec);
+        let mut state = EntityState {
+            entity_type: "CronJob".into(),
+            entity_id: "cron-1".into(),
+            status: "Active".into(),
+            item_count: 0,
+            counters: std::collections::BTreeMap::new(),
+            booleans: std::collections::BTreeMap::new(),
+            lists: std::collections::BTreeMap::new(),
+            fields: serde_json::json!({}),
+            events: std::collections::VecDeque::new(),
+            total_event_count: 0,
+            sequence_nr: 0,
+        };
+
+        let result = process_action(&mut state, &table, "Complete", &serde_json::json!({}));
+
+        assert!(result.success);
+        assert!(
+            result.scheduled_actions.is_empty(),
+            "missing field should produce no scheduled actions"
+        );
     }
 }
