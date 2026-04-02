@@ -137,6 +137,7 @@ fn convert_effect(effect: ResolvedEffect) -> ModelEffect {
         ResolvedEffect::Emit(_)
         | ResolvedEffect::Trigger(_)
         | ResolvedEffect::Schedule { .. }
+        | ResolvedEffect::ScheduleAt { .. }
         | ResolvedEffect::Spawn { .. } => {
             unreachable!("runtime-only effect should have been filtered")
         }

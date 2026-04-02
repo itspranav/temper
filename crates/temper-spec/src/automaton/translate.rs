@@ -73,6 +73,8 @@ pub enum ResolvedEffect {
     Trigger(String),
     /// Schedule a delayed action.
     Schedule { action: String, delay_seconds: u64 },
+    /// Schedule an action at an absolute timestamp from an entity field.
+    ScheduleAt { action: String, field: String },
     /// Spawn a child entity.
     Spawn {
         entity_type: String,
@@ -85,7 +87,7 @@ pub enum ResolvedEffect {
 impl ResolvedEffect {
     /// Returns true if this effect modifies verifiable state (counters, booleans, lists).
     ///
-    /// Runtime-only effects (Emit, Trigger, Schedule, Spawn) return false.
+    /// Runtime-only effects (Emit, Trigger, Schedule, ScheduleAt, Spawn) return false.
     pub fn is_verifiable(&self) -> bool {
         matches!(
             self,
@@ -255,6 +257,10 @@ fn translate_single_effect(effect: &Effect) -> ResolvedEffect {
         } => ResolvedEffect::Schedule {
             action: action.clone(),
             delay_seconds: *delay_seconds,
+        },
+        Effect::ScheduleAt { action, field } => ResolvedEffect::ScheduleAt {
+            action: action.clone(),
+            field: field.clone(),
         },
         Effect::Spawn {
             entity_type,

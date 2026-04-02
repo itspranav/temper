@@ -367,6 +367,7 @@ fn effect_var(effect: &Effect) -> Option<&str> {
         Effect::ListRemoveAt { var } => Some(var.as_str()),
         Effect::Trigger { .. } => None,
         Effect::Schedule { .. } => None,
+        Effect::ScheduleAt { .. } => None,
         Effect::Spawn { .. } => None,
     }
 }
@@ -406,6 +407,7 @@ fn render_effect(effect: &Effect) -> String {
             action,
             delay_seconds,
         } => format!("schedule {action} {delay_seconds}s"),
+        Effect::ScheduleAt { action, field } => format!("schedule_at {field} {action}"),
         Effect::Spawn {
             entity_type,
             entity_id_source,
