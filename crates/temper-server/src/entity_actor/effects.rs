@@ -355,12 +355,12 @@ pub fn apply_effects(
 
                 // Copy named fields from parent state into spawn request
                 let mut copied_field_values = serde_json::Map::new();
-                if let Some(fields_to_copy) = copy_fields {
-                    if let Some(parent_obj) = state.fields.as_object() {
-                        for field_name in fields_to_copy {
-                            if let Some(value) = parent_obj.get(field_name) {
-                                copied_field_values.insert(field_name.clone(), value.clone());
-                            }
+                if let Some(fields_to_copy) = copy_fields
+                    && let Some(parent_obj) = state.fields.as_object()
+                {
+                    for field_name in fields_to_copy {
+                        if let Some(value) = parent_obj.get(field_name) {
+                            copied_field_values.insert(field_name.clone(), value.clone());
                         }
                     }
                 }
