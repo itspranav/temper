@@ -243,14 +243,15 @@ fn lint_spawn_effect(
         target_action,
         findings,
     );
+    let available_params =
+        available_spawn_params(action, parent_snake, copy_fields.as_deref());
     lint_spawn_param_mapping(
         entity_name,
-        parent_snake,
-        action,
+        &action.name,
+        &available_params,
         entity_type,
         initial_action_name,
         target_action,
-        copy_fields.as_deref(),
         findings,
     );
 }
@@ -290,27 +291,19 @@ fn lint_spawn_initial_state(
     ));
 }
 
-#[allow(clippy::too_many_arguments)]
 fn lint_spawn_param_mapping(
     entity_name: &str,
-    parent_snake: &str,
-    action: &super::Action,
+    action_name: &str,
+    available_params: &BTreeSet<String>,
     entity_type: &str,
     initial_action_name: &str,
     target_action: &super::Action,
-    copy_fields: Option<&[String]>,
     findings: &mut Vec<BundleLintFinding>,
 ) {
     if target_action.params.is_empty() {
         return;
     }
 
-    let mut available_params = available_spawn_params(action, parent_snake);
-    if let Some(fields) = copy_fields {
-        for f in fields {
-            available_params.insert(f.clone());
-        }
-    }
     let missing_params: Vec<String> = target_action
         .params
         .iter()
@@ -322,22 +315,31 @@ fn lint_spawn_param_mapping(
         return;
     }
 
-    let available: Vec<String> = available_params.into_iter().collect();
+    let available: Vec<String> = available_params.iter().cloned().collect();
     findings.push(BundleLintFinding::error(
         entity_name.to_string(),
         "spawn_initial_action_params_unmapped",
         format!(
             "action '{}' spawns '{}' -> '{}'; missing params {:?}, available params {:?}",
-            action.name, entity_type, initial_action_name, missing_params, available
+            action_name, entity_type, initial_action_name, missing_params, available
         ),
     ));
 }
 
-fn available_spawn_params(action: &super::Action, parent_snake: &str) -> BTreeSet<String> {
+fn available_spawn_params(
+    action: &super::Action,
+    parent_snake: &str,
+    copy_fields: Option<&[String]>,
+) -> BTreeSet<String> {
     let mut available_params: BTreeSet<String> = action.params.iter().cloned().collect();
     available_params.insert("parent_id".to_string());
     available_params.insert("parent_type".to_string());
     available_params.insert(format!("{parent_snake}_id"));
+    if let Some(fields) = copy_fields {
+        for f in fields {
+            available_params.insert(f.clone());
+        }
+    }
     available_params
 }
 
