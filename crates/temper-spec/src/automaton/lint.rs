@@ -290,6 +290,7 @@ fn lint_spawn_initial_state(
     ));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lint_spawn_param_mapping(
     entity_name: &str,
     parent_snake: &str,
