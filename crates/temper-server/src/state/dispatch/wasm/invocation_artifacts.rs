@@ -224,6 +224,7 @@ impl crate::state::ServerState {
             agent_type: None,
             request_body: None,
             intent: None,
+            matched_policy_ids: None,
         };
         tracing::info!(
             tenant = %traj.tenant,

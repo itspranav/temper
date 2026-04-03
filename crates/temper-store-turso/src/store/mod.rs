@@ -220,6 +220,7 @@ impl TursoEventStore {
             schema::ALTER_TRAJECTORIES_ADD_SPEC_GOVERNED,
             schema::ALTER_TRAJECTORIES_ADD_REQUEST_BODY,
             schema::ALTER_TRAJECTORIES_ADD_INTENT,
+            schema::ALTER_TRAJECTORIES_ADD_MATCHED_POLICY_IDS,
         ] {
             let _ = conn.execute(stmt, ()).await; // ignore "duplicate column" errors
         }
@@ -361,6 +362,8 @@ pub struct TursoTrajectoryRow {
     pub request_body: Option<String>,
     /// Explicit intent from X-Intent header.
     pub intent: Option<String>,
+    /// Cedar policy IDs that contributed to the authorization decision (JSON array).
+    pub matched_policy_ids: Option<Vec<String>>,
 }
 
 /// Aggregated trajectory statistics.

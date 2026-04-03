@@ -265,6 +265,7 @@ impl crate::state::ServerState {
                     agent_type: agent_ctx.agent_type.clone(),
                     request_body: Some(action_params.clone()),
                     intent: agent_ctx.intent.clone(),
+                    matched_policy_ids: None,
                 };
                 let request_body_str = {
                     let s = action_params.to_string();

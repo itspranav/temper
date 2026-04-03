@@ -242,6 +242,8 @@ pub const ALTER_TRAJECTORIES_ADD_SPEC_GOVERNED: &str =
 pub const ALTER_TRAJECTORIES_ADD_REQUEST_BODY: &str =
     "ALTER TABLE trajectories ADD COLUMN request_body TEXT";
 pub const ALTER_TRAJECTORIES_ADD_INTENT: &str = "ALTER TABLE trajectories ADD COLUMN intent TEXT";
+pub const ALTER_TRAJECTORIES_ADD_MATCHED_POLICY_IDS: &str =
+    "ALTER TABLE trajectories ADD COLUMN matched_policy_ids TEXT";
 
 /// Index on agent_id for agent-scoped trajectory queries.
 pub const CREATE_TRAJECTORIES_AGENT_INDEX: &str = "\

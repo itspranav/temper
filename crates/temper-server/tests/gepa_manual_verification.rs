@@ -468,6 +468,7 @@ async fn manual_gepa_verification() {
             agent_type: Some("claude-code".to_string()),
             request_body: None,
             intent: None,
+            matched_policy_ids: None,
         })
         .collect();
 
@@ -512,6 +513,7 @@ async fn manual_gepa_verification() {
             agent_type: None,
             request_body: None,
             intent: None,
+            matched_policy_ids: None,
         })
         .collect();
     let few_alerts =

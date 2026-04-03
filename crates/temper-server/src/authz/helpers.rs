@@ -246,6 +246,7 @@ pub(crate) async fn record_authz_denial(
         agent_type: input.security_ctx.principal.agent_type.clone(),
         request_body: None,
         intent: None,
+        matched_policy_ids: None,
     };
     if let Err(e) = state.persist_trajectory_entry(&traj).await {
         tracing::warn!(error = %e, "failed to persist authz trajectory");

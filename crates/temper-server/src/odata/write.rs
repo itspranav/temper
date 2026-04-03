@@ -101,6 +101,7 @@ fn resolve_entity_type_or_record_404(
             agent_type: agent_ctx.agent_type.clone(),
             request_body,
             intent,
+            matched_policy_ids: None,
         };
         {
             let state_c = state.clone();

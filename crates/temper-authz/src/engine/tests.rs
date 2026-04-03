@@ -30,7 +30,7 @@ fn test_permissive_engine_allows_all() {
     let attrs = HashMap::new();
 
     let decision = engine.authorize(&ctx, "read", "Order", &attrs);
-    assert_eq!(decision, AuthzDecision::Allow);
+    assert!(decision.is_allowed());
 }
 
 #[test]
@@ -90,7 +90,7 @@ fn test_invalid_policy_returns_error() {
 
 #[test]
 fn test_decision_is_allowed() {
-    assert!(AuthzDecision::Allow.is_allowed());
+    assert!((AuthzDecision::Allow { policy_ids: vec![] }).is_allowed());
     assert!(!AuthzDecision::Deny(AuthzDenial::NoMatchingPermit).is_allowed());
 }
 

@@ -149,6 +149,7 @@ pub(crate) async fn handle_audit(
         agent_type: None,
         request_body: body.request_body,
         intent: body.intent,
+        matched_policy_ids: None,
     };
 
     if let Err(e) = state.persist_trajectory_entry(&entry).await {

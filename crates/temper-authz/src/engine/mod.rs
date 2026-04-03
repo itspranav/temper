@@ -24,8 +24,8 @@ mod tests;
 /// The result of an authorization check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthzDecision {
-    /// The request is allowed.
-    Allow,
+    /// The request is allowed, with the policy IDs that contributed to the permit.
+    Allow { policy_ids: Vec<String> },
     /// The request is denied with typed denial details.
     Deny(AuthzDenial),
 }
@@ -33,14 +33,22 @@ pub enum AuthzDecision {
 impl AuthzDecision {
     /// Returns `true` if the authorization decision is `Allow`.
     pub fn is_allowed(&self) -> bool {
-        matches!(self, AuthzDecision::Allow)
+        matches!(self, AuthzDecision::Allow { .. })
     }
 
     /// Returns the denial details if the decision is `Deny`.
     pub fn denial(&self) -> Option<&AuthzDenial> {
         match self {
-            AuthzDecision::Allow => None,
+            AuthzDecision::Allow { .. } => None,
             AuthzDecision::Deny(d) => Some(d),
+        }
+    }
+
+    /// Returns the policy IDs that contributed to the allow decision.
+    pub fn policy_ids(&self) -> &[String] {
+        match self {
+            AuthzDecision::Allow { policy_ids } => policy_ids,
+            AuthzDecision::Deny(_) => &[],
         }
     }
 }
@@ -459,7 +467,14 @@ impl AuthzEngine {
             .is_authorized(&request, policy_set, &entities);
 
         match response.decision() {
-            Decision::Allow => AuthzDecision::Allow,
+            Decision::Allow => {
+                let policy_ids: Vec<String> = response
+                    .diagnostics()
+                    .reason()
+                    .map(|id| id.to_string())
+                    .collect();
+                AuthzDecision::Allow { policy_ids }
+            }
             Decision::Deny => {
                 let policy_ids: Vec<String> = response
                     .diagnostics()
@@ -490,7 +505,9 @@ impl AuthzEngine {
         resource_attrs: &HashMap<String, serde_json::Value>,
     ) -> AuthzDecision {
         if Self::is_system(security_ctx) {
-            return AuthzDecision::Allow;
+            return AuthzDecision::Allow {
+                policy_ids: vec!["system-bypass".to_string()],
+            };
         }
         self.authorize(security_ctx, action, resource_type, resource_attrs)
     }
@@ -505,7 +522,9 @@ impl AuthzEngine {
         resource_attrs: &HashMap<String, serde_json::Value>,
     ) -> AuthzDecision {
         if Self::is_system(security_ctx) {
-            return AuthzDecision::Allow;
+            return AuthzDecision::Allow {
+                policy_ids: vec!["system-bypass".to_string()],
+            };
         }
         self.authorize_for_tenant(tenant, security_ctx, action, resource_type, resource_attrs)
     }

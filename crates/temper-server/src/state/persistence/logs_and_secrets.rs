@@ -48,6 +48,10 @@ impl ServerState {
         let Some(turso) = self.persistent_store_for_tenant(&entry.tenant).await else {
             return Ok(());
         };
+        let matched_policy_ids_json = entry
+            .matched_policy_ids
+            .as_ref()
+            .map(|ids| serde_json::to_string(ids).unwrap_or_default());
         let request_body_json = entry.request_body.as_ref().and_then(|v| {
             let s = serde_json::to_string(v).ok()?;
             Some(if s.len() > 4096 {
@@ -85,6 +89,7 @@ impl ServerState {
                 created_at: &entry.timestamp,
                 request_body: request_body_json.as_deref(),
                 intent: entry.intent.as_deref(),
+                matched_policy_ids: matched_policy_ids_json.as_deref(),
             })
             .await
             .map_err(|e| {

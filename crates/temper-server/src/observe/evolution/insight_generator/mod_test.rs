@@ -22,6 +22,7 @@ fn entry(entity_type: &str, action: &str, success: bool) -> TrajectoryEntry {
         agent_type: None,
         request_body: None,
         intent: None,
+        matched_policy_ids: None,
     }
 }
 

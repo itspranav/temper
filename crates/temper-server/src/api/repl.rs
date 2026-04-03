@@ -100,6 +100,7 @@ pub(crate) async fn handle_repl(
                 agent_type: None,
                 request_body: None,
                 intent: None,
+                matched_policy_ids: None,
             };
             if let Err(persist_err) = state.persist_trajectory_entry(&entry).await {
                 tracing::error!(error = %persist_err, "failed to persist REPL trajectory entry");

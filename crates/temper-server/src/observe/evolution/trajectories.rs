@@ -193,6 +193,7 @@ pub(crate) async fn handle_unmet_intent(
             .and_then(|v| v.as_str())
             .map(str::to_string)
             .or_else(|| Some(intent.to_string())),
+        matched_policy_ids: None,
     };
     state
         .persist_trajectory_entry(&entry)

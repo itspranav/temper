@@ -67,6 +67,9 @@ pub struct TrajectoryEntry {
     /// Explicit intent string from the `X-Intent` HTTP header.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intent: Option<String>,
+    /// Cedar policy IDs that contributed to the authorization decision (allow or deny).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_policy_ids: Option<Vec<String>>,
 }
 
 /// Bounded, append-only trajectory log.

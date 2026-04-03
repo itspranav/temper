@@ -70,6 +70,7 @@ impl crate::state::ServerState {
             } else {
                 ctx.agent_ctx.intent.clone()
             },
+            matched_policy_ids: None,
         };
         tracing::info!(
             tenant = %entry.tenant,
@@ -204,6 +205,7 @@ impl crate::state::ServerState {
                 agent_type: ctx.agent_ctx.agent_type.clone(),
                 request_body: None,
                 intent: None,
+                matched_policy_ids: None,
             };
             tracing::info!(
                 tenant = %entry.tenant,

@@ -378,7 +378,7 @@ impl ServerState {
             .unwrap_or(0)
             .max(0) as u64;
         let decision_str = match &decision {
-            AuthzDecision::Allow => "Allow",
+            AuthzDecision::Allow { .. } => "Allow",
             AuthzDecision::Deny(_) => "Deny",
         };
         let wide = wide_event::from_authz_decision(wide_event::AuthzDecisionInput {
@@ -392,7 +392,7 @@ impl ServerState {
         wide_event::emit_span(&wide);
         wide_event::emit_metrics(&wide);
         match decision {
-            AuthzDecision::Allow => Ok(()),
+            AuthzDecision::Allow { .. } => Ok(()),
             AuthzDecision::Deny(denial) => Err(denial),
         }
     }

@@ -431,6 +431,7 @@ async fn handle_entity_set(
     name: &str,
     query_options: &QueryOptions,
 ) -> axum::response::Response {
+    tracing::debug!(name = %name, tenant = %tenant, "handle_entity_set");
     let entity_type = match resolve_entity_type(state, tenant, name) {
         Some(t) => t,
         None => return entity_set_not_found_response(state, tenant, name).await,

@@ -453,7 +453,7 @@ effect = "set phantom true"
                 serde_json::Value::String("issue-1".to_string()),
             )]),
         );
-        assert!(matches!(issue, temper_authz::AuthzDecision::Allow));
+        assert!(matches!(issue, temper_authz::AuthzDecision::Allow { .. }));
 
         let ungoverned = engine.authorize(
             &customer_ctx,

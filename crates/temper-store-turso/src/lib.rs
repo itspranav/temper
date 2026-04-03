@@ -50,6 +50,7 @@ pub struct TursoTrajectoryInsert<'a> {
     pub created_at: &'a str,
     pub request_body: Option<&'a str>,
     pub intent: Option<&'a str>,
+    pub matched_policy_ids: Option<&'a str>,
 }
 
 #[derive(Clone, Copy, Debug)]

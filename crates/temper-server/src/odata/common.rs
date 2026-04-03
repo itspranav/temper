@@ -68,12 +68,29 @@ pub(super) fn resolve_entity_type(
     tenant: &TenantId,
     entity_set: &str,
 ) -> Option<String> {
-    state
+    let reg_result = state
         .registry
         .read()
-        .unwrap() // ci-ok: infallible lock
-        .resolve_entity_type(tenant, entity_set)
-        .or_else(|| state.entity_set_map.get(entity_set).cloned())
+        .unwrap()
+        .resolve_entity_type(tenant, entity_set);
+    let legacy_result = state.entity_set_map.get(entity_set).cloned();
+    let result = reg_result.or(legacy_result);
+    if result.is_none() {
+        let reg = state.registry.read().unwrap();
+        let tenant_exists = reg.get_tenant(tenant).is_some();
+        let map_size = reg
+            .get_tenant(tenant)
+            .map(|tc| tc.entity_set_map.len())
+            .unwrap_or(0);
+        tracing::warn!(
+            tenant = %tenant,
+            entity_set = %entity_set,
+            tenant_exists,
+            map_size,
+            "entity_set_not_found"
+        );
+    }
+    result
 }
 
 /// Get the CSDL XML for a tenant.

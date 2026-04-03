@@ -351,6 +351,7 @@ mod tests {
                 agent_type: None,
                 request_body: None,
                 intent: None,
+                matched_policy_ids: None,
             })
             .collect();
 
@@ -399,6 +400,7 @@ mod tests {
                 agent_type: None,
                 request_body: None,
                 intent: None,
+                matched_policy_ids: None,
             })
             .collect();
 

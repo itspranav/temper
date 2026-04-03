@@ -71,7 +71,7 @@ impl WasmAuthzGate for CedarWasmAuthzGate {
         );
 
         match decision {
-            AuthzDecision::Allow => WasmAuthzDecision::Allow,
+            AuthzDecision::Allow { .. } => WasmAuthzDecision::Allow,
             AuthzDecision::Deny(denial) => WasmAuthzDecision::Deny(denial.to_string()),
         }
     }
@@ -100,7 +100,7 @@ impl WasmAuthzGate for CedarWasmAuthzGate {
         );
 
         match decision {
-            AuthzDecision::Allow => WasmAuthzDecision::Allow,
+            AuthzDecision::Allow { .. } => WasmAuthzDecision::Allow,
             AuthzDecision::Deny(denial) => WasmAuthzDecision::Deny(denial.to_string()),
         }
     }

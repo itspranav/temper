@@ -88,6 +88,7 @@ pub async fn persist_and_activate_policy(
                 created_at: &now,
                 request_body: None,
                 intent: None,
+                matched_policy_ids: None,
             })
             .await
         {

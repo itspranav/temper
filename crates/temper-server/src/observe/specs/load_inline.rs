@@ -213,6 +213,7 @@ pub(crate) async fn handle_load_inline(
             agent_type: None,
             request_body: None,
             intent: None,
+            matched_policy_ids: None,
         };
         if let Err(e) = state.persist_trajectory_entry(&traj).await {
             tracing::error!(error = %e, "failed to persist spec submission trajectory");
