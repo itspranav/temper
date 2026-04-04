@@ -97,6 +97,10 @@ impl ResourceLimiter for MemoryLimiter {
 struct CachedModule {
     /// The compiled wasmtime module.
     module: Module,
+    /// Pre-linked instance template for non-WASI modules.
+    instance_pre: Option<wasmtime::InstancePre<HostState>>,
+    /// Pre-linked instance template for WASI modules.
+    instance_pre_wasi: Option<wasmtime::InstancePre<HostState>>,
 }
 
 /// Host state passed into the WASM store.
@@ -177,7 +181,38 @@ impl WasmEngine {
         let module = Module::new(&self.engine, wasm_bytes)
             .map_err(|e| WasmError::Compilation(e.to_string()))?;
 
-        let cached = Arc::new(CachedModule { module });
+        // Pre-link for both WASI and non-WASI paths.
+        let needs_wasi = module
+            .imports()
+            .any(|imp| imp.module() == "wasi_snapshot_preview1");
+
+        let (instance_pre, instance_pre_wasi) = if needs_wasi {
+            let mut linker = Linker::new(&self.engine);
+            host_functions::link_host_functions(&mut linker)
+                .map_err(|e| WasmError::Compilation(format!("pre-link host functions: {e}")))?;
+            preview1::add_to_linker_sync(&mut linker, |state: &mut HostState| {
+                state.wasi_ctx.as_mut().expect("wasi_ctx must be Some")
+            })
+            .map_err(|e| WasmError::Compilation(format!("pre-link WASI: {e}")))?;
+            let pre = linker
+                .instantiate_pre(&module)
+                .map_err(|e| WasmError::Compilation(format!("pre-instantiate WASI: {e}")))?;
+            (None, Some(pre))
+        } else {
+            let mut linker = Linker::new(&self.engine);
+            host_functions::link_host_functions(&mut linker)
+                .map_err(|e| WasmError::Compilation(format!("pre-link host functions: {e}")))?;
+            let pre = linker
+                .instantiate_pre(&module)
+                .map_err(|e| WasmError::Compilation(format!("pre-instantiate: {e}")))?;
+            (Some(pre), None)
+        };
+
+        let cached = Arc::new(CachedModule {
+            module,
+            instance_pre,
+            instance_pre_wasi,
+        });
         {
             let mut cache = self.cache.write().expect("cache lock poisoned");
             cache.insert(hash.clone(), cached);
@@ -278,27 +313,34 @@ impl WasmEngine {
         }
         let _timer_guard = AbortOnDrop(timeout_task);
 
-        // Link host functions
-        let mut linker = Linker::new(&self.engine);
-        host_functions::link_host_functions(&mut linker)?;
-
-        // Link WASI imports for wasm32-wasi modules (clock, random, etc.).
-        // Non-WASI modules skip this — their imports are fully satisfied by
-        // the custom host functions above.
-        if needs_wasi {
-            preview1::add_to_linker_sync(&mut linker, |state: &mut HostState| {
-                state
-                    .wasi_ctx
-                    .as_mut()
-                    .expect("wasi_ctx must be Some when needs_wasi is true")
-            })
-            .map_err(|e| WasmError::Compilation(format!("failed to link WASI: {e}")))?;
-        }
-
-        // Instantiate
-        let instance = linker
-            .instantiate(&mut store, &cached.module)
-            .map_err(|e| WasmError::Instantiation(e.to_string()))?;
+        // Instantiate from cached InstancePre (pre-linked at compile time).
+        // This avoids re-linking host functions and WASI imports on every invocation.
+        let instance = if needs_wasi {
+            if let Some(ref pre) = cached.instance_pre_wasi {
+                pre.instantiate(&mut store)
+                    .map_err(|e| WasmError::Instantiation(e.to_string()))?
+            } else {
+                // Fallback: create linker on the fly (shouldn't happen for cached modules)
+                let mut linker = Linker::new(&self.engine);
+                host_functions::link_host_functions(&mut linker)?;
+                preview1::add_to_linker_sync(&mut linker, |state: &mut HostState| {
+                    state.wasi_ctx.as_mut().expect("wasi_ctx must be Some")
+                })
+                .map_err(|e| WasmError::Compilation(format!("failed to link WASI: {e}")))?;
+                linker
+                    .instantiate(&mut store, &cached.module)
+                    .map_err(|e| WasmError::Instantiation(e.to_string()))?
+            }
+        } else if let Some(ref pre) = cached.instance_pre {
+            pre.instantiate(&mut store)
+                .map_err(|e| WasmError::Instantiation(e.to_string()))?
+        } else {
+            let mut linker = Linker::new(&self.engine);
+            host_functions::link_host_functions(&mut linker)?;
+            linker
+                .instantiate(&mut store, &cached.module)
+                .map_err(|e| WasmError::Instantiation(e.to_string()))?
+        };
 
         // Find and call the `run` export
         let run_fn = instance
@@ -319,14 +361,10 @@ impl WasmEngine {
         // Call run(ptr, len) -> result_ptr
         let result_ptr = run_fn
             .call(&mut store, (ctx_ptr as i32, ctx_bytes.len() as i32))
-            .map_err(|e| {
-                // Use downcast to identify trap kind — the display string wraps
-                // backtrace context so string matching is unreliable.
-                match e.downcast_ref::<wasmtime::Trap>() {
-                    Some(&wasmtime::Trap::OutOfFuel) => WasmError::FuelExhausted,
-                    Some(&wasmtime::Trap::Interrupt) => WasmError::Timeout(max_duration),
-                    _ => WasmError::Invocation(e.to_string()),
-                }
+            .map_err(|e| match e.downcast_ref::<wasmtime::Trap>() {
+                Some(&wasmtime::Trap::OutOfFuel) => WasmError::FuelExhausted,
+                Some(&wasmtime::Trap::Interrupt) => WasmError::Timeout(max_duration),
+                _ => WasmError::Invocation(e.to_string()),
             })?;
 
         let duration_ms = start.elapsed().as_millis() as u64;
