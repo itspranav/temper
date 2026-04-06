@@ -16,7 +16,9 @@ fn is_blob_lock_error(error: &str) -> bool {
 }
 
 fn blob_retry_backoff(attempt: usize) -> Duration {
-    let shift = u32::try_from(attempt.saturating_sub(1)).unwrap_or(u32::MAX).min(5);
+    let shift = u32::try_from(attempt.saturating_sub(1))
+        .unwrap_or(u32::MAX)
+        .min(5);
     Duration::from_millis(25_u64.saturating_mul(1_u64 << shift))
 }
 
