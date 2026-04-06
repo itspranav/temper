@@ -34,6 +34,15 @@ pub struct InstallResult {
     /// WASM modules compiled and registered.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub wasm_modules: Vec<String>,
+    /// Agent definitions bootstrapped.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<String>,
+    /// Skill definitions bootstrapped.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<String>,
+    /// Seed data instances created.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub seed_instances: Vec<String>,
 }
 
 /// Parsed app.toml manifest.
@@ -90,6 +99,99 @@ pub struct AppBundle {
     pub cedar_policies: Vec<String>,
     /// WASM module binaries as `(module_name, wasm_bytes)` pairs.
     pub wasm_modules: BTreeMap<String, Vec<u8>>,
+    /// Agent definitions discovered from `agents/` subdirectories.
+    pub agents: Vec<AgentDefinition>,
+    /// Skill definitions discovered from `skills/` subdirectories.
+    pub skills: Vec<AppSkillDefinition>,
+    /// Seed data instances discovered from `seed-data/` TOML files.
+    pub seed_instances: Vec<SeedInstance>,
+}
+
+// ── Agent / Skill / Seed Data types ─────────────────────────────────
+
+/// An agent definition discovered in the app's `agents/{name}/` directory.
+///
+/// All `.md` files in the directory are concatenated alphabetically.
+/// The platform is filename-agnostic — conventions like SOUL.md, STYLE.md,
+/// AGENT.md are for humans, not the platform.
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentDefinition {
+    /// Agent name (from directory name).
+    pub name: String,
+    /// Concatenated content of all `.md` files, sorted alphabetically.
+    pub content: String,
+    /// Whether a `SOUL.md` file was present (indicates personality overlay).
+    pub has_soul: bool,
+    /// Description extracted from the first non-header paragraph.
+    pub description: String,
+}
+
+/// A skill definition discovered in the app's `skills/{name}/` directory.
+///
+/// Each skill directory must contain a `SKILL.md` file. Other files in the
+/// directory are companion files (examples, references, scripts) that get
+/// uploaded to TemperFS alongside the main skill document.
+#[derive(Debug, Clone, Serialize)]
+pub struct AppSkillDefinition {
+    /// Skill name (from directory name).
+    pub name: String,
+    /// Main skill document content (from `SKILL.md`).
+    pub content: String,
+    /// Description extracted from the skill document.
+    pub description: String,
+    /// Scope for injection filtering. Read from TOML frontmatter
+    /// (`+++scope = "Paw"+++`) or defaults to `"global"`.
+    pub scope: String,
+    /// Companion files in the skill directory (everything except SKILL.md).
+    #[serde(skip)]
+    pub companion_files: Vec<CompanionFile>,
+}
+
+/// A companion file bundled with a skill.
+#[derive(Debug, Clone)]
+pub struct CompanionFile {
+    /// Relative path within the skill directory.
+    pub name: String,
+    /// File content bytes.
+    pub content: Vec<u8>,
+    /// MIME type (inferred from extension).
+    pub mime_type: String,
+}
+
+/// A seed data instance to create on first install.
+///
+/// Parsed from `seed-data/*.toml` files using `[[instance]]` blocks.
+#[derive(Debug, Clone, serde::Deserialize, Serialize)]
+pub struct SeedInstance {
+    /// Entity type name (must be a registered type).
+    #[serde(rename = "type")]
+    pub entity_type: String,
+    /// Optional explicit entity ID.
+    #[serde(default)]
+    pub id: Option<String>,
+    /// Fields to set on the entity.
+    #[serde(default)]
+    pub fields: serde_json::Value,
+    /// Actions to dispatch after creation, in order.
+    #[serde(default)]
+    pub actions: Vec<SeedAction>,
+}
+
+/// An action to dispatch on a seed entity after creation.
+#[derive(Debug, Clone, serde::Deserialize, Serialize)]
+pub struct SeedAction {
+    /// Action name (e.g. "Activate", "Register").
+    pub name: String,
+    /// Action parameters.
+    #[serde(default)]
+    pub params: serde_json::Value,
+}
+
+/// Container for parsing `seed-data/*.toml` files.
+#[derive(Debug, serde::Deserialize)]
+struct SeedFile {
+    #[serde(rename = "instance", default)]
+    instances: Vec<SeedInstance>,
 }
 
 // Backward-compatible alias: SkillBundle → AppBundle.
@@ -492,6 +594,250 @@ fn find_wasm_modules(app_dir: &Path) -> BTreeMap<String, Vec<u8>> {
     modules
 }
 
+// ── Agent / Skill / Seed Data discovery ─────────────────────────────
+
+/// Discover agent definitions from `agents/{name}/` subdirectories.
+///
+/// Each subdirectory is one agent. All `.md` files within it are collected,
+/// sorted alphabetically, and concatenated. The platform is filename-agnostic —
+/// conventions like SOUL.md, STYLE.md, AGENT.md are for humans.
+fn find_agents(app_dir: &Path) -> Vec<AgentDefinition> {
+    let agents_dir = app_dir.join("agents");
+    if !agents_dir.is_dir() {
+        return Vec::new();
+    }
+    let Ok(entries) = std::fs::read_dir(&agents_dir) else {
+        return Vec::new();
+    };
+
+    let mut dirs: Vec<_> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+        .collect();
+    dirs.sort_by_key(|e| e.file_name());
+
+    let mut results = Vec::new();
+    for dir_entry in dirs {
+        let agent_name = dir_entry.file_name().to_string_lossy().to_string();
+        let agent_dir = dir_entry.path();
+
+        // Collect all .md files, sorted alphabetically.
+        let mut md_files: Vec<PathBuf> = std::fs::read_dir(&agent_dir)
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .to_lowercase()
+                    .ends_with(".md")
+            })
+            .map(|e| e.path())
+            .collect();
+        md_files.sort();
+
+        if md_files.is_empty() {
+            continue;
+        }
+
+        let has_soul = md_files
+            .iter()
+            .any(|p| p.file_name().map(|f| f == "SOUL.md").unwrap_or(false));
+
+        let mut content = String::new();
+        for path in &md_files {
+            if !content.is_empty() {
+                content.push_str("\n\n");
+            }
+            if let Ok(text) = std::fs::read_to_string(path) {
+                content.push_str(&text);
+            }
+        }
+
+        let description =
+            extract_description(&content).unwrap_or_else(|| format!("Agent: {agent_name}"));
+
+        results.push(AgentDefinition {
+            name: agent_name,
+            content,
+            has_soul,
+            description,
+        });
+    }
+    results
+}
+
+/// Discover skill definitions from `skills/{name}/` subdirectories.
+///
+/// Each subdirectory must contain a `SKILL.md` file as the main document.
+/// All other files are collected as companion files.
+fn find_app_skills(app_dir: &Path) -> Vec<AppSkillDefinition> {
+    let skills_dir = app_dir.join("skills");
+    if !skills_dir.is_dir() {
+        return Vec::new();
+    }
+    let Ok(entries) = std::fs::read_dir(&skills_dir) else {
+        return Vec::new();
+    };
+
+    let mut dirs: Vec<_> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+        .collect();
+    dirs.sort_by_key(|e| e.file_name());
+
+    let mut results = Vec::new();
+    for dir_entry in dirs {
+        let skill_name = dir_entry.file_name().to_string_lossy().to_string();
+        let skill_dir = dir_entry.path();
+
+        // Main skill document.
+        let skill_path = skill_dir.join("SKILL.md");
+        let content = match std::fs::read_to_string(&skill_path) {
+            Ok(c) => c,
+            Err(_) => continue, // Skip directories without SKILL.md
+        };
+
+        let description =
+            extract_description(&content).unwrap_or_else(|| format!("Skill: {skill_name}"));
+
+        // Extract scope from TOML frontmatter if present.
+        let scope = extract_scope(&content).unwrap_or_else(|| "global".to_string());
+
+        // Collect companion files (everything except SKILL.md).
+        let companion_files = collect_companion_files(&skill_dir);
+
+        results.push(AppSkillDefinition {
+            name: skill_name,
+            content,
+            description,
+            scope,
+            companion_files,
+        });
+    }
+    results
+}
+
+/// Extract a `scope` value from TOML frontmatter (`+++...+++`).
+fn extract_scope(content: &str) -> Option<String> {
+    let rest = content.strip_prefix("+++")?;
+    let end = rest.find("+++")?;
+    let frontmatter = &rest[..end];
+    for line in frontmatter.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("scope") {
+            if let Some(val) = trimmed.split('=').nth(1) {
+                let val = val.trim().trim_matches('"');
+                if !val.is_empty() {
+                    return Some(val.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Recursively collect companion files from a skill directory (excluding SKILL.md).
+fn collect_companion_files(skill_dir: &Path) -> Vec<CompanionFile> {
+    let mut files = Vec::new();
+    collect_companions_recursive(skill_dir, skill_dir, &mut files);
+    files
+}
+
+fn collect_companions_recursive(
+    base_dir: &Path,
+    current_dir: &Path,
+    results: &mut Vec<CompanionFile>,
+) {
+    let Ok(entries) = std::fs::read_dir(current_dir) else {
+        return;
+    };
+    let mut sorted: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+    sorted.sort_by_key(|e| e.file_name());
+
+    for entry in sorted {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_companions_recursive(base_dir, &path, results);
+        } else if path.file_name().map(|f| f != "SKILL.md").unwrap_or(true) {
+            if let Ok(content) = std::fs::read(&path) {
+                let rel_path = path
+                    .strip_prefix(base_dir)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .to_string();
+                let mime_type = mime_from_extension(&path);
+                results.push(CompanionFile {
+                    name: rel_path,
+                    content,
+                    mime_type,
+                });
+            }
+        }
+    }
+}
+
+/// Infer MIME type from file extension.
+fn mime_from_extension(path: &Path) -> String {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("md") => "text/markdown".to_string(),
+        Some("txt") => "text/plain".to_string(),
+        Some("json") => "application/json".to_string(),
+        Some("toml") => "application/toml".to_string(),
+        Some("yaml" | "yml") => "application/yaml".to_string(),
+        Some("sh") => "application/x-sh".to_string(),
+        Some("py") => "text/x-python".to_string(),
+        Some("ts" | "js") => "text/javascript".to_string(),
+        _ => "application/octet-stream".to_string(),
+    }
+}
+
+/// Discover seed data instances from `seed-data/*.toml` files.
+///
+/// Each TOML file contains `[[instance]]` blocks that declare entities
+/// to create on first install.
+fn find_seed_data(app_dir: &Path) -> Vec<SeedInstance> {
+    let seed_dir = app_dir.join("seed-data");
+    if !seed_dir.is_dir() {
+        return Vec::new();
+    }
+    let Ok(entries) = std::fs::read_dir(&seed_dir) else {
+        return Vec::new();
+    };
+
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".toml"))
+        .map(|e| e.path())
+        .collect();
+    files.sort();
+
+    let mut all_instances = Vec::new();
+    for path in &files {
+        match std::fs::read_to_string(path) {
+            Ok(content) => match toml::from_str::<SeedFile>(&content) {
+                Ok(seed_file) => all_instances.extend(seed_file.instances),
+                Err(e) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "Failed to parse seed data file"
+                    );
+                }
+            },
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "Failed to read seed data file"
+                );
+            }
+        }
+    }
+    all_instances
+}
+
 /// Read the app guide markdown (APP.md/app.md first, then skill.md/SKILL.md fallback).
 fn read_app_guide(app_dir: &Path) -> Option<String> {
     for name in &["APP.md", "app.md", "skill.md", "SKILL.md"] {
@@ -602,6 +948,11 @@ fn load_app_bundle(app_dir: &Path) -> Option<AppBundle> {
     // Read WASM module binaries from wasm/*/target/wasm32-unknown-unknown/release/*.wasm.
     let wasm_modules = find_wasm_modules(app_dir);
 
+    // Discover agents, skills, and seed data.
+    let agents = find_agents(app_dir);
+    let skills = find_app_skills(app_dir);
+    let seed_instances = find_seed_data(app_dir);
+
     // Read app guide to check if there's anything at all.
     let app_guide = read_app_guide(app_dir);
 
@@ -609,6 +960,9 @@ fn load_app_bundle(app_dir: &Path) -> Option<AppBundle> {
     if specs.is_empty()
         && cedar_policies.is_empty()
         && wasm_modules.is_empty()
+        && agents.is_empty()
+        && skills.is_empty()
+        && seed_instances.is_empty()
         && app_guide.is_none()
         && csdl.is_none()
     {
@@ -620,6 +974,9 @@ fn load_app_bundle(app_dir: &Path) -> Option<AppBundle> {
         csdl,
         cedar_policies,
         wasm_modules,
+        agents,
+        skills,
+        seed_instances,
     })
 }
 
@@ -906,11 +1263,51 @@ async fn install_os_app_without_dependencies(
         wasm_registered,
     );
 
+    // ── Step 5: Log discovered agents (bootstrap deferred to caller). ──
+    let agent_names: Vec<String> = bundle.agents.iter().map(|a| a.name.clone()).collect();
+    if !agent_names.is_empty() {
+        tracing::info!(
+            tenant,
+            app = app_name,
+            agents = ?agent_names,
+            "App contains agent definitions (bootstrap requires paw-agent entity types)"
+        );
+    }
+
+    // ── Step 6: Log discovered skills (bootstrap deferred to caller). ──
+    let skill_names: Vec<String> = bundle.skills.iter().map(|s| s.name.clone()).collect();
+    if !skill_names.is_empty() {
+        tracing::info!(
+            tenant,
+            app = app_name,
+            skills = ?skill_names,
+            "App contains skill definitions (bootstrap requires paw-agent entity types)"
+        );
+    }
+
+    // ── Step 7: Log discovered seed data (bootstrap deferred to caller). ──
+    let seed_types: Vec<String> = bundle
+        .seed_instances
+        .iter()
+        .map(|s| s.entity_type.clone())
+        .collect();
+    if !seed_types.is_empty() {
+        tracing::info!(
+            tenant,
+            app = app_name,
+            seed_types = ?seed_types,
+            "App contains seed data instances"
+        );
+    }
+
     Ok(InstallResult {
         added,
         updated,
         skipped,
         wasm_modules: wasm_registered,
+        agents: agent_names,
+        skills: skill_names,
+        seed_instances: seed_types,
     })
 }
 
