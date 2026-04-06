@@ -6,10 +6,11 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use async_trait::async_trait;
+use tokio::sync::Semaphore;
 
 use crate::metrics;
 
@@ -129,6 +130,50 @@ pub struct ProductionWasmHost {
     trace_id: Option<String>,
     /// Optional short-circuit for binary HTTP calls.
     binary_http_interceptor: Option<BinaryHttpInterceptorFn>,
+}
+
+const DEFAULT_BLOB_TRANSPORT_MAX_CONCURRENCY: usize = 32;
+
+fn blob_transport_max_concurrency() -> usize {
+    static MAX_CONCURRENCY: OnceLock<usize> = OnceLock::new();
+    *MAX_CONCURRENCY.get_or_init(|| {
+        std::env::var("TEMPER_BLOB_TRANSPORT_MAX_CONCURRENCY")
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .or_else(|| {
+                std::env::var("TEMPER_BLOB_IO_MAX_CONCURRENCY")
+                    .ok()
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+                    .filter(|value| *value > 0)
+            })
+            .unwrap_or(DEFAULT_BLOB_TRANSPORT_MAX_CONCURRENCY)
+    })
+}
+
+fn blob_transport_semaphore() -> &'static Semaphore {
+    static SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
+    SEMAPHORE.get_or_init(|| Semaphore::new(blob_transport_max_concurrency()))
+}
+
+fn remote_blob_backend<'a>(secrets: &'a BTreeMap<String, String>, url: &str) -> Option<&'a str> {
+    let endpoint = secrets.get("blob_endpoint")?.trim_end_matches('/');
+    if endpoint.is_empty() || !url.starts_with(endpoint) {
+        return None;
+    }
+
+    if endpoint.contains("/_internal/blobs") {
+        return None;
+    }
+
+    let backend = if endpoint.contains("amazonaws.com") || endpoint.contains(".s3.") {
+        "s3"
+    } else if endpoint.contains("r2.cloudflarestorage.com") {
+        "r2"
+    } else {
+        "custom"
+    };
+    Some(backend)
 }
 
 impl ProductionWasmHost {
@@ -341,6 +386,35 @@ impl WasmHost for ProductionWasmHost {
                 }
             }
         }
+
+        let _blob_transport_permit = if let Some(backend) = remote_blob_backend(&self.secrets, url)
+        {
+            let queued_at = Instant::now();
+            let permit = blob_transport_semaphore()
+                .acquire()
+                .await
+                .expect("blob transport semaphore should not be closed");
+            let wait_duration = queued_at.elapsed();
+            let wait_ms = wait_duration.as_millis() as u64;
+            if wait_ms > 0 {
+                tracing::info!(
+                    http.method = %method,
+                    http.url = %telemetry_url(url),
+                    backend,
+                    wait_ms,
+                    max_concurrency = blob_transport_max_concurrency() as u64,
+                    "remote blob transport queued"
+                );
+            }
+            metrics::record_blob_transport_wait(
+                method,
+                backend,
+                wait_duration.as_secs_f64() * 1000.0,
+            );
+            Some(permit)
+        } else {
+            None
+        };
 
         let mut builder = match method.to_uppercase().as_str() {
             "GET" => self.client.get(url),

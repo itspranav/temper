@@ -10,6 +10,8 @@ struct WasmMetrics {
     host_http_duration_ms: Histogram<f64>,
     host_http_request_bytes: Histogram<u64>,
     host_http_response_bytes: Histogram<u64>,
+    blob_transport_wait_duration_ms: Histogram<f64>,
+    blob_transport_requests_total: Counter<u64>,
 }
 
 fn metrics() -> &'static WasmMetrics {
@@ -47,6 +49,19 @@ fn metrics() -> &'static WasmMetrics {
                 .with_unit("By")
                 .with_description(
                     "Payload size of outbound host HTTP responses returned to WASM modules.",
+                )
+                .build(),
+            blob_transport_wait_duration_ms: meter
+                .f64_histogram("temper_blob_transport_wait_duration_ms")
+                .with_unit("ms")
+                .with_description(
+                    "Time spent waiting for shared blob transport capacity before a remote blob request starts.",
+                )
+                .build(),
+            blob_transport_requests_total: meter
+                .u64_counter("temper_blob_transport_requests_total")
+                .with_description(
+                    "Total number of remote blob transport requests issued by WASM modules.",
                 )
                 .build(),
         }
@@ -92,4 +107,15 @@ pub(crate) fn record_host_http_call(
     metrics()
         .host_http_response_bytes
         .record(response_bytes, &attrs);
+}
+
+pub(crate) fn record_blob_transport_wait(method: &str, backend: &str, wait_duration_ms: f64) {
+    let attrs = [
+        KeyValue::new("http_method", method.to_string()),
+        KeyValue::new("backend", backend.to_string()),
+    ];
+    metrics()
+        .blob_transport_wait_duration_ms
+        .record(wait_duration_ms, &attrs);
+    metrics().blob_transport_requests_total.add(1, &attrs);
 }
