@@ -138,9 +138,7 @@ fn local_blob_binary_interceptor(
         let endpoint = endpoint.clone();
         Box::pin(async move {
             let prefix = format!("{endpoint}/");
-            let Some(blob_key) = url.strip_prefix(&prefix) else {
-                return None;
-            };
+            let blob_key = url.strip_prefix(&prefix)?;
             let blob_key = blob_key.to_string();
             crate::runtime_metrics::record_blob_local_fast_path_request(&method);
             tracing::info!(
