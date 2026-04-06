@@ -1263,51 +1263,23 @@ async fn install_os_app_without_dependencies(
         wasm_registered,
     );
 
-    // ── Step 5: Log discovered agents (bootstrap deferred to caller). ──
-    let agent_names: Vec<String> = bundle.agents.iter().map(|a| a.name.clone()).collect();
-    if !agent_names.is_empty() {
-        tracing::info!(
-            tenant,
-            app = app_name,
-            agents = ?agent_names,
-            "App contains agent definitions (bootstrap requires paw-agent entity types)"
-        );
-    }
+    // ── Step 5: Bootstrap agents. ──────────────────────────────────────
+    let agents_bootstrapped = bootstrap_agents(state, &tenant_id, tenant, &bundle.agents).await;
 
-    // ── Step 6: Log discovered skills (bootstrap deferred to caller). ──
-    let skill_names: Vec<String> = bundle.skills.iter().map(|s| s.name.clone()).collect();
-    if !skill_names.is_empty() {
-        tracing::info!(
-            tenant,
-            app = app_name,
-            skills = ?skill_names,
-            "App contains skill definitions (bootstrap requires paw-agent entity types)"
-        );
-    }
+    // ── Step 6: Bootstrap skills. ────────────────────────────────────
+    let skills_bootstrapped = bootstrap_skills(state, &tenant_id, tenant, &bundle.skills).await;
 
-    // ── Step 7: Log discovered seed data (bootstrap deferred to caller). ──
-    let seed_types: Vec<String> = bundle
-        .seed_instances
-        .iter()
-        .map(|s| s.entity_type.clone())
-        .collect();
-    if !seed_types.is_empty() {
-        tracing::info!(
-            tenant,
-            app = app_name,
-            seed_types = ?seed_types,
-            "App contains seed data instances"
-        );
-    }
+    // ── Step 7: Create seed instances. ───────────────────────────────
+    let seed_created = bootstrap_seed_data(state, &tenant_id, tenant, &bundle.seed_instances).await;
 
     Ok(InstallResult {
         added,
         updated,
         skipped,
         wasm_modules: wasm_registered,
-        agents: agent_names,
-        skills: skill_names,
-        seed_instances: seed_types,
+        agents: agents_bootstrapped,
+        skills: skills_bootstrapped,
+        seed_instances: seed_created,
     })
 }
 
@@ -1318,6 +1290,465 @@ pub async fn install_skill(
     skill_name: &str,
 ) -> Result<InstallResult, String> {
     install_os_app(state, tenant, skill_name).await
+}
+
+// ── Bootstrap helpers (entity creation during install) ───────────────
+
+/// Bootstrap agent definitions into the tenant by creating Soul entities.
+///
+/// For each agent definition in the app's `agents/` directory:
+/// 1. Check if the Soul entity type is registered (skip gracefully if not)
+/// 2. Check if a Soul with this name already exists (idempotent)
+/// 3. Create a TemperFS File entity with the agent's concatenated content
+/// 4. Create a Soul entity pointing to that file
+///
+/// Returns the names of successfully bootstrapped agents.
+async fn bootstrap_agents(
+    state: &PlatformState,
+    tenant_id: &TenantId,
+    tenant: &str,
+    agents: &[AgentDefinition],
+) -> Vec<String> {
+    if agents.is_empty() {
+        return Vec::new();
+    }
+
+    // Check if Soul entity type is registered.
+    let has_souls = {
+        let registry = state.registry.read().unwrap(); // ci-ok: infallible lock
+        registry.get_spec(tenant_id, "Soul").is_some()
+    };
+    if !has_souls {
+        if !agents.is_empty() {
+            tracing::info!(
+                tenant,
+                count = agents.len(),
+                "Skipping agent bootstrap — Soul entity type not registered (install paw-agent first)"
+            );
+        }
+        return Vec::new();
+    }
+
+    // Check if File entity type is registered (for TemperFS).
+    let has_files = {
+        let registry = state.registry.read().unwrap(); // ci-ok: infallible lock
+        registry.get_spec(tenant_id, "File").is_some()
+    };
+    if !has_files {
+        tracing::info!(
+            tenant,
+            "Skipping agent bootstrap — File entity type not registered (install temper-fs first)"
+        );
+        return Vec::new();
+    }
+
+    let agent_ctx = temper_server::request_context::AgentContext::system();
+    let mut bootstrapped = Vec::new();
+
+    for agent in agents {
+        // Check if Soul already exists by listing and filtering.
+        let existing_ids = state.server.list_entity_ids(tenant_id, "Soul");
+        let mut already_exists = false;
+        for id in &existing_ids {
+            if let Ok(resp) = state
+                .server
+                .get_tenant_entity_state(tenant_id, "Soul", id)
+                .await
+                && let Some(name) = resp.state.fields.get("Name").and_then(|v| v.as_str())
+                && name.eq_ignore_ascii_case(&agent.name)
+            {
+                tracing::debug!(tenant, agent = %agent.name, "Soul already exists — skipping");
+                already_exists = true;
+                bootstrapped.push(agent.name.clone());
+                break;
+            }
+        }
+        if already_exists {
+            continue;
+        }
+
+        // Create TemperFS File entity for the content.
+        let file_name = format!("{}.soul.md", agent.name.to_lowercase().replace(' ', "-"));
+        let file_id = format!(
+            "app-soul-file-{}",
+            agent.name.to_lowercase().replace(' ', "-")
+        );
+        match state
+            .server
+            .get_or_create_tenant_entity(
+                tenant_id,
+                "File",
+                &file_id,
+                serde_json::json!({
+                    "Name": file_name,
+                    "MimeType": "text/markdown",
+                    "Content": agent.content,
+                }),
+            )
+            .await
+        {
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(
+                    tenant,
+                    agent = %agent.name,
+                    error = %e,
+                    "Failed to create TemperFS File for agent"
+                );
+                continue;
+            }
+        }
+
+        // Create Soul entity.
+        let soul_id = format!("app-soul-{}", agent.name.to_lowercase().replace(' ', "-"));
+        match state
+            .server
+            .get_or_create_tenant_entity(tenant_id, "Soul", &soul_id, serde_json::json!({}))
+            .await
+        {
+            Ok(resp) => {
+                if resp.state.status == "Draft" || resp.state.status == "Created" {
+                    // Try to register the soul with metadata.
+                    if let Err(e) = state
+                        .server
+                        .dispatch(temper_server::state::DispatchCommand {
+                            tenant: tenant_id,
+                            entity_type: "Soul",
+                            entity_id: &soul_id,
+                            action: "Create",
+                            params: serde_json::json!({
+                                "name": agent.name,
+                                "description": agent.description,
+                                "content_file_id": file_id,
+                            }),
+                            agent_ctx: &agent_ctx,
+                            await_integration: false,
+                        })
+                        .await
+                    {
+                        tracing::warn!(
+                            tenant,
+                            agent = %agent.name,
+                            error = %e,
+                            "Failed to register Soul entity"
+                        );
+                        continue;
+                    }
+                    // Publish the soul.
+                    let _ = state
+                        .server
+                        .dispatch(temper_server::state::DispatchCommand {
+                            tenant: tenant_id,
+                            entity_type: "Soul",
+                            entity_id: &soul_id,
+                            action: "Publish",
+                            params: serde_json::json!({}),
+                            agent_ctx: &agent_ctx,
+                            await_integration: false,
+                        })
+                        .await;
+                }
+                tracing::info!(tenant, agent = %agent.name, "Agent soul bootstrapped");
+                bootstrapped.push(agent.name.clone());
+            }
+            Err(e) => {
+                tracing::warn!(
+                    tenant,
+                    agent = %agent.name,
+                    error = %e,
+                    "Failed to create Soul entity"
+                );
+            }
+        }
+    }
+    bootstrapped
+}
+
+/// Bootstrap skill definitions into the tenant by creating Skill entities.
+///
+/// For each skill definition in the app's `skills/` directory:
+/// 1. Check if the Skill entity type is registered
+/// 2. Check if a Skill with this name already exists (idempotent)
+/// 3. Create a TemperFS File entity with the skill content
+/// 4. Create a Skill entity pointing to that file
+///
+/// Returns the names of successfully bootstrapped skills.
+async fn bootstrap_skills(
+    state: &PlatformState,
+    tenant_id: &TenantId,
+    tenant: &str,
+    skills: &[AppSkillDefinition],
+) -> Vec<String> {
+    if skills.is_empty() {
+        return Vec::new();
+    }
+
+    let has_skills = {
+        let registry = state.registry.read().unwrap(); // ci-ok: infallible lock
+        registry.get_spec(tenant_id, "Skill").is_some()
+    };
+    if !has_skills {
+        tracing::info!(
+            tenant,
+            count = skills.len(),
+            "Skipping skill bootstrap — Skill entity type not registered (install paw-agent first)"
+        );
+        return Vec::new();
+    }
+
+    let has_files = {
+        let registry = state.registry.read().unwrap(); // ci-ok: infallible lock
+        registry.get_spec(tenant_id, "File").is_some()
+    };
+    if !has_files {
+        tracing::info!(
+            tenant,
+            "Skipping skill bootstrap — File entity type not registered (install temper-fs first)"
+        );
+        return Vec::new();
+    }
+
+    let agent_ctx = temper_server::request_context::AgentContext::system();
+    let mut bootstrapped = Vec::new();
+
+    for skill in skills {
+        // Check if Skill already exists by name.
+        let existing_ids = state.server.list_entity_ids(tenant_id, "Skill");
+        let mut already_exists = false;
+        for id in &existing_ids {
+            if let Ok(resp) = state
+                .server
+                .get_tenant_entity_state(tenant_id, "Skill", id)
+                .await
+                && let Some(name) = resp.state.fields.get("Name").and_then(|v| v.as_str())
+                && name.eq_ignore_ascii_case(&skill.name)
+            {
+                tracing::debug!(tenant, skill = %skill.name, "Skill already exists — skipping");
+                already_exists = true;
+                bootstrapped.push(skill.name.clone());
+                break;
+            }
+        }
+        if already_exists {
+            continue;
+        }
+
+        // Create TemperFS File for skill content.
+        let file_id = format!(
+            "app-skill-file-{}",
+            skill.name.to_lowercase().replace(' ', "-")
+        );
+        let file_name = format!("{}.skill.md", skill.name.to_lowercase().replace(' ', "-"));
+        match state
+            .server
+            .get_or_create_tenant_entity(
+                tenant_id,
+                "File",
+                &file_id,
+                serde_json::json!({
+                    "Name": file_name,
+                    "MimeType": "text/markdown",
+                    "Content": skill.content,
+                }),
+            )
+            .await
+        {
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(
+                    tenant,
+                    skill = %skill.name,
+                    error = %e,
+                    "Failed to create TemperFS File for skill"
+                );
+                continue;
+            }
+        }
+
+        // Create Skill entity.
+        let skill_id = format!("app-skill-{}", skill.name.to_lowercase().replace(' ', "-"));
+        match state
+            .server
+            .get_or_create_tenant_entity(tenant_id, "Skill", &skill_id, serde_json::json!({}))
+            .await
+        {
+            Ok(resp) => {
+                if resp.state.status == "Active" || resp.state.status == "Created" {
+                    // Register the skill with metadata.
+                    let _ = state
+                        .server
+                        .dispatch(temper_server::state::DispatchCommand {
+                            tenant: tenant_id,
+                            entity_type: "Skill",
+                            entity_id: &skill_id,
+                            action: "Register",
+                            params: serde_json::json!({
+                                "name": skill.name,
+                                "description": skill.description,
+                                "content_file_id": file_id,
+                                "scope": skill.scope,
+                                "agent_filter": "",
+                            }),
+                            agent_ctx: &agent_ctx,
+                            await_integration: false,
+                        })
+                        .await;
+                }
+                tracing::info!(tenant, skill = %skill.name, scope = %skill.scope, "Skill bootstrapped");
+                bootstrapped.push(skill.name.clone());
+            }
+            Err(e) => {
+                tracing::warn!(
+                    tenant,
+                    skill = %skill.name,
+                    error = %e,
+                    "Failed to create Skill entity"
+                );
+            }
+        }
+    }
+    bootstrapped
+}
+
+/// Bootstrap seed data instances into the tenant.
+///
+/// For each seed instance:
+/// 1. Check if the entity type is registered
+/// 2. Create the entity
+/// 3. Dispatch each action in order
+///
+/// Returns descriptions of successfully created instances.
+async fn bootstrap_seed_data(
+    state: &PlatformState,
+    tenant_id: &TenantId,
+    tenant: &str,
+    instances: &[SeedInstance],
+) -> Vec<String> {
+    if instances.is_empty() {
+        return Vec::new();
+    }
+
+    let agent_ctx = temper_server::request_context::AgentContext::system();
+    let mut created = Vec::new();
+
+    for instance in instances {
+        // Check if entity type is registered.
+        let type_exists = {
+            let registry = state.registry.read().unwrap(); // ci-ok: infallible lock
+            registry
+                .get_spec(tenant_id, &instance.entity_type)
+                .is_some()
+        };
+        if !type_exists {
+            tracing::warn!(
+                tenant,
+                entity_type = %instance.entity_type,
+                "Skipping seed instance — entity type not registered"
+            );
+            continue;
+        }
+
+        // Determine entity ID.
+        let entity_id = instance.id.clone().unwrap_or_else(|| {
+            // Generate a deterministic ID from type + fields.
+            let hash_input = format!("{}-{}", instance.entity_type, instance.fields);
+            format!(
+                "seed-{}",
+                &format!("{:x}", md5_like_hash(&hash_input))[..12]
+            )
+        });
+
+        // Check if entity already exists (idempotent).
+        if state
+            .server
+            .entity_exists(tenant_id, &instance.entity_type, &entity_id)
+        {
+            tracing::debug!(
+                tenant,
+                entity_type = %instance.entity_type,
+                entity_id = %entity_id,
+                "Seed entity already exists — skipping"
+            );
+            created.push(format!("{}({})", instance.entity_type, entity_id));
+            continue;
+        }
+
+        // Create entity with initial fields.
+        let initial_fields = if instance.fields.is_null() {
+            serde_json::json!({})
+        } else {
+            instance.fields.clone()
+        };
+
+        match state
+            .server
+            .get_or_create_tenant_entity(
+                tenant_id,
+                &instance.entity_type,
+                &entity_id,
+                initial_fields,
+            )
+            .await
+        {
+            Ok(_) => {
+                // Dispatch each action in order.
+                for action in &instance.actions {
+                    let params = if action.params.is_null() {
+                        serde_json::json!({})
+                    } else {
+                        action.params.clone()
+                    };
+                    if let Err(e) = state
+                        .server
+                        .dispatch(temper_server::state::DispatchCommand {
+                            tenant: tenant_id,
+                            entity_type: &instance.entity_type,
+                            entity_id: &entity_id,
+                            action: &action.name,
+                            params,
+                            agent_ctx: &agent_ctx,
+                            await_integration: false,
+                        })
+                        .await
+                    {
+                        tracing::warn!(
+                            tenant,
+                            entity_type = %instance.entity_type,
+                            entity_id = %entity_id,
+                            action = %action.name,
+                            error = %e,
+                            "Failed to dispatch seed action"
+                        );
+                    }
+                }
+                tracing::info!(
+                    tenant,
+                    entity_type = %instance.entity_type,
+                    entity_id = %entity_id,
+                    "Seed entity created"
+                );
+                created.push(format!("{}({})", instance.entity_type, entity_id));
+            }
+            Err(e) => {
+                tracing::warn!(
+                    tenant,
+                    entity_type = %instance.entity_type,
+                    entity_id = %entity_id,
+                    error = %e,
+                    "Failed to create seed entity"
+                );
+            }
+        }
+    }
+    created
+}
+
+/// Simple hash for generating deterministic seed entity IDs.
+fn md5_like_hash(input: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    input.hash(&mut hasher);
+    hasher.finish()
 }
 
 #[cfg(test)]
