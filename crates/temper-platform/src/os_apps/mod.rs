@@ -626,10 +626,10 @@ fn load_app_bundle(app_dir: &Path) -> Option<AppBundle> {
 fn os_app_dependencies(name: &str) -> Vec<String> {
     // Check manifest first.
     let cat = catalog().read().unwrap(); // ci-ok: infallible lock
-    if let Some(entry) = cat.entries.iter().find(|e| e.name == name) {
-        if !entry.dependencies.is_empty() {
-            return entry.dependencies.clone();
-        }
+    if let Some(entry) = cat.entries.iter().find(|e| e.name == name)
+        && !entry.dependencies.is_empty()
+    {
+        return entry.dependencies.clone();
     }
     // Hardcoded fallback.
     match name {
