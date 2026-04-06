@@ -606,7 +606,12 @@ fn load_app_bundle(app_dir: &Path) -> Option<AppBundle> {
     let app_guide = read_app_guide(app_dir);
 
     // Return None only if the app has nothing at all.
-    if specs.is_empty() && cedar_policies.is_empty() && wasm_modules.is_empty() && app_guide.is_none() && csdl.is_none() {
+    if specs.is_empty()
+        && cedar_policies.is_empty()
+        && wasm_modules.is_empty()
+        && app_guide.is_none()
+        && csdl.is_none()
+    {
         return None;
     }
 

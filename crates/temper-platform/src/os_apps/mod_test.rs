@@ -166,7 +166,12 @@ fn test_intent_discovery_specs_parse() {
 #[test]
 fn test_intent_discovery_csdl_parses() {
     let bundle = get_os_app("intent-discovery").expect("intent-discovery app not found");
-    let result = parse_csdl(bundle.csdl.as_ref().expect("intent-discovery should have CSDL"));
+    let result = parse_csdl(
+        bundle
+            .csdl
+            .as_ref()
+            .expect("intent-discovery should have CSDL"),
+    );
     assert!(
         result.is_ok(),
         "IntentDiscovery CSDL failed to parse: {:?}",

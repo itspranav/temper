@@ -33,7 +33,7 @@ pub use bootstrap::{
     bootstrap_agent_specs, bootstrap_operator_credential, bootstrap_system_tenant,
     persist_agent_verification, persist_system_verification,
 };
-pub use os_apps::{AppEntry, AppBundle, AppManifest, InstallResult, install_os_app, list_os_apps};
+pub use os_apps::{AppBundle, AppEntry, AppManifest, InstallResult, install_os_app, list_os_apps};
 // Backward-compatible skill aliases.
 pub use os_apps::{install_skill, list_skills};
 pub use protocol::{PlatformEvent, VerifyStepStatus};
