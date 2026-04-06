@@ -25,7 +25,7 @@ async fn dst_index_after_restart() {
 
         // Install PM app.
         harness
-            .install_skill(tenant, "project-management")
+            .install_app(tenant, "project-management")
             .await
             .unwrap_or_else(|e| panic!("seed {seed}: install PM failed: {e}"));
 
@@ -90,7 +90,7 @@ async fn dst_index_multi_entity_types() {
 
         // Install PM app — has Issue, Project, Comment, Label, Cycle.
         harness
-            .install_skill(tenant, "project-management")
+            .install_app(tenant, "project-management")
             .await
             .unwrap_or_else(|e| panic!("seed {seed}: install PM failed: {e}"));
 

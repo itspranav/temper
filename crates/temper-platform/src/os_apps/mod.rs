@@ -22,7 +22,7 @@ use temper_spec::csdl::{emit_csdl_xml, merge_csdl, parse_csdl};
 use crate::bootstrap;
 use crate::state::PlatformState;
 
-/// Result of a skill installation, categorising each spec by what happened.
+/// Result of an app installation, categorising each spec by what happened.
 #[derive(Debug, Clone, Serialize)]
 pub struct InstallResult {
     /// Entity types registered for the first time.
@@ -34,65 +34,198 @@ pub struct InstallResult {
     /// WASM modules compiled and registered.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub wasm_modules: Vec<String>,
+    /// Agent definitions bootstrapped.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<String>,
+    /// Skill definitions bootstrapped.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<String>,
+    /// Seed data instances created.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub seed_instances: Vec<String>,
 }
 
-/// Metadata for a skill in the catalog.
+/// Parsed app.toml manifest.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct AppManifest {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_version")]
+    pub version: String,
+    #[serde(default)]
+    pub dependencies: Vec<String>,
+}
+
+fn default_version() -> String {
+    "0.1.0".to_string()
+}
+
+fn read_app_manifest(app_dir: &Path) -> Option<AppManifest> {
+    let path = app_dir.join("app.toml");
+    let content = std::fs::read_to_string(&path).ok()?;
+    toml::from_str(&content).ok()
+}
+
+/// Metadata for an app in the catalog.
 #[derive(Debug, Clone, Serialize)]
-pub struct SkillEntry {
+pub struct AppEntry {
     /// Short name used in CLI flags and API calls (e.g. `"project-management"`).
     pub name: String,
     /// Human-readable description.
     pub description: String,
-    /// Entity types included in the skill.
+    /// Entity types included in the app.
     pub entity_types: Vec<String>,
     /// Semantic version.
     pub version: String,
-    /// Full skill guide markdown (from `skill.md`), if available.
+    /// Full app guide markdown (from `APP.md`/`app.md`/`skill.md`), if available.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub skill_guide: Option<String>,
+    pub app_guide: Option<String>,
+    /// Declared dependencies (from app.toml).
+    #[serde(default)]
+    pub dependencies: Vec<String>,
 }
 
-/// Full spec bundle for a skill (owned, loaded from disk).
-pub struct SkillBundle {
+// Backward-compatible alias: SkillEntry → AppEntry.
+pub type SkillEntry = AppEntry;
+
+/// Full spec bundle for an app (owned, loaded from disk).
+pub struct AppBundle {
     /// IOA spec sources as `(entity_type, ioa_toml_source)` pairs.
     pub specs: Vec<(String, String)>,
-    /// CSDL XML source.
-    pub csdl: String,
+    /// CSDL XML source (None if app has no IOA specs).
+    pub csdl: Option<String>,
     /// Cedar policy sources (may be empty).
     pub cedar_policies: Vec<String>,
     /// WASM module binaries as `(module_name, wasm_bytes)` pairs.
     pub wasm_modules: BTreeMap<String, Vec<u8>>,
+    /// Agent definitions discovered from `agents/` subdirectories.
+    pub agents: Vec<AgentDefinition>,
+    /// Skill definitions discovered from `skills/` subdirectories.
+    pub skills: Vec<AppSkillDefinition>,
+    /// Seed data instances discovered from `seed-data/` TOML files.
+    pub seed_instances: Vec<SeedInstance>,
 }
 
+// ── Agent / Skill / Seed Data types ─────────────────────────────────
+
+/// An agent definition discovered in the app's `agents/{name}/` directory.
+///
+/// All `.md` files in the directory are concatenated alphabetically.
+/// The platform is filename-agnostic — conventions like SOUL.md, STYLE.md,
+/// AGENT.md are for humans, not the platform.
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentDefinition {
+    /// Agent name (from directory name).
+    pub name: String,
+    /// Concatenated content of all `.md` files, sorted alphabetically.
+    pub content: String,
+    /// Whether a `SOUL.md` file was present (indicates personality overlay).
+    pub has_soul: bool,
+    /// Description extracted from the first non-header paragraph.
+    pub description: String,
+}
+
+/// A skill definition discovered in the app's `skills/{name}/` directory.
+///
+/// Each skill directory must contain a `SKILL.md` file. Other files in the
+/// directory are companion files (examples, references, scripts) that get
+/// uploaded to TemperFS alongside the main skill document.
+#[derive(Debug, Clone, Serialize)]
+pub struct AppSkillDefinition {
+    /// Skill name (from directory name).
+    pub name: String,
+    /// Main skill document content (from `SKILL.md`).
+    pub content: String,
+    /// Description extracted from the skill document.
+    pub description: String,
+    /// Scope for injection filtering. Read from TOML frontmatter
+    /// (`+++scope = "Paw"+++`) or defaults to `"global"`.
+    pub scope: String,
+    /// Companion files in the skill directory (everything except SKILL.md).
+    #[serde(skip)]
+    pub companion_files: Vec<CompanionFile>,
+}
+
+/// A companion file bundled with a skill.
+#[derive(Debug, Clone)]
+pub struct CompanionFile {
+    /// Relative path within the skill directory.
+    pub name: String,
+    /// File content bytes.
+    pub content: Vec<u8>,
+    /// MIME type (inferred from extension).
+    pub mime_type: String,
+}
+
+/// A seed data instance to create on first install.
+///
+/// Parsed from `seed-data/*.toml` files using `[[instance]]` blocks.
+#[derive(Debug, Clone, serde::Deserialize, Serialize)]
+pub struct SeedInstance {
+    /// Entity type name (must be a registered type).
+    #[serde(rename = "type")]
+    pub entity_type: String,
+    /// Optional explicit entity ID.
+    #[serde(default)]
+    pub id: Option<String>,
+    /// Fields to set on the entity.
+    #[serde(default)]
+    pub fields: serde_json::Value,
+    /// Actions to dispatch after creation, in order.
+    #[serde(default)]
+    pub actions: Vec<SeedAction>,
+}
+
+/// An action to dispatch on a seed entity after creation.
+#[derive(Debug, Clone, serde::Deserialize, Serialize)]
+pub struct SeedAction {
+    /// Action name (e.g. "Activate", "Register").
+    pub name: String,
+    /// Action parameters.
+    #[serde(default)]
+    pub params: serde_json::Value,
+}
+
+/// Container for parsing `seed-data/*.toml` files.
+#[derive(Debug, serde::Deserialize)]
+struct SeedFile {
+    #[serde(rename = "instance", default)]
+    instances: Vec<SeedInstance>,
+}
+
+// Backward-compatible alias: SkillBundle → AppBundle.
+pub type SkillBundle = AppBundle;
+
 // Backward-compatible type aliases.
-pub type OsAppEntry = SkillEntry;
-pub type OsAppBundle = SkillBundle;
+pub type OsAppEntry = AppEntry;
+pub type OsAppBundle = AppBundle;
 
-// ── Skill Catalog (disk-loaded, cached) ─────────────────────────────
+// ── App Catalog (disk-loaded, cached) ───────────────────────────────
 
-/// In-memory cache of discovered skills.
-struct SkillCatalog {
-    /// Directory containing skill bundles.
-    skills_dir: PathBuf,
+/// In-memory cache of discovered apps.
+struct AppCatalog {
+    /// Directory containing app bundles.
+    apps_dir: PathBuf,
     /// Catalog entries (lightweight metadata).
-    entries: Vec<SkillEntry>,
-    /// Mapping from skill name to its directory path on disk.
+    entries: Vec<AppEntry>,
+    /// Mapping from app name to its directory path on disk.
     paths: BTreeMap<String, PathBuf>,
 }
 
 /// Global catalog, initialized on first access.
-static CATALOG: OnceLock<RwLock<SkillCatalog>> = OnceLock::new();
+static CATALOG: OnceLock<RwLock<AppCatalog>> = OnceLock::new();
 
-/// Get or initialize the global skill catalog.
-fn catalog() -> &'static RwLock<SkillCatalog> {
-    CATALOG.get_or_init(|| RwLock::new(SkillCatalog::discover()))
+/// Get or initialize the global app catalog.
+fn catalog() -> &'static RwLock<AppCatalog> {
+    CATALOG.get_or_init(|| RwLock::new(AppCatalog::discover()))
 }
 
 /// Override the OS apps directory. Must be called before any catalog access.
 ///
 /// If the catalog was already initialized, it is replaced.
 pub fn set_os_apps_dir(dir: PathBuf) {
-    let new_catalog = SkillCatalog::from_dir(dir);
+    let new_catalog = AppCatalog::from_dir(dir);
     match CATALOG.get() {
         Some(lock) => {
             *lock.write().unwrap() = new_catalog; // ci-ok: infallible lock
@@ -110,7 +243,7 @@ pub fn set_os_apps_dir(dir: PathBuf) {
 /// Use this to register reference apps or project-specific apps alongside
 /// the main os-apps directory.
 pub fn add_os_apps_dir(dir: PathBuf) {
-    let additional = SkillCatalog::from_dir(dir);
+    let additional = AppCatalog::from_dir(dir);
     let cat = catalog();
     let mut lock = cat.write().unwrap(); // ci-ok: infallible lock
     for (name, path) in additional.paths {
@@ -129,9 +262,9 @@ pub fn add_os_apps_dir(dir: PathBuf) {
 /// without restarting the server.
 pub fn reload_os_apps() {
     let cat = catalog().read().unwrap(); // ci-ok: infallible lock
-    let dir = cat.skills_dir.clone();
+    let dir = cat.apps_dir.clone();
     drop(cat);
-    let new = SkillCatalog::from_dir(dir);
+    let new = AppCatalog::from_dir(dir);
     *catalog().write().unwrap() = new; // ci-ok: infallible lock
 }
 
@@ -145,8 +278,8 @@ pub fn reload_skills() {
     reload_os_apps();
 }
 
-impl SkillCatalog {
-    /// Discover the skills directory and scan it.
+impl AppCatalog {
+    /// Discover the apps directory and scan it.
     fn discover() -> Self {
         // Priority 1: TEMPER_OS_APPS_DIR env var.
         if let Ok(dir) = std::env::var("TEMPER_OS_APPS_DIR") {
@@ -211,7 +344,7 @@ impl SkillCatalog {
             "No os-apps directory found. Set TEMPER_OS_APPS_DIR (or legacy TEMPER_SKILLS_DIR)."
         );
         Self {
-            skills_dir: PathBuf::new(),
+            apps_dir: PathBuf::new(),
             entries: Vec::new(),
             paths: BTreeMap::new(),
         }
@@ -225,28 +358,36 @@ impl SkillCatalog {
         let read_dir = match std::fs::read_dir(&dir) {
             Ok(rd) => rd,
             Err(e) => {
-                tracing::warn!("Failed to read skills directory {}: {e}", dir.display());
+                tracing::warn!("Failed to read apps directory {}: {e}", dir.display());
                 return Self {
-                    skills_dir: dir,
+                    apps_dir: dir,
                     entries,
                     paths,
                 };
             }
         };
 
-        let mut skill_dirs: Vec<_> = read_dir
+        let mut app_dirs: Vec<_> = read_dir
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
             .collect();
         // Deterministic ordering.
-        skill_dirs.sort_by_key(|e| e.file_name());
+        app_dirs.sort_by_key(|e| e.file_name());
 
-        for entry in skill_dirs {
-            let skill_dir = entry.path();
-            let skill_name = entry.file_name().to_string_lossy().to_string();
+        for entry in app_dirs {
+            let app_dir = entry.path();
+            let dir_name = entry.file_name().to_string_lossy().to_string();
+
+            // Try reading app.toml manifest.
+            let manifest = read_app_manifest(&app_dir);
+
+            let app_name = manifest
+                .as_ref()
+                .map(|m| m.name.clone())
+                .unwrap_or_else(|| dir_name.clone());
 
             // Scan for IOA specs to determine entity types.
-            let ioa_files = find_ioa_files(&skill_dir);
+            let ioa_files = find_ioa_files(&app_dir);
             let entity_types: Vec<String> = ioa_files
                 .iter()
                 .filter_map(|(_, ioa_path)| {
@@ -256,50 +397,67 @@ impl SkillCatalog {
                 })
                 .collect();
 
-            // Look for skill guide.
-            let skill_guide = read_skill_guide(&skill_dir);
+            // Look for app guide.
+            let app_guide = read_app_guide(&app_dir);
 
-            // Infer description from skill guide or use default.
-            let description = skill_guide
+            // Determine description: manifest > app_guide > default.
+            let description = manifest
                 .as_ref()
-                .and_then(|guide| extract_description(guide))
-                .unwrap_or_else(|| format!("Skill: {skill_name}"));
+                .filter(|m| !m.description.is_empty())
+                .map(|m| m.description.clone())
+                .or_else(|| {
+                    app_guide
+                        .as_ref()
+                        .and_then(|guide| extract_description(guide))
+                })
+                .unwrap_or_else(|| format!("App: {app_name}"));
 
-            paths.insert(skill_name.clone(), skill_dir);
-            entries.push(SkillEntry {
-                name: skill_name,
+            let version = manifest
+                .as_ref()
+                .map(|m| m.version.clone())
+                .unwrap_or_else(|| "0.1.0".to_string());
+
+            let dependencies = manifest
+                .as_ref()
+                .map(|m| m.dependencies.clone())
+                .unwrap_or_default();
+
+            paths.insert(dir_name, app_dir);
+            entries.push(AppEntry {
+                name: app_name,
                 description,
                 entity_types,
-                version: "0.1.0".to_string(),
-                skill_guide,
+                version,
+                app_guide,
+                dependencies,
             });
         }
 
         Self {
-            skills_dir: dir,
+            apps_dir: dir,
             entries,
             paths,
         }
     }
 }
 
-/// Find all IOA spec files in a skill directory.
+/// Find all IOA spec files in an app directory.
 ///
 /// Handles both layouts:
-/// - Root-level: `skill-name/*.ioa.toml` + `skill-name/model.csdl.xml`
-/// - Specs subdir: `skill-name/specs/*.ioa.toml` + `skill-name/specs/model.csdl.xml`
+/// - Root-level: `app-name/*.ioa.toml` + `app-name/model.csdl.xml`
+/// - Specs subdir: `app-name/specs/*.ioa.toml` + `app-name/specs/model.csdl.xml`
 ///
 /// Returns `(entity_type_hint, path)` pairs. The entity type is extracted
 /// from the IOA file's `[automaton] name` field, not the filename.
-fn find_ioa_files(skill_dir: &Path) -> Vec<(String, PathBuf)> {
+fn find_ioa_files(app_dir: &Path) -> Vec<(String, PathBuf)> {
     let mut results = Vec::new();
     let mut seen_names = std::collections::HashSet::new();
 
     // Scan root first (takes priority for dedup).
-    scan_dir_for_ioa(skill_dir, &mut results, &mut seen_names);
+    scan_dir_for_ioa(app_dir, &mut results, &mut seen_names);
 
     // Then scan specs/ subdirectory.
-    let specs_dir = skill_dir.join("specs");
+    let specs_dir = app_dir.join("specs");
     if specs_dir.is_dir() {
         scan_dir_for_ioa(&specs_dir, &mut results, &mut seen_names);
     }
@@ -333,20 +491,20 @@ fn scan_dir_for_ioa(
     }
 }
 
-/// Find the CSDL model file in a skill directory.
-fn find_csdl(skill_dir: &Path) -> Option<PathBuf> {
+/// Find the CSDL model file in an app directory.
+fn find_csdl(app_dir: &Path) -> Option<PathBuf> {
     // Root-level first.
-    let root = skill_dir.join("model.csdl.xml");
+    let root = app_dir.join("model.csdl.xml");
     if root.exists() {
         return Some(root);
     }
     // Then specs/.
-    let specs = skill_dir.join("specs").join("model.csdl.xml");
+    let specs = app_dir.join("specs").join("model.csdl.xml");
     if specs.exists() {
         return Some(specs);
     }
     // Then a dedicated csdl/ directory.
-    let csdl_dir = skill_dir.join("csdl");
+    let csdl_dir = app_dir.join("csdl");
     if csdl_dir.is_dir() {
         let Ok(entries) = std::fs::read_dir(&csdl_dir) else {
             return None;
@@ -364,9 +522,9 @@ fn find_csdl(skill_dir: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Find all Cedar policy files in a skill directory.
-fn find_cedar_policies(skill_dir: &Path) -> Vec<PathBuf> {
-    let policies_dir = skill_dir.join("policies");
+/// Find all Cedar policy files in an app directory.
+fn find_cedar_policies(app_dir: &Path) -> Vec<PathBuf> {
+    let policies_dir = app_dir.join("policies");
     if !policies_dir.is_dir() {
         return Vec::new();
     }
@@ -382,13 +540,13 @@ fn find_cedar_policies(skill_dir: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// Find compiled WASM module binaries in a skill directory.
+/// Find compiled WASM module binaries in an app directory.
 ///
 /// Scans `wasm/*/target/wasm32-unknown-unknown/release/{module_name}.wasm`
 /// where `{module_name}` matches the directory name under `wasm/`.
-fn find_wasm_modules(skill_dir: &Path) -> BTreeMap<String, Vec<u8>> {
+fn find_wasm_modules(app_dir: &Path) -> BTreeMap<String, Vec<u8>> {
     let mut modules = BTreeMap::new();
-    let wasm_dir = skill_dir.join("wasm");
+    let wasm_dir = app_dir.join("wasm");
     if !wasm_dir.is_dir() {
         return modules;
     }
@@ -436,10 +594,254 @@ fn find_wasm_modules(skill_dir: &Path) -> BTreeMap<String, Vec<u8>> {
     modules
 }
 
-/// Read the skill guide markdown (skill.md or SKILL.md).
-fn read_skill_guide(skill_dir: &Path) -> Option<String> {
-    for name in &["skill.md", "SKILL.md"] {
-        let path = skill_dir.join(name);
+// ── Agent / Skill / Seed Data discovery ─────────────────────────────
+
+/// Discover agent definitions from `agents/{name}/` subdirectories.
+///
+/// Each subdirectory is one agent. All `.md` files within it are collected,
+/// sorted alphabetically, and concatenated. The platform is filename-agnostic —
+/// conventions like SOUL.md, STYLE.md, AGENT.md are for humans.
+fn find_agents(app_dir: &Path) -> Vec<AgentDefinition> {
+    let agents_dir = app_dir.join("agents");
+    if !agents_dir.is_dir() {
+        return Vec::new();
+    }
+    let Ok(entries) = std::fs::read_dir(&agents_dir) else {
+        return Vec::new();
+    };
+
+    let mut dirs: Vec<_> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+        .collect();
+    dirs.sort_by_key(|e| e.file_name());
+
+    let mut results = Vec::new();
+    for dir_entry in dirs {
+        let agent_name = dir_entry.file_name().to_string_lossy().to_string();
+        let agent_dir = dir_entry.path();
+
+        // Collect all .md files, sorted alphabetically.
+        let mut md_files: Vec<PathBuf> = std::fs::read_dir(&agent_dir)
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .to_lowercase()
+                    .ends_with(".md")
+            })
+            .map(|e| e.path())
+            .collect();
+        md_files.sort();
+
+        if md_files.is_empty() {
+            continue;
+        }
+
+        let has_soul = md_files
+            .iter()
+            .any(|p| p.file_name().map(|f| f == "SOUL.md").unwrap_or(false));
+
+        let mut content = String::new();
+        for path in &md_files {
+            if !content.is_empty() {
+                content.push_str("\n\n");
+            }
+            if let Ok(text) = std::fs::read_to_string(path) {
+                content.push_str(&text);
+            }
+        }
+
+        let description =
+            extract_description(&content).unwrap_or_else(|| format!("Agent: {agent_name}"));
+
+        results.push(AgentDefinition {
+            name: agent_name,
+            content,
+            has_soul,
+            description,
+        });
+    }
+    results
+}
+
+/// Discover skill definitions from `skills/{name}/` subdirectories.
+///
+/// Each subdirectory must contain a `SKILL.md` file as the main document.
+/// All other files are collected as companion files.
+fn find_app_skills(app_dir: &Path) -> Vec<AppSkillDefinition> {
+    let skills_dir = app_dir.join("skills");
+    if !skills_dir.is_dir() {
+        return Vec::new();
+    }
+    let Ok(entries) = std::fs::read_dir(&skills_dir) else {
+        return Vec::new();
+    };
+
+    let mut dirs: Vec<_> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+        .collect();
+    dirs.sort_by_key(|e| e.file_name());
+
+    let mut results = Vec::new();
+    for dir_entry in dirs {
+        let skill_name = dir_entry.file_name().to_string_lossy().to_string();
+        let skill_dir = dir_entry.path();
+
+        // Main skill document.
+        let skill_path = skill_dir.join("SKILL.md");
+        let content = match std::fs::read_to_string(&skill_path) {
+            Ok(c) => c,
+            Err(_) => continue, // Skip directories without SKILL.md
+        };
+
+        let description =
+            extract_description(&content).unwrap_or_else(|| format!("Skill: {skill_name}"));
+
+        // Extract scope from TOML frontmatter if present.
+        let scope = extract_scope(&content).unwrap_or_else(|| "global".to_string());
+
+        // Collect companion files (everything except SKILL.md).
+        let companion_files = collect_companion_files(&skill_dir);
+
+        results.push(AppSkillDefinition {
+            name: skill_name,
+            content,
+            description,
+            scope,
+            companion_files,
+        });
+    }
+    results
+}
+
+/// Extract a `scope` value from TOML frontmatter (`+++...+++`).
+fn extract_scope(content: &str) -> Option<String> {
+    let rest = content.strip_prefix("+++")?;
+    let end = rest.find("+++")?;
+    let frontmatter = &rest[..end];
+    for line in frontmatter.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("scope")
+            && let Some(val) = trimmed.split('=').nth(1)
+        {
+            let val = val.trim().trim_matches('"');
+            if !val.is_empty() {
+                return Some(val.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Recursively collect companion files from a skill directory (excluding SKILL.md).
+fn collect_companion_files(skill_dir: &Path) -> Vec<CompanionFile> {
+    let mut files = Vec::new();
+    collect_companions_recursive(skill_dir, skill_dir, &mut files);
+    files
+}
+
+fn collect_companions_recursive(
+    base_dir: &Path,
+    current_dir: &Path,
+    results: &mut Vec<CompanionFile>,
+) {
+    let Ok(entries) = std::fs::read_dir(current_dir) else {
+        return;
+    };
+    let mut sorted: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+    sorted.sort_by_key(|e| e.file_name());
+
+    for entry in sorted {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_companions_recursive(base_dir, &path, results);
+        } else if path.file_name().map(|f| f != "SKILL.md").unwrap_or(true)
+            && let Ok(content) = std::fs::read(&path)
+        {
+            let rel_path = path
+                .strip_prefix(base_dir)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .to_string();
+            let mime_type = mime_from_extension(&path);
+            results.push(CompanionFile {
+                name: rel_path,
+                content,
+                mime_type,
+            });
+        }
+    }
+}
+
+/// Infer MIME type from file extension.
+fn mime_from_extension(path: &Path) -> String {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("md") => "text/markdown".to_string(),
+        Some("txt") => "text/plain".to_string(),
+        Some("json") => "application/json".to_string(),
+        Some("toml") => "application/toml".to_string(),
+        Some("yaml" | "yml") => "application/yaml".to_string(),
+        Some("sh") => "application/x-sh".to_string(),
+        Some("py") => "text/x-python".to_string(),
+        Some("ts" | "js") => "text/javascript".to_string(),
+        _ => "application/octet-stream".to_string(),
+    }
+}
+
+/// Discover seed data instances from `seed-data/*.toml` files.
+///
+/// Each TOML file contains `[[instance]]` blocks that declare entities
+/// to create on first install.
+fn find_seed_data(app_dir: &Path) -> Vec<SeedInstance> {
+    let seed_dir = app_dir.join("seed-data");
+    if !seed_dir.is_dir() {
+        return Vec::new();
+    }
+    let Ok(entries) = std::fs::read_dir(&seed_dir) else {
+        return Vec::new();
+    };
+
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".toml"))
+        .map(|e| e.path())
+        .collect();
+    files.sort();
+
+    let mut all_instances = Vec::new();
+    for path in &files {
+        match std::fs::read_to_string(path) {
+            Ok(content) => match toml::from_str::<SeedFile>(&content) {
+                Ok(seed_file) => all_instances.extend(seed_file.instances),
+                Err(e) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "Failed to parse seed data file"
+                    );
+                }
+            },
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "Failed to read seed data file"
+                );
+            }
+        }
+    }
+    all_instances
+}
+
+/// Read the app guide markdown (APP.md/app.md first, then skill.md/SKILL.md fallback).
+fn read_app_guide(app_dir: &Path) -> Option<String> {
+    for name in &["APP.md", "app.md", "skill.md", "SKILL.md"] {
+        let path = app_dir.join(name);
         if let Ok(content) = std::fs::read_to_string(&path) {
             return Some(content);
         }
@@ -447,7 +849,7 @@ fn read_skill_guide(skill_dir: &Path) -> Option<String> {
     None
 }
 
-/// Extract a description from skill guide markdown.
+/// Extract a description from app guide markdown.
 ///
 /// Looks for the first non-header, non-empty line, or a TOML frontmatter
 /// `description` field.
@@ -483,13 +885,13 @@ fn extract_description(guide: &str) -> Option<String> {
 // ── Public API ──────────────────────────────────────────────────────
 
 /// List all available OS apps.
-pub fn list_os_apps() -> Vec<SkillEntry> {
+pub fn list_os_apps() -> Vec<AppEntry> {
     let cat = catalog().read().unwrap(); // ci-ok: infallible lock
     cat.entries.clone()
 }
 
 /// Backward-compatible alias.
-pub fn list_skills() -> Vec<SkillEntry> {
+pub fn list_skills() -> Vec<AppEntry> {
     list_os_apps()
 }
 
@@ -497,32 +899,34 @@ pub fn list_skills() -> Vec<SkillEntry> {
 ///
 /// Reads IOA, CSDL, and Cedar files from disk on each call so changes
 /// are picked up without a rebuild.
-pub fn get_os_app(name: &str) -> Option<SkillBundle> {
+pub fn get_os_app(name: &str) -> Option<AppBundle> {
     let cat = catalog().read().unwrap(); // ci-ok: infallible lock
-    let skill_dir = cat.paths.get(name)?;
-    load_skill_bundle(skill_dir)
+    let app_dir = cat.paths.get(name)?;
+    load_app_bundle(app_dir)
 }
 
 /// Backward-compatible alias.
-pub fn get_skill(name: &str) -> Option<SkillBundle> {
+pub fn get_skill(name: &str) -> Option<AppBundle> {
     get_os_app(name)
 }
 
-/// Get the full skill guide markdown for a skill by name.
-pub fn get_skill_guide(name: &str) -> Option<String> {
+/// Get the full app guide markdown for an app by name.
+pub fn get_app_guide(name: &str) -> Option<String> {
     let cat = catalog().read().unwrap(); // ci-ok: infallible lock
     cat.entries
         .iter()
         .find(|e| e.name == name)
-        .and_then(|e| e.skill_guide.clone())
+        .and_then(|e| e.app_guide.clone())
 }
 
-/// Load a complete skill bundle from a directory on disk.
-fn load_skill_bundle(skill_dir: &Path) -> Option<SkillBundle> {
-    let ioa_files = find_ioa_files(skill_dir);
-    if ioa_files.is_empty() {
-        return None;
-    }
+/// Backward-compatible alias.
+pub fn get_skill_guide(name: &str) -> Option<String> {
+    get_app_guide(name)
+}
+
+/// Load a complete app bundle from a directory on disk.
+fn load_app_bundle(app_dir: &Path) -> Option<AppBundle> {
+    let ioa_files = find_ioa_files(app_dir);
 
     // Read IOA specs, extracting entity type from the parsed automaton name.
     let mut specs = Vec::new();
@@ -532,38 +936,69 @@ fn load_skill_bundle(skill_dir: &Path) -> Option<SkillBundle> {
         specs.push((parsed.automaton.name, source));
     }
 
-    // Read CSDL.
-    let csdl_path = find_csdl(skill_dir)?;
-    let csdl = std::fs::read_to_string(&csdl_path).ok()?;
+    // Read CSDL (optional — apps without specs won't have CSDL).
+    let csdl = find_csdl(app_dir).and_then(|p| std::fs::read_to_string(&p).ok());
 
     // Read Cedar policies.
-    let cedar_policies: Vec<String> = find_cedar_policies(skill_dir)
+    let cedar_policies: Vec<String> = find_cedar_policies(app_dir)
         .into_iter()
         .filter_map(|p| std::fs::read_to_string(&p).ok())
         .collect();
 
     // Read WASM module binaries from wasm/*/target/wasm32-unknown-unknown/release/*.wasm.
-    let wasm_modules = find_wasm_modules(skill_dir);
+    let wasm_modules = find_wasm_modules(app_dir);
 
-    Some(SkillBundle {
+    // Discover agents, skills, and seed data.
+    let agents = find_agents(app_dir);
+    let skills = find_app_skills(app_dir);
+    let seed_instances = find_seed_data(app_dir);
+
+    // Read app guide to check if there's anything at all.
+    let app_guide = read_app_guide(app_dir);
+
+    // Return None only if the app has nothing at all.
+    if specs.is_empty()
+        && cedar_policies.is_empty()
+        && wasm_modules.is_empty()
+        && agents.is_empty()
+        && skills.is_empty()
+        && seed_instances.is_empty()
+        && app_guide.is_none()
+        && csdl.is_none()
+    {
+        return None;
+    }
+
+    Some(AppBundle {
         specs,
         csdl,
         cedar_policies,
         wasm_modules,
+        agents,
+        skills,
+        seed_instances,
     })
 }
 
-fn os_app_dependencies(name: &str) -> &'static [&'static str] {
+fn os_app_dependencies(name: &str) -> Vec<String> {
+    // Check manifest first.
+    let cat = catalog().read().unwrap(); // ci-ok: infallible lock
+    if let Some(entry) = cat.entries.iter().find(|e| e.name == name)
+        && !entry.dependencies.is_empty()
+    {
+        return entry.dependencies.clone();
+    }
+    // Hardcoded fallback.
     match name {
         // TemperAgent persists conversation/files in TemperFS entities.
-        "temper-agent" => &["temper-fs"],
-        _ => &[],
+        "temper-agent" => vec!["temper-fs".to_string()],
+        _ => vec![],
     }
 }
 
 /// Install an OS app into a tenant (workspace).
 ///
-/// Reads skill files from disk, runs the verification cascade, registers
+/// Reads app files from disk, runs the verification cascade, registers
 /// specs in the SpecRegistry, loads Cedar policies, and **persists
 /// everything to the platform DB** so specs survive redeployments.
 ///
@@ -576,7 +1011,7 @@ pub async fn install_os_app(
     app_name: &str,
 ) -> Result<InstallResult, String> {
     for dependency in os_app_dependencies(app_name) {
-        install_os_app_without_dependencies(state, tenant, dependency).await?;
+        install_os_app_without_dependencies(state, tenant, &dependency).await?;
     }
     install_os_app_without_dependencies(state, tenant, app_name).await
 }
@@ -613,13 +1048,20 @@ async fn install_os_app_without_dependencies(
                 }
             }
         }
-        // Skill installs must preserve existing tenant types.
-        let merged_csdl = if let Some(existing) = registry.get_tenant(&tenant_id) {
-            let incoming = parse_csdl(&bundle.csdl)
-                .map_err(|e| format!("Failed to parse CSDL for os-app '{app_name}': {e}"))?;
-            emit_csdl_xml(&merge_csdl(&existing.csdl, &incoming))
+        // App installs must preserve existing tenant types.
+        let merged_csdl = if let Some(ref csdl) = bundle.csdl {
+            if let Some(existing) = registry.get_tenant(&tenant_id) {
+                let incoming = parse_csdl(csdl)
+                    .map_err(|e| format!("Failed to parse CSDL for os-app '{app_name}': {e}"))?;
+                Some(emit_csdl_xml(&merge_csdl(&existing.csdl, &incoming)))
+            } else {
+                Some(csdl.clone())
+            }
         } else {
-            bundle.csdl.clone()
+            // No CSDL in bundle; keep existing if any.
+            registry
+                .get_tenant(&tenant_id)
+                .map(|t| emit_csdl_xml(&t.csdl))
         };
         (added, updated, skipped, merged_csdl)
     };
@@ -661,12 +1103,14 @@ async fn install_os_app_without_dependencies(
             spec_sources.insert(entity_type.clone(), ioa_source.clone());
         }
 
-        for (entity_type, ioa_source) in spec_sources {
-            let hash = temper_store_turso::spec_content_hash(&ioa_source);
-            turso
-                .upsert_spec(tenant, &entity_type, &ioa_source, &merged_csdl, &hash)
-                .await
-                .map_err(|e| format!("Failed to persist spec {entity_type}: {e}"))?;
+        if let Some(ref merged) = merged_csdl {
+            for (entity_type, ioa_source) in spec_sources {
+                let hash = temper_store_turso::spec_content_hash(&ioa_source);
+                turso
+                    .upsert_spec(tenant, &entity_type, &ioa_source, merged, &hash)
+                    .await
+                    .map_err(|e| format!("Failed to persist spec {entity_type}: {e}"))?;
+            }
         }
         if let Some(ref policy_text) = combined_policy {
             turso
@@ -686,11 +1130,13 @@ async fn install_os_app_without_dependencies(
     } else if let Some(ref store) = state.server.event_store
         && let Some(ps) = store.platform_store()
     {
-        for (entity_type, ioa_source) in &bundle.specs {
-            let hash = temper_store_turso::spec_content_hash(ioa_source);
-            ps.upsert_spec(tenant, entity_type, ioa_source, &merged_csdl, &hash)
-                .await
-                .map_err(|e| format!("Failed to persist spec {entity_type}: {e}"))?;
+        if let Some(ref merged) = merged_csdl {
+            for (entity_type, ioa_source) in &bundle.specs {
+                let hash = temper_store_turso::spec_content_hash(ioa_source);
+                ps.upsert_spec(tenant, entity_type, ioa_source, merged, &hash)
+                    .await
+                    .map_err(|e| format!("Failed to persist spec {entity_type}: {e}"))?;
+            }
         }
         if let Some(ref policy_text) = combined_policy {
             ps.upsert_tenant_policy(tenant, policy_text)
@@ -709,37 +1155,42 @@ async fn install_os_app_without_dependencies(
     // ── Step 2: Bootstrap into memory (verification + registry). ────
     // Only process specs whose content has changed (added or updated);
     // skipped specs are already loaded with identical content.
-    let specs_to_bootstrap: Vec<(&str, &str)> = bundle
-        .specs
-        .iter()
-        .filter(|(entity_type, _)| !skipped.contains(entity_type))
-        .map(|(et, src)| (et.as_str(), src.as_str()))
-        .collect();
+    if !bundle.specs.is_empty() {
+        let specs_to_bootstrap: Vec<(&str, &str)> = bundle
+            .specs
+            .iter()
+            .filter(|(entity_type, _)| !skipped.contains(entity_type))
+            .map(|(et, src)| (et.as_str(), src.as_str()))
+            .collect();
 
-    if !specs_to_bootstrap.is_empty() {
-        let verified_cache = if let Some(ref store) = state.server.event_store
-            && let Some(turso) = store.platform_turso_store()
-        {
-            turso
-                .load_verification_cache(tenant)
-                .await
-                .unwrap_or_default()
-        } else if let Some(ref store) = state.server.event_store
-            && let Some(ps) = store.platform_store()
-        {
-            ps.load_verification_cache(tenant).await.unwrap_or_default()
-        } else {
-            std::collections::BTreeMap::new()
-        };
-        bootstrap::bootstrap_tenant_specs(
-            state,
-            tenant,
-            &merged_csdl,
-            &specs_to_bootstrap,
-            true,
-            &format!("OsApp({app_name})"),
-            &verified_cache,
-        );
+        if !specs_to_bootstrap.is_empty() {
+            let verified_cache = if let Some(ref store) = state.server.event_store
+                && let Some(turso) = store.platform_turso_store()
+            {
+                turso
+                    .load_verification_cache(tenant)
+                    .await
+                    .unwrap_or_default()
+            } else if let Some(ref store) = state.server.event_store
+                && let Some(ps) = store.platform_store()
+            {
+                ps.load_verification_cache(tenant).await.unwrap_or_default()
+            } else {
+                std::collections::BTreeMap::new()
+            };
+
+            if let Some(ref merged) = merged_csdl {
+                bootstrap::bootstrap_tenant_specs(
+                    state,
+                    tenant,
+                    merged,
+                    &specs_to_bootstrap,
+                    true,
+                    &format!("OsApp({app_name})"),
+                    &verified_cache,
+                );
+            }
+        }
     }
 
     // ── Step 3: Load Cedar policies into memory. ────────────────────
@@ -812,11 +1263,23 @@ async fn install_os_app_without_dependencies(
         wasm_registered,
     );
 
+    // ── Step 5: Bootstrap agents. ──────────────────────────────────────
+    let agents_bootstrapped = bootstrap_agents(state, &tenant_id, tenant, &bundle.agents).await;
+
+    // ── Step 6: Bootstrap skills. ────────────────────────────────────
+    let skills_bootstrapped = bootstrap_skills(state, &tenant_id, tenant, &bundle.skills).await;
+
+    // ── Step 7: Create seed instances. ───────────────────────────────
+    let seed_created = bootstrap_seed_data(state, &tenant_id, tenant, &bundle.seed_instances).await;
+
     Ok(InstallResult {
         added,
         updated,
         skipped,
         wasm_modules: wasm_registered,
+        agents: agents_bootstrapped,
+        skills: skills_bootstrapped,
+        seed_instances: seed_created,
     })
 }
 
@@ -827,6 +1290,465 @@ pub async fn install_skill(
     skill_name: &str,
 ) -> Result<InstallResult, String> {
     install_os_app(state, tenant, skill_name).await
+}
+
+// ── Bootstrap helpers (entity creation during install) ───────────────
+
+/// Bootstrap agent definitions into the tenant by creating Soul entities.
+///
+/// For each agent definition in the app's `agents/` directory:
+/// 1. Check if the Soul entity type is registered (skip gracefully if not)
+/// 2. Check if a Soul with this name already exists (idempotent)
+/// 3. Create a TemperFS File entity with the agent's concatenated content
+/// 4. Create a Soul entity pointing to that file
+///
+/// Returns the names of successfully bootstrapped agents.
+async fn bootstrap_agents(
+    state: &PlatformState,
+    tenant_id: &TenantId,
+    tenant: &str,
+    agents: &[AgentDefinition],
+) -> Vec<String> {
+    if agents.is_empty() {
+        return Vec::new();
+    }
+
+    // Check if Soul entity type is registered.
+    let has_souls = {
+        let registry = state.registry.read().unwrap(); // ci-ok: infallible lock
+        registry.get_spec(tenant_id, "Soul").is_some()
+    };
+    if !has_souls {
+        if !agents.is_empty() {
+            tracing::info!(
+                tenant,
+                count = agents.len(),
+                "Skipping agent bootstrap — Soul entity type not registered (install paw-agent first)"
+            );
+        }
+        return Vec::new();
+    }
+
+    // Check if File entity type is registered (for TemperFS).
+    let has_files = {
+        let registry = state.registry.read().unwrap(); // ci-ok: infallible lock
+        registry.get_spec(tenant_id, "File").is_some()
+    };
+    if !has_files {
+        tracing::info!(
+            tenant,
+            "Skipping agent bootstrap — File entity type not registered (install temper-fs first)"
+        );
+        return Vec::new();
+    }
+
+    let agent_ctx = temper_server::request_context::AgentContext::system();
+    let mut bootstrapped = Vec::new();
+
+    for agent in agents {
+        // Check if Soul already exists by listing and filtering.
+        let existing_ids = state.server.list_entity_ids(tenant_id, "Soul");
+        let mut already_exists = false;
+        for id in &existing_ids {
+            if let Ok(resp) = state
+                .server
+                .get_tenant_entity_state(tenant_id, "Soul", id)
+                .await
+                && let Some(name) = resp.state.fields.get("Name").and_then(|v| v.as_str())
+                && name.eq_ignore_ascii_case(&agent.name)
+            {
+                tracing::debug!(tenant, agent = %agent.name, "Soul already exists — skipping");
+                already_exists = true;
+                bootstrapped.push(agent.name.clone());
+                break;
+            }
+        }
+        if already_exists {
+            continue;
+        }
+
+        // Create TemperFS File entity for the content.
+        let file_name = format!("{}.soul.md", agent.name.to_lowercase().replace(' ', "-"));
+        let file_id = format!(
+            "app-soul-file-{}",
+            agent.name.to_lowercase().replace(' ', "-")
+        );
+        match state
+            .server
+            .get_or_create_tenant_entity(
+                tenant_id,
+                "File",
+                &file_id,
+                serde_json::json!({
+                    "Name": file_name,
+                    "MimeType": "text/markdown",
+                    "Content": agent.content,
+                }),
+            )
+            .await
+        {
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(
+                    tenant,
+                    agent = %agent.name,
+                    error = %e,
+                    "Failed to create TemperFS File for agent"
+                );
+                continue;
+            }
+        }
+
+        // Create Soul entity.
+        let soul_id = format!("app-soul-{}", agent.name.to_lowercase().replace(' ', "-"));
+        match state
+            .server
+            .get_or_create_tenant_entity(tenant_id, "Soul", &soul_id, serde_json::json!({}))
+            .await
+        {
+            Ok(resp) => {
+                if resp.state.status == "Draft" || resp.state.status == "Created" {
+                    // Try to register the soul with metadata.
+                    if let Err(e) = state
+                        .server
+                        .dispatch(temper_server::state::DispatchCommand {
+                            tenant: tenant_id,
+                            entity_type: "Soul",
+                            entity_id: &soul_id,
+                            action: "Create",
+                            params: serde_json::json!({
+                                "name": agent.name,
+                                "description": agent.description,
+                                "content_file_id": file_id,
+                            }),
+                            agent_ctx: &agent_ctx,
+                            await_integration: false,
+                        })
+                        .await
+                    {
+                        tracing::warn!(
+                            tenant,
+                            agent = %agent.name,
+                            error = %e,
+                            "Failed to register Soul entity"
+                        );
+                        continue;
+                    }
+                    // Publish the soul.
+                    let _ = state
+                        .server
+                        .dispatch(temper_server::state::DispatchCommand {
+                            tenant: tenant_id,
+                            entity_type: "Soul",
+                            entity_id: &soul_id,
+                            action: "Publish",
+                            params: serde_json::json!({}),
+                            agent_ctx: &agent_ctx,
+                            await_integration: false,
+                        })
+                        .await;
+                }
+                tracing::info!(tenant, agent = %agent.name, "Agent soul bootstrapped");
+                bootstrapped.push(agent.name.clone());
+            }
+            Err(e) => {
+                tracing::warn!(
+                    tenant,
+                    agent = %agent.name,
+                    error = %e,
+                    "Failed to create Soul entity"
+                );
+            }
+        }
+    }
+    bootstrapped
+}
+
+/// Bootstrap skill definitions into the tenant by creating Skill entities.
+///
+/// For each skill definition in the app's `skills/` directory:
+/// 1. Check if the Skill entity type is registered
+/// 2. Check if a Skill with this name already exists (idempotent)
+/// 3. Create a TemperFS File entity with the skill content
+/// 4. Create a Skill entity pointing to that file
+///
+/// Returns the names of successfully bootstrapped skills.
+async fn bootstrap_skills(
+    state: &PlatformState,
+    tenant_id: &TenantId,
+    tenant: &str,
+    skills: &[AppSkillDefinition],
+) -> Vec<String> {
+    if skills.is_empty() {
+        return Vec::new();
+    }
+
+    let has_skills = {
+        let registry = state.registry.read().unwrap(); // ci-ok: infallible lock
+        registry.get_spec(tenant_id, "Skill").is_some()
+    };
+    if !has_skills {
+        tracing::info!(
+            tenant,
+            count = skills.len(),
+            "Skipping skill bootstrap — Skill entity type not registered (install paw-agent first)"
+        );
+        return Vec::new();
+    }
+
+    let has_files = {
+        let registry = state.registry.read().unwrap(); // ci-ok: infallible lock
+        registry.get_spec(tenant_id, "File").is_some()
+    };
+    if !has_files {
+        tracing::info!(
+            tenant,
+            "Skipping skill bootstrap — File entity type not registered (install temper-fs first)"
+        );
+        return Vec::new();
+    }
+
+    let agent_ctx = temper_server::request_context::AgentContext::system();
+    let mut bootstrapped = Vec::new();
+
+    for skill in skills {
+        // Check if Skill already exists by name.
+        let existing_ids = state.server.list_entity_ids(tenant_id, "Skill");
+        let mut already_exists = false;
+        for id in &existing_ids {
+            if let Ok(resp) = state
+                .server
+                .get_tenant_entity_state(tenant_id, "Skill", id)
+                .await
+                && let Some(name) = resp.state.fields.get("Name").and_then(|v| v.as_str())
+                && name.eq_ignore_ascii_case(&skill.name)
+            {
+                tracing::debug!(tenant, skill = %skill.name, "Skill already exists — skipping");
+                already_exists = true;
+                bootstrapped.push(skill.name.clone());
+                break;
+            }
+        }
+        if already_exists {
+            continue;
+        }
+
+        // Create TemperFS File for skill content.
+        let file_id = format!(
+            "app-skill-file-{}",
+            skill.name.to_lowercase().replace(' ', "-")
+        );
+        let file_name = format!("{}.skill.md", skill.name.to_lowercase().replace(' ', "-"));
+        match state
+            .server
+            .get_or_create_tenant_entity(
+                tenant_id,
+                "File",
+                &file_id,
+                serde_json::json!({
+                    "Name": file_name,
+                    "MimeType": "text/markdown",
+                    "Content": skill.content,
+                }),
+            )
+            .await
+        {
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(
+                    tenant,
+                    skill = %skill.name,
+                    error = %e,
+                    "Failed to create TemperFS File for skill"
+                );
+                continue;
+            }
+        }
+
+        // Create Skill entity.
+        let skill_id = format!("app-skill-{}", skill.name.to_lowercase().replace(' ', "-"));
+        match state
+            .server
+            .get_or_create_tenant_entity(tenant_id, "Skill", &skill_id, serde_json::json!({}))
+            .await
+        {
+            Ok(resp) => {
+                if resp.state.status == "Active" || resp.state.status == "Created" {
+                    // Register the skill with metadata.
+                    let _ = state
+                        .server
+                        .dispatch(temper_server::state::DispatchCommand {
+                            tenant: tenant_id,
+                            entity_type: "Skill",
+                            entity_id: &skill_id,
+                            action: "Register",
+                            params: serde_json::json!({
+                                "name": skill.name,
+                                "description": skill.description,
+                                "content_file_id": file_id,
+                                "scope": skill.scope,
+                                "agent_filter": "",
+                            }),
+                            agent_ctx: &agent_ctx,
+                            await_integration: false,
+                        })
+                        .await;
+                }
+                tracing::info!(tenant, skill = %skill.name, scope = %skill.scope, "Skill bootstrapped");
+                bootstrapped.push(skill.name.clone());
+            }
+            Err(e) => {
+                tracing::warn!(
+                    tenant,
+                    skill = %skill.name,
+                    error = %e,
+                    "Failed to create Skill entity"
+                );
+            }
+        }
+    }
+    bootstrapped
+}
+
+/// Bootstrap seed data instances into the tenant.
+///
+/// For each seed instance:
+/// 1. Check if the entity type is registered
+/// 2. Create the entity
+/// 3. Dispatch each action in order
+///
+/// Returns descriptions of successfully created instances.
+async fn bootstrap_seed_data(
+    state: &PlatformState,
+    tenant_id: &TenantId,
+    tenant: &str,
+    instances: &[SeedInstance],
+) -> Vec<String> {
+    if instances.is_empty() {
+        return Vec::new();
+    }
+
+    let agent_ctx = temper_server::request_context::AgentContext::system();
+    let mut created = Vec::new();
+
+    for instance in instances {
+        // Check if entity type is registered.
+        let type_exists = {
+            let registry = state.registry.read().unwrap(); // ci-ok: infallible lock
+            registry
+                .get_spec(tenant_id, &instance.entity_type)
+                .is_some()
+        };
+        if !type_exists {
+            tracing::warn!(
+                tenant,
+                entity_type = %instance.entity_type,
+                "Skipping seed instance — entity type not registered"
+            );
+            continue;
+        }
+
+        // Determine entity ID.
+        let entity_id = instance.id.clone().unwrap_or_else(|| {
+            // Generate a deterministic ID from type + fields.
+            let hash_input = format!("{}-{}", instance.entity_type, instance.fields);
+            format!(
+                "seed-{}",
+                &format!("{:x}", md5_like_hash(&hash_input))[..12]
+            )
+        });
+
+        // Check if entity already exists (idempotent).
+        if state
+            .server
+            .entity_exists(tenant_id, &instance.entity_type, &entity_id)
+        {
+            tracing::debug!(
+                tenant,
+                entity_type = %instance.entity_type,
+                entity_id = %entity_id,
+                "Seed entity already exists — skipping"
+            );
+            created.push(format!("{}({})", instance.entity_type, entity_id));
+            continue;
+        }
+
+        // Create entity with initial fields.
+        let initial_fields = if instance.fields.is_null() {
+            serde_json::json!({})
+        } else {
+            instance.fields.clone()
+        };
+
+        match state
+            .server
+            .get_or_create_tenant_entity(
+                tenant_id,
+                &instance.entity_type,
+                &entity_id,
+                initial_fields,
+            )
+            .await
+        {
+            Ok(_) => {
+                // Dispatch each action in order.
+                for action in &instance.actions {
+                    let params = if action.params.is_null() {
+                        serde_json::json!({})
+                    } else {
+                        action.params.clone()
+                    };
+                    if let Err(e) = state
+                        .server
+                        .dispatch(temper_server::state::DispatchCommand {
+                            tenant: tenant_id,
+                            entity_type: &instance.entity_type,
+                            entity_id: &entity_id,
+                            action: &action.name,
+                            params,
+                            agent_ctx: &agent_ctx,
+                            await_integration: false,
+                        })
+                        .await
+                    {
+                        tracing::warn!(
+                            tenant,
+                            entity_type = %instance.entity_type,
+                            entity_id = %entity_id,
+                            action = %action.name,
+                            error = %e,
+                            "Failed to dispatch seed action"
+                        );
+                    }
+                }
+                tracing::info!(
+                    tenant,
+                    entity_type = %instance.entity_type,
+                    entity_id = %entity_id,
+                    "Seed entity created"
+                );
+                created.push(format!("{}({})", instance.entity_type, entity_id));
+            }
+            Err(e) => {
+                tracing::warn!(
+                    tenant,
+                    entity_type = %instance.entity_type,
+                    entity_id = %entity_id,
+                    error = %e,
+                    "Failed to create seed entity"
+                );
+            }
+        }
+    }
+    created
+}
+
+/// Simple hash for generating deterministic seed entity IDs.
+fn md5_like_hash(input: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    input.hash(&mut hasher);
+    hasher.finish()
 }
 
 #[cfg(test)]

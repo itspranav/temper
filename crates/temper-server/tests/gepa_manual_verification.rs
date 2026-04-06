@@ -235,13 +235,13 @@ async fn manual_gepa_verification() {
     // ── 3. Skill Installation ──────────────────────────────────────
     println!("\n## 3. Skill Installation via Platform\n");
 
-    let pm_result = harness.install_skill(TENANT, "project-management").await;
+    let pm_result = harness.install_app(TENANT, "project-management").await;
     match &pm_result {
         Ok(types) => println!("  project-management: INSTALLED — entity types: {types:?}"),
         Err(e) => println!("  project-management: FAILED — {e}"),
     }
 
-    let evo_result = harness.install_skill(TENANT, "evolution").await;
+    let evo_result = harness.install_app(TENANT, "evolution").await;
     match &evo_result {
         Ok(types) => println!("  evolution: INSTALLED — entity types: {types:?}"),
         Err(e) => println!("  evolution: FAILED — {e}"),

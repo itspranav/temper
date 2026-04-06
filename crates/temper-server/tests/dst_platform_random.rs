@@ -35,7 +35,7 @@ async fn run_workload(
         let op = wg.next_op();
         match &op {
             WorkloadOp::InstallApp { tenant, app } => {
-                let result = harness.install_skill(tenant, app).await;
+                let result = harness.install_app(tenant, app).await;
                 if result.is_ok() {
                     wg.record_install(tenant, app);
                 }

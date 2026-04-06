@@ -2,7 +2,7 @@
 //!
 //! Orchestrates deterministic simulation of the full platform lifecycle using
 //! **PRODUCTION code** (`install_os_app`, `dispatch_tenant_action`,
-//! `recover_cedar_policies`, `restore_installed_skills`,
+//! `recover_cedar_policies`, `restore_installed_apps`,
 //! `restore_registry_from_platform_store`, `populate_index_from_store`)
 //! with simulated storage backends.
 //!
@@ -76,7 +76,7 @@ impl SimPlatformHarness {
     }
 
     /// Install an OS app using PRODUCTION code.
-    pub async fn install_skill(&self, tenant: &str, app_name: &str) -> Result<Vec<String>, String> {
+    pub async fn install_app(&self, tenant: &str, app_name: &str) -> Result<Vec<String>, String> {
         install_os_app(&self.platform_state, tenant, app_name)
             .await
             .map(|r| {
@@ -136,7 +136,7 @@ impl SimPlatformHarness {
     /// 2. Wire the same durable stores
     /// 3. [`restore_registry_from_platform_store`] — production spec recovery
     /// 4. [`temper_platform::recovery::recover_cedar_policies`] — production Cedar recovery
-    /// 5. [`temper_platform::recovery::restore_installed_skills`] — production skill recovery
+    /// 5. [`temper_platform::recovery::restore_installed_apps`] — production app recovery
     /// 6. [`populate_index_from_store`] — production index population
     pub async fn restart(&mut self) {
         self.restart_count += 1;
@@ -173,7 +173,7 @@ impl SimPlatformHarness {
         .await;
 
         // 5. Restore installed skills — PRODUCTION code.
-        temper_platform::recovery::restore_installed_skills(
+        temper_platform::recovery::restore_installed_apps(
             &new_state,
             self.sim_platform_store.as_ref(),
         )

@@ -318,7 +318,7 @@ pub(crate) async fn list_os_apps() -> impl IntoResponse {
 pub(crate) async fn get_os_app_guide(
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> impl IntoResponse {
-    match crate::os_apps::get_skill_guide(&name) {
+    match crate::os_apps::get_app_guide(&name) {
         Some(guide) => (
             StatusCode::OK,
             Json(serde_json::json!({

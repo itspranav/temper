@@ -523,12 +523,12 @@ pub(super) async fn bootstrap_tenants(state: &PlatformState, apps: &[(String, St
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SkillBootstrapSource {
+enum AppBootstrapSource {
     Persisted,
     Cli,
 }
 
-fn tenant_has_skill_specs(state: &PlatformState, tenant: &str, app_name: &str) -> bool {
+fn tenant_has_app_specs(state: &PlatformState, tenant: &str, app_name: &str) -> bool {
     let Some(bundle) = temper_platform::os_apps::get_os_app(app_name) else {
         return false;
     };
@@ -548,8 +548,8 @@ fn tenant_has_skill_specs(state: &PlatformState, tenant: &str, app_name: &str) -
 ///
 /// This phase replays persisted installs so skill entities remain available
 /// after restart, and then applies explicit CLI installs for `default`.
-pub(super) async fn bootstrap_installed_skills(state: &PlatformState, skills: &[String]) {
-    let mut requested: BTreeMap<(String, String), SkillBootstrapSource> = BTreeMap::new();
+pub(super) async fn bootstrap_installed_apps(state: &PlatformState, skills: &[String]) {
+    let mut requested: BTreeMap<(String, String), AppBootstrapSource> = BTreeMap::new();
 
     if let Some(ref store) = state.server.event_store
         && let Some(turso) = store.platform_turso_store()
@@ -557,11 +557,11 @@ pub(super) async fn bootstrap_installed_skills(state: &PlatformState, skills: &[
         match turso.list_all_installed_apps().await {
             Ok(installed) => {
                 for (tenant, app_name) in installed {
-                    requested.insert((tenant, app_name), SkillBootstrapSource::Persisted);
+                    requested.insert((tenant, app_name), AppBootstrapSource::Persisted);
                 }
             }
             Err(e) => {
-                eprintln!("  Warning: failed to load installed skills: {e}");
+                eprintln!("  Warning: failed to load installed apps: {e}");
             }
         }
     }
@@ -569,17 +569,17 @@ pub(super) async fn bootstrap_installed_skills(state: &PlatformState, skills: &[
     for skill_name in skills {
         requested
             .entry(("default".to_string(), skill_name.clone()))
-            .and_modify(|source| *source = SkillBootstrapSource::Cli)
-            .or_insert(SkillBootstrapSource::Cli);
+            .and_modify(|source| *source = AppBootstrapSource::Cli)
+            .or_insert(AppBootstrapSource::Cli);
     }
 
     for ((tenant, app_name), source) in requested {
-        if tenant_has_skill_specs(state, &tenant, &app_name) {
+        if tenant_has_app_specs(state, &tenant, &app_name) {
             continue;
         }
         match temper_platform::install_os_app(state, &tenant, &app_name).await {
             Ok(result) => match source {
-                SkillBootstrapSource::Persisted => {
+                AppBootstrapSource::Persisted => {
                     let all: Vec<String> = result
                         .added
                         .iter()
@@ -592,7 +592,7 @@ pub(super) async fn bootstrap_installed_skills(state: &PlatformState, skills: &[
                         all.join(", ")
                     );
                 }
-                SkillBootstrapSource::Cli => {
+                AppBootstrapSource::Cli => {
                     let all: Vec<String> = result
                         .added
                         .iter()
