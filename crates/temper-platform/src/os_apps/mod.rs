@@ -391,15 +391,18 @@ impl AppCatalog {
                 }
             };
 
-            // APP.md is required — warn if missing but still load the app.
-            let app_guide = read_app_guide(&app_dir);
-            if app_guide.is_none() {
-                tracing::warn!(
-                    app = %manifest.name,
-                    path = %app_dir.display(),
-                    "App is missing APP.md — every app should have documentation"
-                );
-            }
+            // APP.md is required — skip directories without it.
+            let app_guide = match read_app_guide(&app_dir) {
+                Some(guide) => Some(guide),
+                None => {
+                    tracing::warn!(
+                        app = %manifest.name,
+                        path = %app_dir.display(),
+                        "Skipping app — missing required APP.md"
+                    );
+                    continue;
+                }
+            };
 
             let app_name = manifest.name.clone();
 
