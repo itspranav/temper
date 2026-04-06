@@ -4,6 +4,8 @@
 //! responses for deterministic testing.
 
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -99,6 +101,20 @@ pub type SpecEvaluatorFn =
 /// Callback for replayable progress events emitted by guest WASM modules.
 pub type ProgressEmitterFn = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
+/// Future returned by a binary HTTP interceptor.
+pub type BinaryHttpInterceptorFuture =
+    Pin<Box<dyn Future<Output = Option<Result<(u16, Vec<u8>), String>>> + Send>>;
+
+/// Optional callback that can short-circuit binary HTTP requests.
+///
+/// This lets the server handle specific local transport paths directly
+/// (for example, internal blob storage) without going back through loopback HTTP.
+pub type BinaryHttpInterceptorFn = Arc<
+    dyn Fn(String, String, Vec<(String, String)>, Vec<u8>) -> BinaryHttpInterceptorFuture
+        + Send
+        + Sync,
+>;
+
 /// Production host: real HTTP calls via reqwest, real secrets.
 pub struct ProductionWasmHost {
     /// HTTP client for making real requests.
@@ -111,6 +127,8 @@ pub struct ProductionWasmHost {
     progress_emitter: Option<ProgressEmitterFn>,
     /// W3C trace ID for auto-injecting traceparent headers in HTTP calls.
     trace_id: Option<String>,
+    /// Optional short-circuit for binary HTTP calls.
+    binary_http_interceptor: Option<BinaryHttpInterceptorFn>,
 }
 
 impl ProductionWasmHost {
@@ -151,6 +169,7 @@ impl ProductionWasmHost {
             spec_evaluator: None,
             progress_emitter: None,
             trace_id: None,
+            binary_http_interceptor: None,
         }
     }
 
@@ -169,6 +188,12 @@ impl ProductionWasmHost {
     /// Set the W3C trace ID for auto-injecting `traceparent` in HTTP calls.
     pub fn with_trace_id(mut self, trace_id: Option<String>) -> Self {
         self.trace_id = trace_id.filter(|s| !s.is_empty());
+        self
+    }
+
+    /// Create with a binary HTTP interceptor for local fast paths.
+    pub fn with_binary_http_interceptor(mut self, interceptor: BinaryHttpInterceptorFn) -> Self {
+        self.binary_http_interceptor = Some(interceptor);
         self
     }
 }
@@ -280,6 +305,42 @@ impl WasmHost for ProductionWasmHost {
             duration_ms = tracing::field::Empty,
         );
         let _guard = span.enter();
+
+        if let Some(ref interceptor) = self.binary_http_interceptor
+            && let Some(result) = interceptor(
+                method.to_string(),
+                url.to_string(),
+                headers.to_vec(),
+                body.to_vec(),
+            )
+            .await
+        {
+            let duration_ms = started.elapsed().as_millis() as u64;
+            match result {
+                Ok((status, resp_bytes)) => {
+                    tracing::Span::current().record("status_code", status);
+                    tracing::Span::current().record("response_bytes", resp_bytes.len() as u64);
+                    tracing::Span::current().record("duration_ms", duration_ms);
+                    metrics::record_host_http_call(
+                        method,
+                        "binary",
+                        status,
+                        body.len() as u64,
+                        resp_bytes.len() as u64,
+                        duration_ms as f64,
+                    );
+                    return Ok((status, resp_bytes));
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        duration_ms,
+                        "WASM host binary interceptor failed"
+                    );
+                    return Err(error);
+                }
+            }
+        }
 
         let mut builder = match method.to_uppercase().as_str() {
             "GET" => self.client.get(url),

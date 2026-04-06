@@ -82,6 +82,7 @@ const HASH_BUF_LEN: usize = 256;
 static mut CTX_BUF: [u8; CTX_BUF_LEN] = [0u8; CTX_BUF_LEN];
 static mut SECRET_BUF: [u8; SECRET_BUF_LEN] = [0u8; SECRET_BUF_LEN];
 static mut HASH_BUF: [u8; HASH_BUF_LEN] = [0u8; HASH_BUF_LEN];
+const BLOB_HTTP_ATTEMPTS: usize = 8;
 
 // ---- Entry point ----
 
@@ -151,7 +152,7 @@ fn handle_upload(ctx_json: &str) -> i32 {
 
     // 5. Upload — bytes flow from StreamRegistry via host, never through WASM memory
     let headers_json = "[]"; // Simplified: real impl would compute S3 Sig V4
-    let status = call_http_stream("PUT", &url, headers_json, &stream_id, "");
+    let status = call_http_stream_with_retry("PUT", &url, headers_json, &stream_id, "", "upload");
 
     if status < 200 || status >= 300 {
         set_error_result(&format!("upload failed with HTTP {status}"));
@@ -219,7 +220,14 @@ fn handle_download(ctx_json: &str) -> i32 {
 
     // 4. Download — bytes go to StreamRegistry via host
     let headers_json = "[]";
-    let status = call_http_stream("GET", &url, headers_json, "", &response_stream_id);
+    let status = call_http_stream_with_retry(
+        "GET",
+        &url,
+        headers_json,
+        "",
+        &response_stream_id,
+        "download",
+    );
 
     if status < 200 || status >= 300 {
         set_error_result(&format!("download failed with HTTP {status}"));
@@ -339,6 +347,47 @@ fn call_http_stream(
             response_stream_id.len() as i32,
         )
     }
+}
+
+fn call_http_stream_with_retry(
+    method: &str,
+    url: &str,
+    headers_json: &str,
+    body_stream_id: &str,
+    response_stream_id: &str,
+    op: &str,
+) -> i32 {
+    let mut last_status = -1;
+
+    for attempt in 0..BLOB_HTTP_ATTEMPTS {
+        let status = call_http_stream(
+            method,
+            url,
+            headers_json,
+            body_stream_id,
+            response_stream_id,
+        );
+        if (200..300).contains(&status) {
+            return status;
+        }
+
+        last_status = status;
+        let retriable = status == -1 || status >= 500;
+        if retriable && attempt + 1 < BLOB_HTTP_ATTEMPTS {
+            log(
+                "warn",
+                &format!(
+                    "blob_adapter: transient {op} failure HTTP {status}, retry {}/{}",
+                    attempt + 2,
+                    BLOB_HTTP_ATTEMPTS
+                ),
+            );
+            continue;
+        }
+        break;
+    }
+
+    last_status
 }
 
 fn read_secret_or(key: &str, default: &str) -> String {

@@ -12,8 +12,9 @@ use crate::secrets::template::resolve_secret_templates;
 use crate::state::sim_now;
 use temper_runtime::tenant::TenantId;
 use temper_wasm::{
-    AuthorizedWasmHost, ProductionWasmHost, ProgressEmitterFn, StreamRegistry, WasmAuthzContext,
-    WasmAuthzGate, WasmHost, WasmInvocationContext, WasmResourceLimits,
+    AuthorizedWasmHost, BinaryHttpInterceptorFn, ProductionWasmHost, ProgressEmitterFn,
+    StreamRegistry, WasmAuthzContext, WasmAuthzGate, WasmHost, WasmInvocationContext,
+    WasmResourceLimits,
 };
 
 use super::{
@@ -113,6 +114,57 @@ fn http_call_authz_denied_error(reason: &str) -> String {
 
 fn is_http_call_authz_denial(error: &str) -> bool {
     error.contains(HTTP_CALL_AUTHZ_DENIED_PREFIX)
+}
+
+fn is_local_internal_blob_endpoint(endpoint: &str) -> bool {
+    let normalized = endpoint.trim_end_matches('/');
+    (normalized.starts_with("http://127.0.0.1:") || normalized.starts_with("http://localhost:"))
+        && normalized.contains("/_internal/blobs")
+}
+
+fn local_blob_binary_interceptor(
+    store: Option<temper_store_turso::TursoEventStore>,
+    blob_endpoint: Option<String>,
+) -> Option<BinaryHttpInterceptorFn> {
+    let store = store?;
+    let endpoint = blob_endpoint?;
+    if !is_local_internal_blob_endpoint(&endpoint) {
+        return None;
+    }
+
+    let endpoint = endpoint.trim_end_matches('/').to_string();
+    Some(Arc::new(move |method, url, _headers, body| {
+        let store = store.clone();
+        let endpoint = endpoint.clone();
+        Box::pin(async move {
+            let prefix = format!("{endpoint}/");
+            let Some(blob_key) = url.strip_prefix(&prefix) else {
+                return None;
+            };
+            let blob_key = blob_key.to_string();
+            crate::runtime_metrics::record_blob_local_fast_path_request(&method);
+            tracing::info!(
+                method = %method,
+                blob_key = %blob_key,
+                "handling local blob request without loopback HTTP"
+            );
+
+            let result = match method.as_str() {
+                "PUT" => crate::blobs::put_blob_bytes(&store, &blob_key, &body)
+                    .await
+                    .map(|()| (204, Vec::new())),
+                "GET" => crate::blobs::get_blob_bytes(&store, &blob_key)
+                    .await
+                    .map(|maybe| match maybe {
+                        Some(bytes) => (200, bytes),
+                        None => (404, Vec::new()),
+                    }),
+                other => Err(format!("unsupported local blob method: {other}")),
+            };
+
+            Some(result)
+        })
+    }))
 }
 
 impl crate::state::ServerState {
@@ -258,6 +310,10 @@ impl crate::state::ServerState {
         ));
         let tenant_secrets =
             self.get_authorized_wasm_secrets(ctx.entity_ref.tenant, &*gate, &authz_ctx);
+        let local_blob_interceptor = local_blob_binary_interceptor(
+            self.platform_persistent_store().cloned(),
+            tenant_secrets.get("blob_endpoint").cloned(),
+        );
         // Use integration config timeout for both WASM execution and HTTP client.
         let http_timeout = integration
             .config
@@ -274,6 +330,11 @@ impl crate::state::ServerState {
         );
         let inner: Arc<dyn WasmHost> = Arc::new(
             ProductionWasmHost::with_timeout(tenant_secrets, http_timeout)
+                .with_binary_http_interceptor(
+                    local_blob_interceptor.unwrap_or_else(|| {
+                        Arc::new(|_, _, _, _| Box::pin(async { None }))
+                    }),
+                )
                 .with_spec_evaluator(spec_evaluator_fn())
                 .with_progress_emitter(progress_emitter)
                 .with_trace_id(ctx.agent_ctx.trace_id.clone()),
@@ -725,6 +786,10 @@ impl crate::state::ServerState {
             trigger_action: context.trigger_action.clone(),
         };
         let tenant_secrets = self.get_authorized_wasm_secrets(tenant, &*base_gate, &authz_ctx);
+        let local_blob_interceptor = local_blob_binary_interceptor(
+            self.platform_persistent_store().cloned(),
+            tenant_secrets.get("blob_endpoint").cloned(),
+        );
         let progress_emitter = progress_emitter_fn(
             self.clone(),
             tenant.to_string(),
@@ -732,11 +797,13 @@ impl crate::state::ServerState {
             context.entity_id.clone(),
             module_name.to_string(),
         );
-        let inner: Arc<dyn WasmHost> = Arc::new(
-            ProductionWasmHost::new(tenant_secrets)
-                .with_spec_evaluator(spec_evaluator_fn())
-                .with_progress_emitter(progress_emitter),
-        );
+        let mut base_host = ProductionWasmHost::new(tenant_secrets)
+            .with_spec_evaluator(spec_evaluator_fn())
+            .with_progress_emitter(progress_emitter);
+        if let Some(interceptor) = local_blob_interceptor {
+            base_host = base_host.with_binary_http_interceptor(interceptor);
+        }
+        let inner: Arc<dyn WasmHost> = Arc::new(base_host);
         let host: Arc<dyn WasmHost> =
             Arc::new(AuthorizedWasmHost::new(inner, base_gate, authz_ctx));
         let limits = WasmResourceLimits::default();

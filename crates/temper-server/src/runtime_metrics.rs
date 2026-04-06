@@ -18,6 +18,8 @@ struct RuntimeMetrics {
     active_actors: Gauge<u64>,
     active_entities: Gauge<u64>,
     event_replay_duration: Histogram<f64>,
+    blob_io_wait_duration_ms: Histogram<f64>,
+    blob_local_fast_path_requests_total: Counter<u64>,
     monty_repl_acquisitions_total: Counter<u64>,
     monty_repl_observed_active_invocations: Histogram<f64>,
     monty_repl_wait_duration_ms: Histogram<f64>,
@@ -43,6 +45,17 @@ fn metrics() -> &'static RuntimeMetrics {
             event_replay_duration: meter
                 .f64_histogram("temper_event_replay_duration")
                 .with_description("Time spent replaying event journals.")
+                .build(),
+            blob_io_wait_duration_ms: meter
+                .f64_histogram("temper_blob_io_wait_duration_ms")
+                .with_unit("ms")
+                .with_description("Time spent waiting for blob I/O backpressure permits.")
+                .build(),
+            blob_local_fast_path_requests_total: meter
+                .u64_counter("temper_blob_local_fast_path_requests_total")
+                .with_description(
+                    "Requests served by the in-process local blob fast path without loopback HTTP.",
+                )
                 .build(),
             monty_repl_acquisitions_total: meter
                 .u64_counter("temper_monty_repl_acquisitions_total")
@@ -105,6 +118,22 @@ pub fn record_event_replay_duration(duration: Duration, tenant: &str, entity_typ
             KeyValue::new("tenant", tenant.to_string()),
             KeyValue::new("entity_type", entity_type.to_string()),
         ],
+    );
+}
+
+/// Record time spent waiting for blob I/O backpressure permits.
+pub fn record_blob_io_wait_duration(duration: Duration, operation: &str) {
+    metrics().blob_io_wait_duration_ms.record(
+        duration.as_secs_f64() * 1000.0,
+        &[KeyValue::new("operation", operation.to_string())],
+    );
+}
+
+/// Record usage of the in-process local blob fast path.
+pub fn record_blob_local_fast_path_request(method: &str) {
+    metrics().blob_local_fast_path_requests_total.add(
+        1,
+        &[KeyValue::new("method", method.to_string())],
     );
 }
 
