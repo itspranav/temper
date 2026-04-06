@@ -726,12 +726,12 @@ fn extract_scope(content: &str) -> Option<String> {
     let frontmatter = &rest[..end];
     for line in frontmatter.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with("scope") {
-            if let Some(val) = trimmed.split('=').nth(1) {
-                let val = val.trim().trim_matches('"');
-                if !val.is_empty() {
-                    return Some(val.to_string());
-                }
+        if trimmed.starts_with("scope")
+            && let Some(val) = trimmed.split('=').nth(1)
+        {
+            let val = val.trim().trim_matches('"');
+            if !val.is_empty() {
+                return Some(val.to_string());
             }
         }
     }
@@ -760,20 +760,20 @@ fn collect_companions_recursive(
         let path = entry.path();
         if path.is_dir() {
             collect_companions_recursive(base_dir, &path, results);
-        } else if path.file_name().map(|f| f != "SKILL.md").unwrap_or(true) {
-            if let Ok(content) = std::fs::read(&path) {
-                let rel_path = path
-                    .strip_prefix(base_dir)
-                    .unwrap_or(&path)
-                    .to_string_lossy()
-                    .to_string();
-                let mime_type = mime_from_extension(&path);
-                results.push(CompanionFile {
-                    name: rel_path,
-                    content,
-                    mime_type,
-                });
-            }
+        } else if path.file_name().map(|f| f != "SKILL.md").unwrap_or(true)
+            && let Ok(content) = std::fs::read(&path)
+        {
+            let rel_path = path
+                .strip_prefix(base_dir)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .to_string();
+            let mime_type = mime_from_extension(&path);
+            results.push(CompanionFile {
+                name: rel_path,
+                content,
+                mime_type,
+            });
         }
     }
 }
