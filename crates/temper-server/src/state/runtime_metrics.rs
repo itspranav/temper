@@ -83,6 +83,11 @@ fn read_process_resident_memory_bytes() -> Option<u64> {
         return Some(bytes);
     }
 
+    #[cfg(target_os = "macos")]
+    if let Some(bytes) = read_macos_resident_memory_bytes() {
+        return Some(bytes);
+    }
+
     #[cfg(not(target_os = "linux"))]
     {
         None
@@ -98,4 +103,43 @@ fn read_linux_vm_rss_bytes() -> Option<u64> {
     let line = status.lines().find(|line| line.starts_with("VmRSS:"))?;
     let kb = line.split_whitespace().nth(1)?.parse::<u64>().ok()?;
     Some(kb.saturating_mul(1024))
+}
+
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+fn read_macos_resident_memory_bytes() -> Option<u64> {
+    use std::ptr;
+
+    let mut info = libc::mach_task_basic_info {
+        virtual_size: 0,
+        resident_size: 0,
+        resident_size_max: 0,
+        user_time: libc::time_value_t {
+            seconds: 0,
+            microseconds: 0,
+        },
+        system_time: libc::time_value_t {
+            seconds: 0,
+            microseconds: 0,
+        },
+        policy: 0,
+        suspend_count: 0,
+    };
+    let mut count = libc::MACH_TASK_BASIC_INFO_COUNT;
+
+    // determinism-ok: local task_info call for observability only
+    let status = unsafe {
+        libc::task_info(
+            libc::mach_task_self(),
+            libc::MACH_TASK_BASIC_INFO,
+            ptr::addr_of_mut!(info).cast::<libc::integer_t>(),
+            &mut count,
+        )
+    };
+
+    if status == libc::KERN_SUCCESS {
+        Some(info.resident_size)
+    } else {
+        None
+    }
 }

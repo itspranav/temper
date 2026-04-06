@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use opentelemetry::metrics::{Gauge, Histogram};
+use opentelemetry::metrics::{Counter, Gauge, Histogram};
 use opentelemetry::{KeyValue, global};
 
 use crate::state::ServerState;
@@ -18,6 +18,9 @@ struct RuntimeMetrics {
     active_actors: Gauge<u64>,
     active_entities: Gauge<u64>,
     event_replay_duration: Histogram<f64>,
+    monty_repl_acquisitions_total: Counter<u64>,
+    monty_repl_observed_active_invocations: Histogram<f64>,
+    monty_repl_wait_duration_ms: Histogram<f64>,
 }
 
 fn metrics() -> &'static RuntimeMetrics {
@@ -40,6 +43,21 @@ fn metrics() -> &'static RuntimeMetrics {
             event_replay_duration: meter
                 .f64_histogram("temper_event_replay_duration")
                 .with_description("Time spent replaying event journals.")
+                .build(),
+            monty_repl_acquisitions_total: meter
+                .u64_counter("temper_monty_repl_acquisitions_total")
+                .with_description("Total number of monty_repl execution gate acquisitions.")
+                .build(),
+            monty_repl_observed_active_invocations: meter
+                .f64_histogram("temper_monty_repl_observed_active_invocations")
+                .with_description(
+                    "Observed number of concurrent monty_repl WASM executions at acquire/release points.",
+                )
+                .build(),
+            monty_repl_wait_duration_ms: meter
+                .f64_histogram("temper_monty_repl_wait_duration_ms")
+                .with_unit("ms")
+                .with_description("Time spent waiting to acquire the monty_repl execution gate.")
                 .build(),
         }
     })
@@ -95,6 +113,39 @@ pub fn record_process_resident_memory_bytes(bytes: u64) {
     metrics().process_resident_memory_bytes.record(bytes, &[]);
 }
 
+/// Record the number of concurrent monty_repl executions.
+pub fn record_monty_repl_active_invocations(count: u64, max_concurrency: usize) {
+    metrics().monty_repl_observed_active_invocations.record(
+        count as f64,
+        &[KeyValue::new(
+            "max_concurrency",
+            i64::try_from(max_concurrency).unwrap_or(i64::MAX),
+        )],
+    );
+}
+
+/// Record a successful monty_repl gate acquisition.
+pub fn record_monty_repl_acquisition(max_concurrency: usize) {
+    metrics().monty_repl_acquisitions_total.add(
+        1,
+        &[KeyValue::new(
+            "max_concurrency",
+            i64::try_from(max_concurrency).unwrap_or(i64::MAX),
+        )],
+    );
+}
+
+/// Record time spent waiting for the monty_repl execution gate.
+pub fn record_monty_repl_wait_duration(duration: Duration, max_concurrency: usize) {
+    metrics().monty_repl_wait_duration_ms.record(
+        duration.as_secs_f64() * 1000.0,
+        &[KeyValue::new(
+            "max_concurrency",
+            i64::try_from(max_concurrency).unwrap_or(i64::MAX),
+        )],
+    );
+}
+
 /// Read process resident memory (RSS) in bytes from Linux procfs.
 #[cfg(target_os = "linux")]
 pub fn read_process_resident_memory_bytes() -> Option<u64> {
@@ -107,7 +158,46 @@ pub fn read_process_resident_memory_bytes() -> Option<u64> {
 }
 
 /// Read process resident memory (RSS) in bytes from Linux procfs.
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+pub fn read_process_resident_memory_bytes() -> Option<u64> {
+    use std::ptr;
+
+    let mut info = libc::mach_task_basic_info {
+        virtual_size: 0,
+        resident_size: 0,
+        resident_size_max: 0,
+        user_time: libc::time_value_t {
+            seconds: 0,
+            microseconds: 0,
+        },
+        system_time: libc::time_value_t {
+            seconds: 0,
+            microseconds: 0,
+        },
+        policy: 0,
+        suspend_count: 0,
+    };
+    let mut count = libc::MACH_TASK_BASIC_INFO_COUNT;
+
+    // determinism-ok: local task_info call for observability only
+    let status = unsafe {
+        libc::task_info(
+            libc::mach_task_self(),
+            libc::MACH_TASK_BASIC_INFO,
+            ptr::addr_of_mut!(info).cast::<libc::integer_t>(),
+            &mut count,
+        )
+    };
+
+    if status == libc::KERN_SUCCESS {
+        Some(info.resident_size)
+    } else {
+        None
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn read_process_resident_memory_bytes() -> Option<u64> {
     None
 }

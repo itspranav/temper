@@ -1,6 +1,9 @@
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 
 use serde_json::Value;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::instrument;
 
 use crate::entity_actor::{EntityResponse, EntityState};
@@ -34,6 +37,75 @@ struct WasmDispatchCtx<'a> {
 }
 
 const HTTP_CALL_AUTHZ_DENIED_PREFIX: &str = "authorization denied for http_call";
+const MONTY_REPL_MODULE: &str = "monty_repl";
+
+fn monty_repl_max_concurrency() -> usize {
+    static MAX_CONCURRENCY: OnceLock<usize> = OnceLock::new();
+    *MAX_CONCURRENCY.get_or_init(|| {
+        std::env::var("TEMPER_MONTY_REPL_MAX_CONCURRENCY") // determinism-ok: read once at startup
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(2)
+    })
+}
+
+fn monty_repl_semaphore() -> &'static Arc<Semaphore> {
+    static SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    SEMAPHORE.get_or_init(|| Arc::new(Semaphore::new(monty_repl_max_concurrency())))
+}
+
+fn monty_repl_active_counter() -> &'static AtomicU64 {
+    static ACTIVE: AtomicU64 = AtomicU64::new(0);
+    &ACTIVE
+}
+
+struct MontyReplExecutionPermit {
+    _permit: OwnedSemaphorePermit,
+    max_concurrency: usize,
+}
+
+impl MontyReplExecutionPermit {
+    async fn acquire() -> Self {
+        let max_concurrency = monty_repl_max_concurrency();
+        let wait_started = Instant::now();
+        let permit = monty_repl_semaphore()
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("monty_repl semaphore should not be closed");
+        let wait_duration = wait_started.elapsed();
+        crate::runtime_metrics::record_monty_repl_acquisition(max_concurrency);
+        crate::runtime_metrics::record_monty_repl_wait_duration(wait_duration, max_concurrency);
+        let active = monty_repl_active_counter().fetch_add(1, Ordering::SeqCst) + 1;
+        crate::runtime_metrics::record_monty_repl_active_invocations(active, max_concurrency);
+        tracing::info!(
+            module = MONTY_REPL_MODULE,
+            wait_ms = wait_duration.as_millis() as u64,
+            active_invocations = active,
+            max_concurrency,
+            "acquired monty_repl execution permit"
+        );
+        Self {
+            _permit: permit,
+            max_concurrency,
+        }
+    }
+}
+
+impl Drop for MontyReplExecutionPermit {
+    fn drop(&mut self) {
+        let previous = monty_repl_active_counter().fetch_sub(1, Ordering::SeqCst);
+        let active = previous.saturating_sub(1);
+        crate::runtime_metrics::record_monty_repl_active_invocations(active, self.max_concurrency);
+        tracing::info!(
+            module = MONTY_REPL_MODULE,
+            active_invocations = active,
+            max_concurrency = self.max_concurrency,
+            "released monty_repl execution permit"
+        );
+    }
+}
 
 fn http_call_authz_denied_error(reason: &str) -> String {
     format!("{HTTP_CALL_AUTHZ_DENIED_PREFIX}: {reason}")
@@ -439,6 +511,11 @@ impl crate::state::ServerState {
     ) -> Result<Option<EntityResponse>, String> {
         // Existing action-triggered invocations don't use streams — pass empty registry.
         let streams = Arc::new(std::sync::RwLock::new(StreamRegistry::default()));
+        let _monty_repl_permit = if module_name == MONTY_REPL_MODULE {
+            Some(MontyReplExecutionPermit::acquire().await)
+        } else {
+            None
+        };
         match self
             .wasm_engine
             .invoke(hash, &inv_ctx, host, limits, streams)

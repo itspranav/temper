@@ -4,6 +4,7 @@
 //! gets a fresh `Store` with fuel + memory limits (TigerStyle budgets).
 
 mod host_functions;
+mod telemetry;
 #[cfg(test)]
 mod tests;
 
@@ -235,6 +236,30 @@ impl WasmEngine {
     /// `i32` where the inputs are (context_ptr, context_len) and the return
     /// is a result pointer. Alternatively, the module can use `host_set_result`
     /// to provide the result via host call.
+    #[tracing::instrument(
+        name = "wasm.invoke",
+        skip(self, context, host, limits, streams),
+        fields(
+            otel.name = "wasm.invoke",
+            tenant = %context.tenant,
+            entity_type = %context.entity_type,
+            entity_id = %context.entity_id,
+            trigger_action = %context.trigger_action,
+            module_hash = %module_hash,
+            agent_id = tracing::field::Empty,
+            session_id = tracing::field::Empty,
+            max_fuel = limits.max_fuel,
+            max_memory = limits.max_memory as u64,
+            max_response_bytes = limits.max_response_bytes as u64,
+            stream_count_before = tracing::field::Empty,
+            stream_count_after = tracing::field::Empty,
+            needs_wasi = tracing::field::Empty,
+            success = tracing::field::Empty,
+            callback_action = tracing::field::Empty,
+            duration_ms = tracing::field::Empty,
+            error = tracing::field::Empty,
+        )
+    )]
     pub async fn invoke(
         &self,
         module_hash: &str,
@@ -261,6 +286,7 @@ impl WasmEngine {
             .module
             .imports()
             .any(|imp| imp.module() == "wasi_snapshot_preview1");
+        telemetry::record_invocation_start(context, needs_wasi, &streams);
 
         let wasi_ctx = if needs_wasi {
             // Minimal WASI context: clock + random, no filesystem or network.
@@ -361,13 +387,12 @@ impl WasmEngine {
         // Call run(ptr, len) -> result_ptr
         let result_ptr = run_fn
             .call(&mut store, (ctx_ptr as i32, ctx_bytes.len() as i32))
-            .map_err(|e| match e.downcast_ref::<wasmtime::Trap>() {
-                Some(&wasmtime::Trap::OutOfFuel) => WasmError::FuelExhausted,
-                Some(&wasmtime::Trap::Interrupt) => WasmError::Timeout(max_duration),
-                _ => WasmError::Invocation(e.to_string()),
+            .map_err(|e| {
+                telemetry::map_invoke_error(e, context, needs_wasi, max_duration, start)
             })?;
 
         let duration_ms = start.elapsed().as_millis() as u64;
+        tracing::Span::current().record("duration_ms", duration_ms);
 
         // Read result: prefer host_set_result (explicit API), fall back to memory pointer.
         let result_json = if let Some(ref host_result) = store.data().result_json {
@@ -395,38 +420,18 @@ impl WasmEngine {
 
         // Parse the result JSON
         if result_json.is_empty() {
-            return Ok(WasmInvocationResult {
-                callback_action: String::new(),
-                callback_params: serde_json::Value::Null,
-                success: false,
-                error: Some("module returned empty result".to_string()),
-                duration_ms,
-            });
+            return Ok(telemetry::empty_result(context, needs_wasi, duration_ms));
         }
 
-        let parsed: serde_json::Value = serde_json::from_str(&result_json)
-            .map_err(|e| WasmError::Invocation(format!("failed to parse result JSON: {e}")))?;
+        let parsed = telemetry::parse_result_json(&result_json, context, needs_wasi, duration_ms)?;
 
-        Ok(WasmInvocationResult {
-            callback_action: parsed
-                .get("action")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            callback_params: parsed
-                .get("params")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null),
-            success: parsed
-                .get("success")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true),
-            error: parsed
-                .get("error")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+        Ok(telemetry::finalize_result(
+            &store,
+            parsed,
+            context,
+            needs_wasi,
             duration_ms,
-        })
+        ))
     }
 
     /// Remove a module from the cache.

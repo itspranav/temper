@@ -35,7 +35,6 @@ use opentelemetry_sdk::trace::{
     BatchConfigBuilder as SpanBatchConfigBuilder, BatchSpanProcessor, SdkTracerProvider,
 };
 use tracing_subscriber::EnvFilter;
-use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::prelude::*;
 
 /// Default OTLP endpoint for Logfire.
@@ -92,6 +91,10 @@ fn read_non_empty_env(var_name: &str) -> Option<String> {
 }
 
 fn resolve_deployment_environment() -> Option<String> {
+    if let Some(environment) = read_non_empty_env("DD_ENV") {
+        return Some(environment);
+    }
+
     if let Some(environment) = read_non_empty_env("LOGFIRE_ENVIRONMENT") {
         return Some(environment);
     }
@@ -109,6 +112,10 @@ fn resolve_deployment_environment() -> Option<String> {
         }
     }
     None
+}
+
+fn resolve_service_version() -> Option<String> {
+    read_non_empty_env("DD_VERSION")
 }
 
 fn resolve_otel_config() -> Option<ResolvedOtelConfig> {
@@ -314,6 +321,9 @@ pub fn init_tracing(
     if let Some(environment) = resolve_deployment_environment() {
         resource_attrs.push(KeyValue::new("deployment.environment.name", environment));
     }
+    if let Some(version) = resolve_service_version() {
+        resource_attrs.push(KeyValue::new("service.version", version));
+    }
 
     let resource = Resource::builder_empty()
         .with_attributes(resource_attrs)
@@ -406,8 +416,7 @@ pub fn init_tracing(
     // Restrict the log bridge to WARN+ to avoid flooding Logfire's /v1/logs
     // endpoint with high-volume info events.  Traces already capture info-level
     // spans via the otel_trace_layer, so no diagnostic value is lost.
-    let otel_log_layer =
-        OpenTelemetryTracingBridge::new(&logger_provider).with_filter(LevelFilter::WARN);
+    let otel_log_layer = OpenTelemetryTracingBridge::new(&logger_provider);
 
     tracing_subscriber::registry()
         .with(env_filter)

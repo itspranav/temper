@@ -5,8 +5,11 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
+
+use crate::metrics;
 
 /// Host capabilities provided to WASM modules.
 ///
@@ -179,6 +182,20 @@ impl WasmHost for ProductionWasmHost {
         headers: &[(String, String)],
         body: &str,
     ) -> Result<(u16, String), String> {
+        let started = Instant::now();
+        let span = tracing::info_span!(
+            "wasm.host.http_call",
+            otel.name = "wasm.host.http_call",
+            http.method = %method,
+            http.url = %telemetry_url(url),
+            request_bytes = body.len() as u64,
+            header_count = headers.len() as u64,
+            status_code = tracing::field::Empty,
+            response_bytes = tracing::field::Empty,
+            duration_ms = tracing::field::Empty,
+        );
+        let _guard = span.enter();
+
         let mut builder = match method.to_uppercase().as_str() {
             "GET" => self.client.get(url),
             "POST" => self.client.post(url),
@@ -210,15 +227,36 @@ impl WasmHost for ProductionWasmHost {
             builder = builder.body(body.to_string());
         }
 
-        let resp = builder
-            .send()
-            .await
-            .map_err(|e| format!("HTTP request failed: {e}"))?;
+        let resp = builder.send().await.map_err(|e| {
+            tracing::warn!(
+                error = %e,
+                duration_ms = started.elapsed().as_millis() as u64,
+                "WASM host HTTP request failed"
+            );
+            format!("HTTP request failed: {e}")
+        })?;
         let status = resp.status().as_u16();
-        let resp_body = resp
-            .text()
-            .await
-            .map_err(|e| format!("failed to read response body: {e}"))?;
+        let resp_body = resp.text().await.map_err(|e| {
+            tracing::warn!(
+                status_code = status,
+                error = %e,
+                duration_ms = started.elapsed().as_millis() as u64,
+                "WASM host HTTP response read failed"
+            );
+            format!("failed to read response body: {e}")
+        })?;
+        let duration_ms = started.elapsed().as_millis() as u64;
+        tracing::Span::current().record("status_code", status);
+        tracing::Span::current().record("response_bytes", resp_body.len() as u64);
+        tracing::Span::current().record("duration_ms", duration_ms);
+        metrics::record_host_http_call(
+            method,
+            "text",
+            status,
+            body.len() as u64,
+            resp_body.len() as u64,
+            duration_ms as f64,
+        );
         Ok((status, resp_body))
     }
 
@@ -229,6 +267,20 @@ impl WasmHost for ProductionWasmHost {
         headers: &[(String, String)],
         body: &[u8],
     ) -> Result<(u16, Vec<u8>), String> {
+        let started = Instant::now();
+        let span = tracing::info_span!(
+            "wasm.host.http_call_binary",
+            otel.name = "wasm.host.http_call_binary",
+            http.method = %method,
+            http.url = %telemetry_url(url),
+            request_bytes = body.len() as u64,
+            header_count = headers.len() as u64,
+            status_code = tracing::field::Empty,
+            response_bytes = tracing::field::Empty,
+            duration_ms = tracing::field::Empty,
+        );
+        let _guard = span.enter();
+
         let mut builder = match method.to_uppercase().as_str() {
             "GET" => self.client.get(url),
             "POST" => self.client.post(url),
@@ -246,16 +298,38 @@ impl WasmHost for ProductionWasmHost {
             builder = builder.body(body.to_vec());
         }
 
-        let resp = builder
-            .send()
-            .await
-            .map_err(|e| format!("HTTP binary request failed: {e}"))?;
+        let resp = builder.send().await.map_err(|e| {
+            tracing::warn!(
+                error = %e,
+                duration_ms = started.elapsed().as_millis() as u64,
+                "WASM host binary HTTP request failed"
+            );
+            format!("HTTP binary request failed: {e}")
+        })?;
         let status = resp.status().as_u16();
-        let resp_bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| format!("failed to read binary response body: {e}"))?;
-        Ok((status, resp_bytes.to_vec()))
+        let resp_bytes = resp.bytes().await.map_err(|e| {
+            tracing::warn!(
+                status_code = status,
+                error = %e,
+                duration_ms = started.elapsed().as_millis() as u64,
+                "WASM host binary response read failed"
+            );
+            format!("failed to read binary response body: {e}")
+        })?;
+        let resp_bytes = resp_bytes.to_vec();
+        let duration_ms = started.elapsed().as_millis() as u64;
+        tracing::Span::current().record("status_code", status);
+        tracing::Span::current().record("response_bytes", resp_bytes.len() as u64);
+        tracing::Span::current().record("duration_ms", duration_ms);
+        metrics::record_host_http_call(
+            method,
+            "binary",
+            status,
+            body.len() as u64,
+            resp_bytes.len() as u64,
+            duration_ms as f64,
+        );
+        Ok((status, resp_bytes))
     }
 
     async fn connect_call(
@@ -333,6 +407,26 @@ impl WasmHost for ProductionWasmHost {
             Some(emitter) => emitter(event_json),
             None => Ok(()),
         }
+    }
+}
+
+fn telemetry_url(url: &str) -> String {
+    let after_scheme = url.find("://").map(|idx| &url[idx + 3..]).unwrap_or(url);
+    let after_auth = after_scheme
+        .find('@')
+        .map(|idx| &after_scheme[idx + 1..])
+        .unwrap_or(after_scheme);
+    let path_start = after_auth.find(['/', '?', '#']).unwrap_or(after_auth.len());
+    let authority = &after_auth[..path_start];
+    let path_and_query = &after_auth[path_start..];
+    let path_end = path_and_query
+        .find(['?', '#'])
+        .unwrap_or(path_and_query.len());
+    let path = &path_and_query[..path_end];
+    if path.is_empty() {
+        authority.to_string()
+    } else {
+        format!("{authority}{path}")
     }
 }
 

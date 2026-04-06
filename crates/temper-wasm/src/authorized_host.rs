@@ -110,9 +110,21 @@ impl WasmHost for AuthorizedWasmHost {
             .authorize_http_call(domain, method, url, &self.ctx)
         {
             WasmAuthzDecision::Allow => self.inner.http_call(method, url, headers, body).await,
-            WasmAuthzDecision::Deny(reason) => Err(format!(
-                "authorization denied for http_call to {domain}: {reason}"
-            )),
+            WasmAuthzDecision::Deny(reason) => {
+                tracing::warn!(
+                    tenant = %self.ctx.tenant,
+                    module = %self.ctx.module_name,
+                    entity_type = %self.ctx.entity_type,
+                    trigger_action = %self.ctx.trigger_action,
+                    domain = %domain,
+                    http_method = %method,
+                    reason = %reason,
+                    "WASM host authorization denied outbound HTTP call"
+                );
+                Err(format!(
+                    "authorization denied for http_call to {domain}: {reason}"
+                ))
+            }
         }
     }
 
@@ -133,9 +145,21 @@ impl WasmHost for AuthorizedWasmHost {
                     .http_call_binary(method, url, headers, body)
                     .await
             }
-            WasmAuthzDecision::Deny(reason) => Err(format!(
-                "authorization denied for http_call_binary to {domain}: {reason}"
-            )),
+            WasmAuthzDecision::Deny(reason) => {
+                tracing::warn!(
+                    tenant = %self.ctx.tenant,
+                    module = %self.ctx.module_name,
+                    entity_type = %self.ctx.entity_type,
+                    trigger_action = %self.ctx.trigger_action,
+                    domain = %domain,
+                    http_method = %method,
+                    reason = %reason,
+                    "WASM host authorization denied outbound binary HTTP call"
+                );
+                Err(format!(
+                    "authorization denied for http_call_binary to {domain}: {reason}"
+                ))
+            }
         }
     }
 
@@ -151,9 +175,20 @@ impl WasmHost for AuthorizedWasmHost {
             .authorize_http_call(domain, "POST", url, &self.ctx)
         {
             WasmAuthzDecision::Allow => self.inner.connect_call(url, headers, body).await,
-            WasmAuthzDecision::Deny(reason) => Err(format!(
-                "authorization denied for connect_call to {domain}: {reason}"
-            )),
+            WasmAuthzDecision::Deny(reason) => {
+                tracing::warn!(
+                    tenant = %self.ctx.tenant,
+                    module = %self.ctx.module_name,
+                    entity_type = %self.ctx.entity_type,
+                    trigger_action = %self.ctx.trigger_action,
+                    domain = %domain,
+                    reason = %reason,
+                    "WASM host authorization denied Connect call"
+                );
+                Err(format!(
+                    "authorization denied for connect_call to {domain}: {reason}"
+                ))
+            }
         }
     }
 

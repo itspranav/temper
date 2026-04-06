@@ -8,6 +8,7 @@
 pub mod authorized_host;
 pub mod engine;
 pub mod host_trait;
+pub(crate) mod metrics;
 pub mod stream;
 pub mod types;
 

@@ -5959,6 +5959,7 @@ dependencies = [
  "ed25519-dalek",
  "futures-util",
  "hyper 1.8.1",
+ "libc",
  "lru",
  "opentelemetry",
  "reqwest",
@@ -6100,6 +6101,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "opentelemetry",
  "reqwest",
  "serde",
  "serde_json",
