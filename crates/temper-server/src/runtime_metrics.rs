@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use opentelemetry::metrics::{Counter, Gauge, Histogram};
-use opentelemetry::{KeyValue, global};
+use opentelemetry::{global, KeyValue};
 
 use crate::state::ServerState;
 
@@ -131,10 +131,9 @@ pub fn record_blob_io_wait_duration(duration: Duration, operation: &str) {
 
 /// Record usage of the in-process local blob fast path.
 pub fn record_blob_local_fast_path_request(method: &str) {
-    metrics().blob_local_fast_path_requests_total.add(
-        1,
-        &[KeyValue::new("method", method.to_string())],
-    );
+    metrics()
+        .blob_local_fast_path_requests_total
+        .add(1, &[KeyValue::new("method", method.to_string())]);
 }
 
 /// Record process resident memory usage.

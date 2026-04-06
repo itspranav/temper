@@ -331,9 +331,8 @@ impl crate::state::ServerState {
         let inner: Arc<dyn WasmHost> = Arc::new(
             ProductionWasmHost::with_timeout(tenant_secrets, http_timeout)
                 .with_binary_http_interceptor(
-                    local_blob_interceptor.unwrap_or_else(|| {
-                        Arc::new(|_, _, _, _| Box::pin(async { None }))
-                    }),
+                    local_blob_interceptor
+                        .unwrap_or_else(|| Arc::new(|_, _, _, _| Box::pin(async { None }))),
                 )
                 .with_spec_evaluator(spec_evaluator_fn())
                 .with_progress_emitter(progress_emitter)

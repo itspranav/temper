@@ -100,7 +100,10 @@ pub extern "C" fn run(_ctx_ptr: i32, _ctx_len: i32) -> i32 {
     let operation = extract_json_str(&ctx_json, "operation");
     let trigger_action = extract_json_str(&ctx_json, "trigger_action");
 
-    log("info", &format!("blob_adapter: trigger={trigger_action} op={operation}"));
+    log(
+        "info",
+        &format!("blob_adapter: trigger={trigger_action} op={operation}"),
+    );
 
     match operation.as_str() {
         "put" => handle_upload(&ctx_json),
@@ -274,10 +277,7 @@ fn set_result(json: &str) {
 }
 
 fn set_error_result(error: &str) {
-    let result = format!(
-        r#"{{"success":false,"error":"{}"}}"#,
-        escape_json(error),
-    );
+    let result = format!(r#"{{"success":false,"error":"{}"}}"#, escape_json(error),);
     set_result(&result);
 }
 
