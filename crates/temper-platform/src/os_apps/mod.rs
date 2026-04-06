@@ -378,13 +378,30 @@ impl AppCatalog {
             let app_dir = entry.path();
             let dir_name = entry.file_name().to_string_lossy().to_string();
 
-            // Try reading app.toml manifest.
-            let manifest = read_app_manifest(&app_dir);
+            // app.toml is required — skip directories without it.
+            let manifest = match read_app_manifest(&app_dir) {
+                Some(m) => m,
+                None => {
+                    tracing::warn!(
+                        app = %dir_name,
+                        path = %app_dir.display(),
+                        "Skipping app directory — missing required app.toml"
+                    );
+                    continue;
+                }
+            };
 
-            let app_name = manifest
-                .as_ref()
-                .map(|m| m.name.clone())
-                .unwrap_or_else(|| dir_name.clone());
+            // APP.md is required — warn if missing but still load the app.
+            let app_guide = read_app_guide(&app_dir);
+            if app_guide.is_none() {
+                tracing::warn!(
+                    app = %manifest.name,
+                    path = %app_dir.display(),
+                    "App is missing APP.md — every app should have documentation"
+                );
+            }
+
+            let app_name = manifest.name.clone();
 
             // Scan for IOA specs to determine entity types.
             let ioa_files = find_ioa_files(&app_dir);
@@ -397,30 +414,18 @@ impl AppCatalog {
                 })
                 .collect();
 
-            // Look for app guide.
-            let app_guide = read_app_guide(&app_dir);
+            // Description from manifest (required), fallback to APP.md extract.
+            let description = if !manifest.description.is_empty() {
+                manifest.description.clone()
+            } else {
+                app_guide
+                    .as_ref()
+                    .and_then(|guide| extract_description(guide))
+                    .unwrap_or_else(|| format!("App: {app_name}"))
+            };
 
-            // Determine description: manifest > app_guide > default.
-            let description = manifest
-                .as_ref()
-                .filter(|m| !m.description.is_empty())
-                .map(|m| m.description.clone())
-                .or_else(|| {
-                    app_guide
-                        .as_ref()
-                        .and_then(|guide| extract_description(guide))
-                })
-                .unwrap_or_else(|| format!("App: {app_name}"));
-
-            let version = manifest
-                .as_ref()
-                .map(|m| m.version.clone())
-                .unwrap_or_else(|| "0.1.0".to_string());
-
-            let dependencies = manifest
-                .as_ref()
-                .map(|m| m.dependencies.clone())
-                .unwrap_or_default();
+            let version = manifest.version.clone();
+            let dependencies = manifest.dependencies.clone();
 
             paths.insert(dir_name, app_dir);
             entries.push(AppEntry {
