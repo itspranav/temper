@@ -226,7 +226,7 @@ async fn e2e_gepa_sentinel_detects_failure_cluster() {
 
     // Install PM skill.
     let types = harness
-        .install_skill(TENANT, "project-management")
+        .install_app(TENANT, "project-management")
         .await
         .expect("PM skill should install");
     assert!(types.contains(&"Issue".to_string()));
@@ -323,7 +323,7 @@ async fn e2e_gepa_evolution_run_full_lifecycle() {
     // Install evolution skill, then override EvolutionRun with integration-free
     // version to prevent background WASM failures during manual state machine testing.
     let types = harness
-        .install_skill(TENANT, "evolution")
+        .install_app(TENANT, "evolution")
         .await
         .expect("evolution skill should install");
     assert!(types.contains(&"EvolutionRun".to_string()));
@@ -506,7 +506,7 @@ async fn e2e_gepa_verification_retry_loop() {
     let harness = SimPlatformHarness::no_faults(44);
 
     harness
-        .install_skill(TENANT, "evolution")
+        .install_app(TENANT, "evolution")
         .await
         .expect("evolution skill should install");
     harness.register_inline_spec(TENANT, "EvolutionRun", EVOLUTION_RUN_IOA_NO_INTEGRATIONS);
@@ -620,7 +620,7 @@ async fn e2e_gepa_sentinel_monitor_lifecycle() {
     let harness = SimPlatformHarness::no_faults(45);
 
     harness
-        .install_skill(TENANT, "evolution")
+        .install_app(TENANT, "evolution")
         .await
         .expect("evolution skill should install");
 
@@ -862,7 +862,7 @@ async fn e2e_gepa_hotdeploy_and_verify() {
 
     // Install PM skill (Issue spec WITHOUT Reassign).
     harness
-        .install_skill(TENANT, "project-management")
+        .install_app(TENANT, "project-management")
         .await
         .expect("PM skill should install");
 
@@ -982,11 +982,11 @@ async fn e2e_gepa_full_loop() {
 
     // --- Step 1: Install both PM and evolution skills ---
     harness
-        .install_skill(TENANT, "project-management")
+        .install_app(TENANT, "project-management")
         .await
         .expect("PM skill should install");
     harness
-        .install_skill(TENANT, "evolution")
+        .install_app(TENANT, "evolution")
         .await
         .expect("evolution skill should install");
     harness.register_inline_spec(TENANT, "EvolutionRun", EVOLUTION_RUN_IOA_NO_INTEGRATIONS);

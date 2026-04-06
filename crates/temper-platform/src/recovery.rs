@@ -67,7 +67,7 @@ pub async fn recover_cedar_policies(state: &PlatformState, ps: &dyn PlatformStor
 ///
 /// This is the **production code path** — identical logic runs at CLI boot
 /// (Phase 8b) and during DST restart simulation.
-pub async fn restore_installed_skills(state: &PlatformState, ps: &dyn PlatformStore) {
+pub async fn restore_installed_apps(state: &PlatformState, ps: &dyn PlatformStore) {
     let installed = match ps.list_all_installed_apps().await {
         Ok(apps) => apps,
         Err(e) => {
@@ -76,13 +76,13 @@ pub async fn restore_installed_skills(state: &PlatformState, ps: &dyn PlatformSt
         }
     };
 
-    for (tenant, skill_name) in installed {
-        // Check if the skill's entity types are already in the registry.
-        if tenant_has_skill_specs(state, &tenant, &skill_name) {
+    for (tenant, app_name) in installed {
+        // Check if the app's entity types are already in the registry.
+        if tenant_has_app_specs(state, &tenant, &app_name) {
             continue;
         }
 
-        match os_apps::install_os_app(state, &tenant, &skill_name).await {
+        match os_apps::install_os_app(state, &tenant, &app_name).await {
             Ok(result) => {
                 let all: Vec<String> = result
                     .added
@@ -92,24 +92,29 @@ pub async fn restore_installed_skills(state: &PlatformState, ps: &dyn PlatformSt
                     .cloned()
                     .collect();
                 tracing::info!(
-                    "Restored skill '{skill_name}' for '{tenant}': {}",
+                    "Restored app '{app_name}' for '{tenant}': {}",
                     all.join(", ")
                 );
             }
             Err(e) => {
-                tracing::warn!("Failed to restore skill '{skill_name}' for '{tenant}': {e}");
+                tracing::warn!("Failed to restore app '{app_name}' for '{tenant}': {e}");
             }
         }
     }
 }
 
 /// Backward-compatible alias.
-pub async fn restore_installed_os_apps(state: &PlatformState, ps: &dyn PlatformStore) {
-    restore_installed_skills(state, ps).await
+pub async fn restore_installed_skills(state: &PlatformState, ps: &dyn PlatformStore) {
+    restore_installed_apps(state, ps).await
 }
 
-/// Check if all entity types for a skill are already registered.
-fn tenant_has_skill_specs(state: &PlatformState, tenant: &str, app_name: &str) -> bool {
+/// Backward-compatible alias.
+pub async fn restore_installed_os_apps(state: &PlatformState, ps: &dyn PlatformStore) {
+    restore_installed_apps(state, ps).await
+}
+
+/// Check if all entity types for an app are already registered.
+fn tenant_has_app_specs(state: &PlatformState, tenant: &str, app_name: &str) -> bool {
     let Some(bundle) = os_apps::get_os_app(app_name) else {
         return false;
     };

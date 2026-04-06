@@ -84,7 +84,7 @@ pub async fn dispatch_temper_method(
         }
         // --- App Catalog ---
         "list_apps" | "install_app" | "get_app" | "list_skills" | "install_skill" | "get_skill" => {
-            dispatch_skills(ctx, method, args).await
+            dispatch_apps(ctx, method, args).await
         }
         // --- Discovery ---
         "specs" => {
@@ -551,7 +551,7 @@ async fn dispatch_evolution(
 }
 
 /// Dispatch app catalog methods.
-async fn dispatch_skills(
+async fn dispatch_apps(
     ctx: &DispatchContext<'_>,
     method: &str,
     args: &[MontyObject],
@@ -576,7 +576,7 @@ async fn dispatch_skills(
             } else {
                 "app_name"
             };
-            let skill_name = expect_string_arg(args, 0, arg_name, method)?;
+            let app_name = expect_string_arg(args, 0, arg_name, method)?;
             temper_request(
                 ctx.http,
                 ctx.base_url,
@@ -584,7 +584,7 @@ async fn dispatch_skills(
                 &ctx.identity(),
                 ctx.api_key,
                 Method::GET,
-                &format!("/api/os-apps/{skill_name}"),
+                &format!("/api/os-apps/{app_name}"),
                 None,
             )
             .await
@@ -595,7 +595,7 @@ async fn dispatch_skills(
             } else {
                 "app_name"
             };
-            let skill_name = expect_string_arg(args, 0, arg_name, method)?;
+            let app_name = expect_string_arg(args, 0, arg_name, method)?;
             let payload = serde_json::json!({ "tenant": ctx.tenant });
             temper_request(
                 ctx.http,
@@ -604,12 +604,12 @@ async fn dispatch_skills(
                 &ctx.identity(),
                 ctx.api_key,
                 Method::POST,
-                &format!("/api/os-apps/{skill_name}/install"),
+                &format!("/api/os-apps/{app_name}/install"),
                 Some(&payload),
             )
             .await
         }
-        _ => unreachable!("dispatch_skills called with non-skill method"),
+        _ => unreachable!("dispatch_apps called with non-app method"),
     }
 }
 

@@ -254,7 +254,7 @@ pub async fn run(
     bootstrap::bootstrap_tenants(&state, &apps).await;
 
     // Phase 8b: Restore persisted skills + apply CLI `--skill` requests.
-    bootstrap::bootstrap_installed_skills(&state, &skills).await;
+    bootstrap::bootstrap_installed_apps(&state, &skills).await;
 
     // Phase 9: Bind, start background tasks, serve
     let router = build_platform_router(state.clone());

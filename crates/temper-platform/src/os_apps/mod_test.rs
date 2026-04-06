@@ -9,7 +9,7 @@ use temper_verify::cascade::VerificationCascade;
 
 #[test]
 fn test_pm_specs_parse() {
-    let bundle = get_skill("project-management").expect("PM skill not found");
+    let bundle = get_os_app("project-management").expect("PM app not found");
     for (entity_type, ioa_source) in &bundle.specs {
         let result = automaton::parse_automaton(ioa_source);
         assert!(
@@ -23,8 +23,8 @@ fn test_pm_specs_parse() {
 
 #[test]
 fn test_pm_csdl_parses() {
-    let bundle = get_skill("project-management").expect("PM skill not found");
-    let result = parse_csdl(&bundle.csdl);
+    let bundle = get_os_app("project-management").expect("PM app not found");
+    let result = parse_csdl(bundle.csdl.as_ref().expect("PM should have CSDL"));
     assert!(
         result.is_ok(),
         "PM CSDL failed to parse: {:?}",
@@ -34,7 +34,7 @@ fn test_pm_csdl_parses() {
 
 #[test]
 fn test_pm_spec_entity_names() {
-    let bundle = get_skill("project-management").expect("PM skill not found");
+    let bundle = get_os_app("project-management").expect("PM app not found");
     for (entity_type, ioa_source) in &bundle.specs {
         let a = automaton::parse_automaton(ioa_source).unwrap();
         assert_eq!(
@@ -47,7 +47,7 @@ fn test_pm_spec_entity_names() {
 
 #[test]
 fn test_pm_specs_verify() {
-    let bundle = get_skill("project-management").expect("PM skill not found");
+    let bundle = get_os_app("project-management").expect("PM app not found");
     for (entity_type, ioa_source) in &bundle.specs {
         let cascade = VerificationCascade::from_ioa(ioa_source)
             .with_sim_seeds(3)
@@ -63,7 +63,7 @@ fn test_pm_specs_verify() {
 
 #[test]
 fn test_agent_orchestration_specs_parse() {
-    let bundle = get_skill("agent-orchestration").expect("AO skill not found");
+    let bundle = get_os_app("agent-orchestration").expect("AO app not found");
     for (entity_type, ioa_source) in &bundle.specs {
         let result = automaton::parse_automaton(ioa_source);
         assert!(
@@ -77,8 +77,8 @@ fn test_agent_orchestration_specs_parse() {
 
 #[test]
 fn test_agent_orchestration_csdl_parses() {
-    let bundle = get_skill("agent-orchestration").expect("AO skill not found");
-    let result = parse_csdl(&bundle.csdl);
+    let bundle = get_os_app("agent-orchestration").expect("AO app not found");
+    let result = parse_csdl(bundle.csdl.as_ref().expect("AO should have CSDL"));
     assert!(
         result.is_ok(),
         "Agent Orchestration CSDL failed to parse: {:?}",
@@ -88,7 +88,7 @@ fn test_agent_orchestration_csdl_parses() {
 
 #[test]
 fn test_agent_orchestration_specs_verify() {
-    let bundle = get_skill("agent-orchestration").expect("AO skill not found");
+    let bundle = get_os_app("agent-orchestration").expect("AO app not found");
     for (entity_type, ioa_source) in &bundle.specs {
         let cascade = VerificationCascade::from_ioa(ioa_source)
             .with_sim_seeds(3)
@@ -144,14 +144,14 @@ fn test_list_skills_returns_catalog() {
         evo.entity_types
     );
     assert!(
-        evo.skill_guide.is_some(),
-        "evolution should have a skill guide"
+        evo.app_guide.is_some(),
+        "evolution should have an app guide"
     );
 }
 
 #[test]
 fn test_intent_discovery_specs_parse() {
-    let bundle = get_skill("intent-discovery").expect("intent-discovery skill not found");
+    let bundle = get_os_app("intent-discovery").expect("intent-discovery app not found");
     for (entity_type, ioa_source) in &bundle.specs {
         let result = automaton::parse_automaton(ioa_source);
         assert!(
@@ -165,8 +165,8 @@ fn test_intent_discovery_specs_parse() {
 
 #[test]
 fn test_intent_discovery_csdl_parses() {
-    let bundle = get_skill("intent-discovery").expect("intent-discovery skill not found");
-    let result = parse_csdl(&bundle.csdl);
+    let bundle = get_os_app("intent-discovery").expect("intent-discovery app not found");
+    let result = parse_csdl(bundle.csdl.as_ref().expect("intent-discovery should have CSDL"));
     assert!(
         result.is_ok(),
         "IntentDiscovery CSDL failed to parse: {:?}",
@@ -176,7 +176,7 @@ fn test_intent_discovery_csdl_parses() {
 
 #[test]
 fn test_intent_discovery_specs_verify() {
-    let bundle = get_skill("intent-discovery").expect("intent-discovery skill not found");
+    let bundle = get_os_app("intent-discovery").expect("intent-discovery app not found");
     for (entity_type, ioa_source) in &bundle.specs {
         let cascade = VerificationCascade::from_ioa(ioa_source)
             .with_sim_seeds(3)
@@ -192,17 +192,18 @@ fn test_intent_discovery_specs_verify() {
 
 #[test]
 fn test_get_skill_project_management() {
-    let bundle = get_skill("project-management");
+    let bundle = get_os_app("project-management");
     assert!(bundle.is_some());
     let bundle = bundle.unwrap();
     assert_eq!(bundle.specs.len(), 5);
-    assert!(!bundle.csdl.is_empty());
+    assert!(bundle.csdl.is_some());
+    assert!(!bundle.csdl.as_ref().unwrap().is_empty());
     assert!(!bundle.cedar_policies.is_empty());
 }
 
 #[test]
 fn test_agent_specs_parse() {
-    let bundle = get_skill("temper-agent").expect("temper-agent skill not found");
+    let bundle = get_os_app("temper-agent").expect("temper-agent app not found");
     for (entity_type, ioa_source) in &bundle.specs {
         let result = automaton::parse_automaton(ioa_source);
         assert!(
@@ -216,8 +217,8 @@ fn test_agent_specs_parse() {
 
 #[test]
 fn test_agent_csdl_parses() {
-    let bundle = get_skill("temper-agent").expect("temper-agent skill not found");
-    let result = parse_csdl(&bundle.csdl);
+    let bundle = get_os_app("temper-agent").expect("temper-agent app not found");
+    let result = parse_csdl(bundle.csdl.as_ref().expect("temper-agent should have CSDL"));
     assert!(
         result.is_ok(),
         "Agent CSDL failed to parse: {:?}",
@@ -227,7 +228,7 @@ fn test_agent_csdl_parses() {
 
 #[test]
 fn test_agent_spec_entity_names() {
-    let bundle = get_skill("temper-agent").expect("temper-agent skill not found");
+    let bundle = get_os_app("temper-agent").expect("temper-agent app not found");
     for (entity_type, ioa_source) in &bundle.specs {
         let a = automaton::parse_automaton(ioa_source).unwrap();
         assert_eq!(
@@ -240,7 +241,7 @@ fn test_agent_spec_entity_names() {
 
 #[test]
 fn test_agent_specs_verify() {
-    let bundle = get_skill("temper-agent").expect("temper-agent skill not found");
+    let bundle = get_os_app("temper-agent").expect("temper-agent app not found");
     for (entity_type, ioa_source) in &bundle.specs {
         let cascade = VerificationCascade::from_ioa(ioa_source)
             .with_sim_seeds(3)
@@ -256,37 +257,40 @@ fn test_agent_specs_verify() {
 
 #[test]
 fn test_get_skill_agent_orchestration() {
-    let bundle = get_skill("agent-orchestration");
+    let bundle = get_os_app("agent-orchestration");
     assert!(bundle.is_some());
     let bundle = bundle.unwrap();
     assert_eq!(bundle.specs.len(), 3);
-    assert!(!bundle.csdl.is_empty());
+    assert!(bundle.csdl.is_some());
+    assert!(!bundle.csdl.as_ref().unwrap().is_empty());
     assert!(!bundle.cedar_policies.is_empty());
 }
 
 #[test]
 fn test_get_skill_temper_agent() {
-    let bundle = get_skill("temper-agent");
+    let bundle = get_os_app("temper-agent");
     assert!(bundle.is_some());
     let bundle = bundle.unwrap();
     assert_eq!(bundle.specs.len(), 8); // TemperAgent + AgentSoul + AgentSkill + AgentMemory + ToolHook + HeartbeatMonitor + CronJob + CronScheduler
-    assert!(!bundle.csdl.is_empty());
+    assert!(bundle.csdl.is_some());
+    assert!(!bundle.csdl.as_ref().unwrap().is_empty());
     assert!(!bundle.cedar_policies.is_empty());
 }
 
 #[test]
 fn test_get_skill_intent_discovery() {
-    let bundle = get_skill("intent-discovery");
+    let bundle = get_os_app("intent-discovery");
     assert!(bundle.is_some());
     let bundle = bundle.unwrap();
     assert_eq!(bundle.specs.len(), 1);
-    assert!(!bundle.csdl.is_empty());
+    assert!(bundle.csdl.is_some());
+    assert!(!bundle.csdl.as_ref().unwrap().is_empty());
     assert!(!bundle.cedar_policies.is_empty());
 }
 
 #[test]
 fn test_get_skill_nonexistent() {
-    assert!(get_skill("nonexistent").is_none());
+    assert!(get_os_app("nonexistent").is_none());
 }
 
 #[tokio::test]

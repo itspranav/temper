@@ -24,7 +24,7 @@ async fn dst_cedar_survives_restart() {
 
         // Install PM app — it has Cedar policies.
         harness
-            .install_skill("cedar-test", "project-management")
+            .install_app("cedar-test", "project-management")
             .await
             .unwrap_or_else(|e| panic!("seed {seed}: install PM failed: {e}"));
 
@@ -53,13 +53,13 @@ async fn dst_cedar_multi_tenant_isolation() {
 
         // Install PM for tenant-a.
         harness
-            .install_skill("tenant-a", "project-management")
+            .install_app("tenant-a", "project-management")
             .await
             .unwrap_or_else(|e| panic!("seed {seed}: install PM for tenant-a failed: {e}"));
 
         // Install temper-fs for tenant-b.
         harness
-            .install_skill("tenant-b", "temper-fs")
+            .install_app("tenant-b", "temper-fs")
             .await
             .unwrap_or_else(|e| panic!("seed {seed}: install temper-fs for tenant-b failed: {e}"));
 
@@ -101,7 +101,7 @@ async fn dst_cedar_with_platform_faults() {
 
         // Try to install PM — may fail due to policy write failures.
         let install_result = harness
-            .install_skill("cedar-fault", "project-management")
+            .install_app("cedar-fault", "project-management")
             .await;
 
         match install_result {
